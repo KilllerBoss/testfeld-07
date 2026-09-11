@@ -1,17 +1,6 @@
-# Geheimnisse — NIEMALS committen (AGENT.md Sicherheitsregeln)
-kaggle.json
-*.kaggle
-.kaggle/
-.env
-GITHUB_TOKEN*
-
-# Build-Artefakte
-.gradle/
-build/
-app/build/
-local.properties
-*.apk
-!policies/*.json
-
-# System
-.DS_Store
+__pycache__/
+*.pyc
+kaggle/kernel_mj_*/assets/
+kaggle/kernel_*/robofield_*.py
+kaggle/kernel_*/train_*.py
+!kaggle/kernel_duck/kernel-metadata.json

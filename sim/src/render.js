@@ -78,12 +78,15 @@
   function Mesh(gl, verts, idx, mode) {
     this.vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, verts instanceof Float32Array ? verts : new Float32Array(verts), gl.STATIC_DRAW);
     this.ibo = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+    var arr = (idx instanceof Uint16Array || idx instanceof Uint32Array) ? idx
+      : (verts && verts.length / 6 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx));
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, arr, gl.STATIC_DRAW);
     this.count = idx.length;
     this.mode = mode === undefined ? gl.TRIANGLES : mode;
+    this.type = arr instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
   }
 
   function pushBox(verts, idx, sx, sy, sz) {
@@ -173,6 +176,85 @@
       verts.push(-h, y, v, 0,1,0,  h, y, v, 0,1,0);
       verts.push(v, y, -h, 0,1,0,  v, y, h, 0,1,0);
     }
+  }
+
+  /* ---------- STL (binär/ASCII) → Mesh mit Vertex-Welding ---------- */
+  function parseSTL(bytes) {
+    // Binär-STL: 80 B Header + uint32 nTris + 50 B pro Dreieck
+    var isAscii = false;
+    try {
+      var head = '';
+      for (var k = 0; k < 5 && k < bytes.length; k++) head += String.fromCharCode(bytes[k]);
+      isAscii = (head === 'solid' && bytes.length < 15 * 1024 * 1024 &&
+        String.fromCharCode.apply(null, bytes.subarray(0, Math.min(512, bytes.length))).match(/facet/i) !== null);
+    } catch (e) { isAscii = false; }
+    var tris = [];
+    if (!isAscii) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var n = dv.getUint32(80, true);
+      tris = new Float32Array(n * 9);
+      for (var i = 0, o = 84; i < n; i++, o += 50) {
+        for (var v = 0; v < 9; v++) tris[i * 9 + v] = dv.getFloat32(o + 12 + v * 4, true);
+      }
+    } else {
+      var txt = '';
+      for (k = 0; k < bytes.length; k += 8192)
+        txt += String.fromCharCode.apply(null, bytes.subarray(k, Math.min(k + 8192, bytes.length)));
+      var nums = txt.match(/vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g) || [];
+      tris = new Float32Array(nums.length * 3);
+      for (i = 0; i < nums.length; i++) {
+        var p = nums[i].trim().split(/\s+/);
+        tris[i * 3] = +p[1]; tris[i * 3 + 1] = +p[2]; tris[i * 3 + 2] = +p[3];
+      }
+    }
+    return tris;
+  }
+
+  function stlToMeshData(bytes, weldEps) {
+    var tris = parseSTL(bytes);
+    var map = {};
+    var verts = [], idx = [];
+    var q = Math.pow(10, weldEps === undefined ? 4 : weldEps); // Welding: 1e-4-Grid
+    function vid(x, y, z) {
+      var key = Math.round(x * q) + ',' + Math.round(y * q) + ',' + Math.round(z * q);
+      var e = map[key];
+      if (e === undefined) {
+        e = verts.length / 3;
+        verts.push(x, y, z);
+        map[key] = e;
+      }
+      return e;
+    }
+    var nTris = tris.length / 9 | 0;
+    for (var t = 0; t < nTris; t++) {
+      var o = t * 9;
+      var a = vid(tris[o], tris[o + 1], tris[o + 2]);
+      var b = vid(tris[o + 3], tris[o + 4], tris[o + 5]);
+      var c = vid(tris[o + 6], tris[o + 7], tris[o + 8]);
+      if (a === b || b === c || a === c) continue;
+      idx.push(a, b, c);
+    }
+    // Normalen aus Geometrie (Flächennormale pro Weld-Vertel — Mittelung simpel:
+    // pro Vertex die summierten Flächennormalen, dann normieren)
+    var nv = verts.length;
+    var nrm = new Float32Array(nv);
+    for (t = 0; t < idx.length; t += 3) {
+      a = idx[t] * 3; b = idx[t + 1] * 3; c = idx[t + 2] * 3;
+      var ux = verts[b] - verts[a], uy = verts[b + 1] - verts[a + 1], uz = verts[b + 2] - verts[a + 2];
+      var wx = verts[c] - verts[a], wy = verts[c + 1] - verts[a + 1], wz = verts[c + 2] - verts[a + 2];
+      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      for (var k = 0; k < 3; k++) {
+        nrm[idx[t + k] * 3] += nx; nrm[idx[t + k] * 3 + 1] += ny; nrm[idx[t + k] * 3 + 2] += nz;
+      }
+    }
+    var out = new Float32Array(nv / 3 * 6);
+    for (var i2 = 0; i2 < nv / 3; i2++) {
+      var l = Math.sqrt(nrm[i2 * 3] * nrm[i2 * 3] + nrm[i2 * 3 + 1] * nrm[i2 * 3 + 1] + nrm[i2 * 3 + 2] * nrm[i2 * 3 + 2]) || 1;
+      out[i2 * 6] = verts[i2 * 3]; out[i2 * 6 + 1] = verts[i2 * 3 + 1]; out[i2 * 6 + 2] = verts[i2 * 3 + 2];
+      out[i2 * 6 + 3] = nrm[i2 * 3] / l; out[i2 * 6 + 4] = nrm[i2 * 3 + 1] / l; out[i2 * 6 + 5] = nrm[i2 * 3 + 2] / l;
+    }
+    var use32 = verts.length / 3 > 65535;
+    return { verts: out, idx: use32 ? new Uint32Array(idx) : new Uint16Array(idx), use32: use32 };
   }
 
   /* ---------- Node (Szenengraph, minimal) ---------- */
@@ -279,6 +361,8 @@
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
+    // Uint32-Indices für große STL-Meshes (so gut wie überall verfügbar)
+    this.uintIdx = !!gl.getExtension('OES_element_index_uint');
 
     this.lightDir = [0.45, 0.8, 0.35];
     this.lightColor = [1.0, 0.98, 0.92];
@@ -359,7 +443,7 @@
       gl.enableVertexAttribArray(this.a.pos);
       gl.enableVertexAttribArray(this.a.normal);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, node.mesh.ibo);
-      gl.drawElements(node.mesh.mode, node.mesh.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(node.mesh.mode, node.mesh.count, node.mesh.type || gl.UNSIGNED_SHORT, 0);
     }
     for (var i = 0; i < node.children.length; i++) this.drawNode(node.children[i], a);
     if (a < 0.999) { gl.disable(gl.BLEND); gl.depthMask(true); }
@@ -391,6 +475,15 @@
       var i = []; for (var k = 0; k < v.length / 6 / 2; k++) i.push(k*2, k*2+1);
       return mk(v, i, gl.LINES);
     })();
+    this.fromSTL = function (bytes) {
+      var d = stlToMeshData(bytes);
+      if (d.use32 && !gl.getExtension('OES_element_index_uint')) {
+        // Extremfall ohne uint-Extension: hartes Welding (1e-3-Grid)
+        d = stlToMeshData(bytes, 3);
+        return new Mesh(gl, d.verts, new Uint16Array(d.idx), gl.TRIANGLES);
+      }
+      return new Mesh(gl, d.verts, d.idx, gl.TRIANGLES);
+    };
   }
 
   global.TF07 = global.TF07 || {};
@@ -402,6 +495,7 @@
     quatAxis: quatAxis,
     quatMul: quatMul,
     mat4Compose: mat4Compose,
+    stlToMeshData: stlToMeshData,
     IDQ: IDQ
   };
 })(typeof window !== 'undefined' ? window : globalThis);

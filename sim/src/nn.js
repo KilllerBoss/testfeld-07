@@ -91,7 +91,11 @@
     arm: [15, HIDDEN, HIDDEN, 5],
     humanoid: [10, HIDDEN, HIDDEN, 5],
     // MuJoCo-Microduck (obs 61 → 14 Gelenk-Offsets, exakt wie die ONNX-Policies)
-    duckmj: [61, HIDDEN, HIDDEN, 14]
+    duckmj: [61, HIDDEN, HIDDEN, 14],
+    // MuJoCo-Menagerie: WidowX 250 (qerr6+qvel6+ballDir3+grip1 → 6 Ref-Deltas + Grip)
+    armmj: [16, HIDDEN, HIDDEN, 7],
+    // MuJoCo-Menagerie: ROBOTIS OP3 (projGrav3+qerr20+qvel20+cmd3 → 20 Gelenk-Offsets)
+    op3mj: [46, HIDDEN, HIDDEN, 20]
   };
 
   // Validierung gegen die App-Architektur

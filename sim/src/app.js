@@ -29,12 +29,14 @@
     var S = this.state = {
       robot: 'duck', mode: 'manual', tod: 'day',
       colorIdx: 0, showRays: true, gripClosed: false,
-      champions: { duck: null, arm: null, humanoid: null }, // {genome, gen, fit, src}
+      champions: { duck: null, arm: null, humanoid: null, duckmj: null, armmj: null, op3mj: null }, // {genome, gen, fit, src}
       training: { active: false, robot: 'duck', gens: 0, gen: 0, batchIdx: 0,
         pop: null, fits: null, envs: [], genomes: [], batchFits: null,
         history: [], bestFit: null, avgFit: null, champFit: null, champGenome: null, baseSeed: 1000 },
       // Echtes MuJoCo (WASM) + Werks-ONNX-Policies des HF-Space
-      mjc: { ready: false, err: null, duck: null, slot: 'walk', ghosts: [], ghostRigs: [], mjRig: null, mjFrame: null },
+      // + Menagerie-Roboter: arm = WidowX 250, hum = ROBOTIS OP3
+      mjc: { ready: false, err: null, duck: null, slot: 'walk', ghosts: [], ghostRigs: [], mjRig: null, mjFrame: null,
+        arm: null, armRig: null, hum: null, humRig: null, humMode: 'stehen' },
       fps: 0
     };
     this.joystick = { x: 0, y: 0 };
@@ -97,12 +99,28 @@
     var ghostRigs = [];
     this.worlds = worlds; this.envs = envs;
 
-    /* ---------- MuJoCo-Frame (MJCF ist Z-up, Renderer Y-up) ---------- */
+    /* ---------- MuJoCo-Frames (MJCF ist Z-up, Renderer Y-up) ---------- */
     var mjFrame = new TF.render.Node();
     mjFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
     mjFrame.visible = false;
     worlds.duck.arena.add(mjFrame);
     S.mjc.mjFrame = mjFrame;
+    // Eigene Frames für die Menagerie-Roboter (Arm-Tisch = Werkstatt-Bodenniveau)
+    var armFrame = new TF.render.Node();
+    armFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    armFrame.visible = false;
+    worlds.arm.arena.add(armFrame);
+    var humFrame = new TF.render.Node();
+    humFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    humFrame.visible = false;
+    worlds.humanoid.arena.add(humFrame);
+    // Physik-Bälle (MJCF-Ball) in den Frames — Position wird pro Frame gesetzt
+    var armBallNode = new TF.render.Node(lib.unitSphere, [0.95, 0.5, 0.16, 1]);
+    armBallNode.scale = [0.05, 0.05, 0.05];
+    armFrame.add(armBallNode);
+    var humBallNode = new TF.render.Node(lib.unitSphere, [0.95, 0.5, 0.16, 1]);
+    humBallNode.scale = [0.05, 0.05, 0.05];
+    humFrame.add(humBallNode);
 
     /* ---------- Render-Interpolation: Physik fix 30 Hz, Grafik Display-Rate.
      * visFor() mischt prev→currzustand mit alpha = akkumulierte Restzeit/DT.
@@ -299,6 +317,65 @@
       TF.ui.status('MICRODUCK·MJ · ' + names[S.mjc.slot]);
     };
 
+    /* ---------- Menagerie-Roboter lazy laden (arm = WidowX, hum = OP3) ---------- */
+    function ensureMjRobot(key, cb) {
+      if (!TF.mjc || !S.mjc.ready) return;
+      if (S.mjc[key]) { if (cb) cb(); return; }
+      TF.ui.logLine('Lade MuJoCo-Modell: ' + (key === 'arm' ? 'WidowX 250 6DOF' : 'ROBOTIS OP3') + ' …', 'sys');
+      TF.mjc.ensureRobot(key).then(function () {
+        var frame = key === 'arm' ? armFrame : humFrame;
+        var rig = TF.mjc.makeMeshRig(TF.render, lib, key, false);
+        frame.add(rig.root);
+        S.mjc[key + 'Rig'] = rig;
+        S.mjc[key] = key === 'arm' ? TF.mjc.makeArm() : TF.mjc.makeHum();
+        TF.mjc.attachRigVisuals(rig, key).then(function () {
+          TF.ui.logLine('Originale STL-Visuals aktiv (' + (key === 'arm' ? 'Interbotix' : 'ROBOTIS') + ').', 'sys');
+        }).catch(function () {});
+        var info = TF.mjc.robotInfo(key);
+        TF.ui.logLine('ECHTES MUJOCO: ' + (key === 'arm' ? 'WIDOWX 250 6DOF' : 'ROBOTIS OP3') + ' (Menagerie, nq ' + info.nq + ', nu ' + info.nu + ').', 'sys');
+        if (key === 'arm') TF.ui.logLine('Joystick = Greifziel · GRIP-Taste greift den Ball (Auto-Aim).', 'sys');
+        else TF.ui.logLine('Joystick = Command · "POLICY" wechselt STEHEN → GEHEN · Training: "trainiere den humanoiden".', 'sys');
+        if (cb) cb();
+      }).catch(function (e) {
+        TF.ui.logLine('MJ-Modell fehlgeschlagen: ' + e.message + ' — Werkstatt-Kern bleibt aktiv.', 'warn');
+      });
+    }
+    function mjDriveArm() {
+      var a = S.mjc.arm;
+      if (S.gripClosed) {
+        // Auto-Aim: Ziel = Ball, nach Griffversuch hochheben
+        var bp = a.ballPos();
+        a.target = [bp[0], bp[1], a.grip ? 0.21 : 0.09];
+        a.grip = 1;
+      } else {
+        a.grip = 0;
+        a.target = [0.28 + self.joystick.y * 0.11, self.joystick.x * 0.17, 0.07];
+      }
+      if (!a.busy) {
+        a.busy = true;
+        a.controlStepAsync(false, null)
+          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+          .then(function () { a.busy = false; });
+      }
+    }
+    function mjDriveHum() {
+      var h = S.mjc.hum;
+      h.cmd[0] = self.joystick.y * 1.0;
+      h.cmd[1] = -self.joystick.x * 0.5;
+      if (!h.busy) {
+        h.busy = true;
+        h.controlStepAsync(null)
+          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+          .then(function () { h.busy = false; });
+      }
+    }
+    this.mjcCycleHum = function () {
+      S.mjc.humMode = S.mjc.humMode === 'stehen' ? 'gehen' : 'stehen';
+      if (S.mjc.hum) S.mjc.hum.mode = S.mjc.humMode;
+      TF.ui.logLine('ROBOTIS OP3: ' + S.mjc.humMode.toUpperCase() + (S.mjc.humMode === 'gehen' ? ' (quasistatische Firmware-Gait — RL-Training macht es schneller)' : ''), 'sys');
+      TF.ui.status('HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase());
+    };
+
     /* ---------- Neuroevolution ---------- */
     function gauss() {
       var u = 0, v = 0;
@@ -315,13 +392,21 @@
     }
 
     this.startTraining = function (robot, gens) {
-      // MuJoCo-Ente da? Dann auf dem echten Roboter trainieren.
+      // MuJoCo da? Dann auf den echten Robotern trainieren.
       if (robot === 'duck' && S.mjc.ready) {
         TF.ui.logLine('MuJoCo aktiv — Training läuft auf dem echten Microduck (61→14).', 'sys');
         robot = 'duckmj';
       }
+      if (robot === 'arm' && S.mjc.arm) {
+        TF.ui.logLine('MuJoCo aktiv — Training läuft auf der echten WidowX 250 (16→7).', 'sys');
+        robot = 'armmj';
+      }
+      if (robot === 'humanoid' && S.mjc.hum) {
+        TF.ui.logLine('MuJoCo aktiv — Training läuft auf dem echten ROBOTIS OP3 (46→20).', 'sys');
+        robot = 'op3mj';
+      }
       if (S.training.active) this.stopTraining();
-      var mj = robot === 'duckmj';
+      var mj = robot === 'duckmj' || robot === 'armmj' || robot === 'op3mj';
       S.training = {
         active: true, robot: robot, gens: gens, gen: 0, batchIdx: 0,
         pop: [], fits: new Float64Array(40), envs: [], genomes: [],
@@ -336,20 +421,23 @@
         else S.training.pop.push(TF.nn.initGenome(1234 + i * 17, TF.nn.ARCHS[robot][0], TF.nn.ARCHS[robot][3]));
       }
       newBatch();
-      if (mj) buildMjGhosts(); else buildGhosts(robot);
+      if (mj) buildMjGhosts(robot); else buildGhosts(robot);
       rigRootFor(robot).visible = false;
       TF.ui.logLine('TRAINING ' + robot.toUpperCase() + ': ' + gens + ' Generationen, Population 40, ' + (mj ? '4 MuJoCo-Geister/Batch (10 Batches)' : '8 Geister/Batch') + '.', 'sys');
       TF.ui.buildTopbar();
     };
     function rigRootFor(robot) {
-      return robot === 'duckmj' ? (S.mjc.mjRig ? S.mjc.mjRig.root : mjFrame) : worlds[robot].rig.root;
+      if (robot === 'duckmj') return S.mjc.mjRig ? S.mjc.mjRig.root : mjFrame;
+      if (robot === 'armmj') return S.mjc.armRig ? S.mjc.armRig.root : armFrame;
+      if (robot === 'op3mj') return S.mjc.humRig ? S.mjc.humRig.root : humFrame;
+      return worlds[robot] ? worlds[robot].rig.root : mjFrame;
     }
     this.stopTraining = function () {
       if (!S.training.active) return;
       S.training.active = false;
       finishChampion('abgebrochen');
       rigRootFor(S.training.robot).visible = true;
-      if (S.training.robot === 'duckmj') clearMjGhosts(); else clearGhosts();
+      if (S.training.robot === 'duckmj' || S.training.robot === 'armmj' || S.training.robot === 'op3mj') clearMjGhosts(); else clearGhosts();
       TF.ui.logLine('Training beendet (Generation ' + S.training.gen + ').', 'sys');
       TF.ui.buildTopbar();
       TF.ui.updateTraining(S.training);
@@ -360,13 +448,15 @@
     };
     function newBatch() {
       var T = S.training;
-      var mj = T.robot === 'duckmj';
+      var mj = T.robot === 'duckmj' || T.robot === 'armmj' || T.robot === 'op3mj';
       var per = mj ? 4 : 8;
       T.envs = [];
       T.genomes = [];
       if (mj) {
         for (var k = 0; k < per; k++) {
-          T.envs.push(TF.mjc.makeGhost());
+          if (T.robot === 'duckmj') T.envs.push(TF.mjc.makeGhost());
+          else if (T.robot === 'armmj') T.envs.push(TF.mjc.makeGhostArm(null));
+          else T.envs.push(TF.mjc.makeGhostHum(null));
           T.genomes.push(T.pop[T.batchIdx * per + k]);
         }
       } else {
@@ -418,7 +508,7 @@
     function trainStep() {
       var T = S.training;
       if (!T.active) return;
-      var mj = T.robot === 'duckmj';
+      var mj = T.robot === 'duckmj' || T.robot === 'armmj' || T.robot === 'op3mj';
       var per = mj ? 4 : 8;
       var batches = mj ? 10 : 5;
       var iters = mj ? 1 : 3;
@@ -455,12 +545,21 @@
     }
 
     /* ---------- Geister ---------- */
-    function buildMjGhosts() {
+    function buildMjGhosts(robot) {
       clearMjGhosts();
+      var kind = robot === 'armmj' ? 'arm' : robot === 'op3mj' ? 'hum' : 'duck';
+      var frame = kind === 'arm' ? armFrame : kind === 'hum' ? humFrame : mjFrame;
       for (var k = 0; k < 4; k++) {
-        S.mjc.ghosts.push(TF.mjc.makeGhost());
-        var rig = TF.mjc.makeSkeletonRig(TF.render, lib, true);
-        S.mjc.mjFrame.add(rig.root);
+        if (kind === 'arm') S.mjc.ghosts.push(TF.mjc.makeGhostArm(null));
+        else if (kind === 'hum') S.mjc.ghosts.push(TF.mjc.makeGhostHum(null));
+        else S.mjc.ghosts.push(TF.mjc.makeGhost());
+        var rig;
+        if (kind === 'duck') rig = TF.mjc.makeSkeletonRig(TF.render, lib, true);
+        else {
+          rig = TF.mjc.makeMeshRig(TF.render, lib, kind, true);
+          TF.mjc.attachRigVisuals(rig, kind).catch(function () {});
+        }
+        frame.add(rig.root);
         S.mjc.ghostRigs.push(rig);
       }
     }
@@ -495,7 +594,10 @@
       cam.yaw = CAM_DEF[id].yaw; cam.pitch = CAM_DEF[id].pitch; cam.dist = CAM_DEF[id].dist;
       for (var r in worlds) worlds[r].arena.visible = (r === id) && true;
       if (S.training.active && S.training.robot !== id) this.stopTraining();
-      TF.ui.logLine('Roboter: ' + id.toUpperCase(), 'sys');
+      // Menagerie-Roboter: MuJoCo-Modell lazy laden (Werkstatt-Kern läuft bis dahin)
+      if (id === 'arm') ensureMjRobot('arm');
+      if (id === 'humanoid') ensureMjRobot('hum');
+      TF.ui.logLine('Roboter: ' + id.toUpperCase() + (id === 'arm' && S.mjc.arm ? ' · MUJOCO WIDOWX 250' : id === 'humanoid' && S.mjc.hum ? ' · MUJOCO ROBOTIS OP3' : ''), 'sys');
       TF.ui.status('ROBOT ' + id.toUpperCase() + ' / ' + S.mode.toUpperCase());
       save();
     };
@@ -504,6 +606,19 @@
       // Microduck-MJ: POLICY-Knopf zyklisiert die Werks-Policy-Slots
       if (m === 'policy' && S.mjc.ready && S.robot === 'duck') {
         this.mjcCycleSlot();
+        TF.ui.buildTopbar();
+        return;
+      }
+      // Humanoid-MJ: POLICY-Knopf wechselt STEHEN ↔ GEHEN
+      if (m === 'policy' && S.robot === 'humanoid' && S.mjc.hum) {
+        this.mjcCycleHum();
+        TF.ui.buildTopbar();
+        return;
+      }
+      // Arm-MJ: POLICY-Knopf = Greifen (Auto-Aim auf den Ball)
+      if (m === 'policy' && S.robot === 'arm' && S.mjc.arm) {
+        S.gripClosed = !S.gripClosed;
+        TF.ui.logLine(S.gripClosed ? 'ARMBOT·MJ: Greifen (Auto-Aim auf den Ball).' : 'ARMBOT·MJ: Griff offen.', 'sys');
         TF.ui.buildTopbar();
         return;
       }
@@ -542,6 +657,16 @@
       if (S.robot === 'duck' && S.mjc.ready && S.mjc.duck) {
         S.mjc.duck.reset();
         TF.ui.logLine('MICRODUCK·MJ zurückgesetzt (STAND-Keyframe).', 'sys');
+        return;
+      }
+      if (S.robot === 'arm' && S.mjc.arm) {
+        S.mjc.arm.reset();
+        TF.ui.logLine('ARMBOT·MJ zurückgesetzt (Home-Keyframe, Ball zurück auf den Tisch).', 'sys');
+        return;
+      }
+      if (S.robot === 'humanoid' && S.mjc.hum) {
+        S.mjc.hum.reset();
+        TF.ui.logLine('HUMANOID·MJ zurückgesetzt (Home-Keyframe).', 'sys');
         return;
       }
       envs[S.robot].reset(envs[S.robot].rngSeed || 1);
@@ -625,8 +750,16 @@
         switch (a.op) {
           case 'train': this.startTraining(a.robot, a.gens); break;
           case 'trainStop': this.stopTraining(); break;
-          case 'robot': this.setRobot(a.id === 'duckmj' ? 'duck' : a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
+          case 'robot': this.setRobot({ duckmj: 'duck', armmj: 'arm', op3mj: 'humanoid' }[a.id] || a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
           case 'mjslot': if (S.mjc.ready) { S.mjc.slot = a.slot; TF.ui.logLine('MuJoCo-Policy-Slot: ' + a.slot.toUpperCase(), 'sys'); } else TF.ui.logLine('MuJoCo nicht aktiv — Slot nicht gesetzt.', 'warn'); break;
+          case 'hummode':
+            if (S.mjc.hum) { S.mjc.humMode = a.mode; S.mjc.hum.mode = a.mode; TF.ui.logLine('ROBOTIS OP3: ' + a.mode.toUpperCase(), 'sys'); }
+            else TF.ui.logLine('Humanoid-MJ noch nicht geladen.', 'warn');
+            break;
+          case 'grip':
+            S.gripClosed = !!a.closed;
+            TF.ui.logLine('Greifer: ' + (a.closed ? 'ZU (Auto-Aim)' : 'OFFEN'), 'sys');
+            break;
           case 'mode': this.setMode(a.mode); break;
           case 'tod': this.setTod(a.tod); TF.ui.buildTopbar(); break;
           case 'save': this.saveChampionNamed(a.name); break;
@@ -645,7 +778,7 @@
       var T = S.training;
       var lines = [
         'STATUS — Roboter: ' + S.robot.toUpperCase() + ' | Modus: ' + S.mode.toUpperCase() + ' | TOD: ' + S.tod.toUpperCase(),
-        'Champions: ' + ['duck', 'duckmj', 'arm', 'humanoid'].map(function (r) {
+        'Champions: ' + ['duck', 'duckmj', 'arm', 'armmj', 'humanoid', 'op3mj'].map(function (r) {
           var c = S.champions[r];
           return r + (c ? '(gen ' + c.gen + ', fit ' + c.fit.toFixed(1) + ', ' + c.src + ')' : '(—)');
         }).join('  '),
@@ -770,6 +903,10 @@
       if (S.mjc.ready && S.robot === 'duck' && !S.training.active) {
         // Echtes MuJoCo: 50-Hz-Policy-Regelung, Joystick = Velocity-Command
         mjDrive(dt);
+      } else if (S.mjc.ready && S.robot === 'arm' && S.mjc.arm && !S.training.active) {
+        mjDriveArm();
+      } else if (S.mjc.ready && S.robot === 'humanoid' && S.mjc.hum && !S.training.active) {
+        mjDriveHum();
       } else if (!S.training.active) {
         acc += dt;
         var n = 0;
@@ -805,7 +942,52 @@
         requestAnimationFrame(frame);
         return; // eigener Pfad fertig gezeichnet
       }
+      // ARMBOT·MJ / HUMANOID·MJ: eigener Physik-Pfad mit Mesh-Rig
+      if (S.mjc.ready && !S.training.active &&
+          ((S.robot === 'arm' && S.mjc.arm) || (S.robot === 'humanoid' && S.mjc.hum))) {
+        var key = S.robot === 'arm' ? 'arm' : 'hum';
+        var envM = S.mjc[key], rigM = S.mjc[key + 'Rig'];
+        var frameM = key === 'arm' ? armFrame : humFrame;
+        frameM.visible = true;
+        mjFrame.visible = false;
+        var otherFrame = key === 'arm' ? humFrame : armFrame;
+        otherFrame.visible = false;
+        if (rigM) rigM.update(envM.data);
+        worlds[key === 'arm' ? 'arm' : 'humanoid'].rig.root.visible = false;
+        var wM = worlds[key === 'arm' ? 'arm' : 'humanoid'];
+        wM.target.root.visible = key === 'arm';
+        if (key === 'arm') {
+          var tM = envM.target;
+          wM.target.root.pos = [tM[0], tM[2] + 0.4, -tM[1]];
+          wM.target.ring.scale = [0.3, 1, 0.3];
+        }
+        var bpos = envM.data.qpos;
+        var ballN = key === 'arm' ? armBallNode : humBallNode;
+        var ba = envM.r.ballAdr;
+        ballN.pos = [bpos[ba], bpos[ba + 1], bpos[ba + 2]];
+        ballN.visible = true;
+        var focusM2 = key === 'arm' ? [0, 0.55, 0] : [bpos[0], 0.45, -bpos[1]];
+        var distM = key === 'arm' ? 1.5 : 2.0;
+        var cxM2 = focusM2[0] + distM * Math.cos(cam.pitch) * Math.sin(cam.yaw);
+        var cyM2 = focusM2[1] + distM * Math.sin(cam.pitch);
+        var czM2 = focusM2[2] + distM * Math.cos(cam.pitch) * Math.cos(cam.yaw);
+        renderer.camDist = distM;
+        renderer.setCamera([cxM2, cyM2, czM2], focusM2, [0, 1, 0]);
+        renderer.begin();
+        renderer.drawNode(wM.arena, 1);
+        var st = key === 'arm'
+          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · 50 HZ'
+          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · 50 HZ';
+        TF.ui.status(st);
+        requestAnimationFrame(frame);
+        return;
+      }
       mjFrame.visible = false;
+      // Ghost-Frames während MJ-Training sichtbar schalten
+      armFrame.visible = S.training.active && S.training.robot === 'armmj';
+      humFrame.visible = S.training.active && S.training.robot === 'op3mj';
+      armBallNode.visible = !armFrame.visible;
+      humBallNode.visible = !humFrame.visible;
       // Rig-Updates — interpolierte Anzeige-Pose (kein Physik-Zustand!)
       var vis = visFor(S.robot, env, S.training.active ? 1 : alpha);
       if (S.robot === 'duck') {
@@ -867,10 +1049,11 @@
       var lsOk = true;
       try { global.localStorage.setItem('tf07.test', '1'); global.localStorage.removeItem('tf07.test'); } catch (e) { lsOk = false; }
       TF.ui.bootSequence([
-        'TESTFELD·07 BIOS v1.0.0 — (c) Werkstatt',
+        'TESTFELD·07 BIOS v2.0.0 — (c) Werkstatt',
         'CPU: WEBVIEW-ARM64 ................ OK',
         'GRAFIK: ' + gpu.slice(0, 34) + (softGL ? ' [SOFTWARE]' : '') + ' ... OK',
-        'PHYSIK: TF07-KERN @ 30 HZ (FIX) ... OK',
+        'PHYSIK: MUJOCO 3.11 (WASM) + TF07 ... OK',
+        'MODELLGALERIE: MICRODUCK + WIDOWX 250 + OP3 ... OK',
         'RENDER: DISPLAY-RATE + INTERPOLATION ... OK',
         'ROBOTER: MICRODUCK / ARMBOT / HUMANOID ... 3 GEFUNDEN',
         'POLICY-FORMAT: robofield-policy-v1 ....... BEREIT',

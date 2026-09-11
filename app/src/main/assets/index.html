@@ -326,7 +326,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     arm: [15, HIDDEN, HIDDEN, 5],
     humanoid: [10, HIDDEN, HIDDEN, 5],
     // MuJoCo-Microduck (obs 61 → 14 Gelenk-Offsets, exakt wie die ONNX-Policies)
-    duckmj: [61, HIDDEN, HIDDEN, 14]
+    duckmj: [61, HIDDEN, HIDDEN, 14],
+    // MuJoCo-Menagerie: WidowX 250 (qerr6+qvel6+ballDir3+grip1 → 6 Ref-Deltas + Grip)
+    armmj: [16, HIDDEN, HIDDEN, 7],
+    // MuJoCo-Menagerie: ROBOTIS OP3 (projGrav3+qerr20+qvel20+cmd3 → 20 Gelenk-Offsets)
+    op3mj: [46, HIDDEN, HIDDEN, 20]
   };
 
   // Validierung gegen die App-Architektur
@@ -821,9 +825,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     duck: ['duck', 'entchen', 'roller', 'ente'],
     duckmj: ['microduck', 'mjc', 'mujoco'],
     arm: ['arm', 'armbot', 'greifarm', 'greifer', 'arm-bot'],
-    humanoid: ['humanoid', 'läufer', 'laeufer', 'walker', 'mensch', 'humanoider']
+    humanoid: ['humanoid', 'läufer', 'laeufer', 'walker', 'mensch', 'humanoider'],
+    armmj: ['widowx', 'wx250', 'menagerie-arm'],
+    op3mj: ['op3', 'robotis', 'menagerie-humanoid']
   };
-  var ROBOT_IDS = ['duck', 'duckmj', 'arm', 'humanoid'];
+  var ROBOT_IDS = ['duck', 'duckmj', 'arm', 'armmj', 'humanoid', 'op3mj'];
 
   function norm(s) {
     return String(s || '').toLowerCase().replace(/[,.;:!?"'`´]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -889,9 +895,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     if (r3 && t.split(' ').length <= 3) { A({ op: 'robot', id: r3 }); replies.push('Roboter: ' + r3.toUpperCase() + '.'); return { actions: actions, replies: replies }; }
 
     // MuJoCo-Policy-Slots (Microduck): laufen / skaten / hinsetzen
-    if (/\b(skate|skaten|roller fahren|drive)\b/.test(t)) { A({ op: 'mjslot', slot: 'drive' }); replies.push('Microduck·MJ: ROLLER-Policy aktiv.'); return { actions: actions, replies: replies }; }
-    if (/\b(hinsetzen|hinsitzen|sitzen|sit stand|sitstand)\b/.test(t)) { A({ op: 'mjslot', slot: 'sitstand' }); replies.push('Microduck·MJ: SIT·STAND-Policy aktiv.'); return { actions: actions, replies: replies }; }
-    if (/\b(laufen|gehen|walk|laufe)\b/.test(t)) { A({ op: 'mjslot', slot: 'walk' }); replies.push('Microduck·MJ: LAUF-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(skate|skaten|roller fahren|drive)\b)/.test(t)) { A({ op: 'mjslot', slot: 'drive' }); replies.push('Microduck·MJ: ROLLER-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(hinsetzen|hinsitzen|sitzen|sit stand|sitstand)\b)/.test(t)) { A({ op: 'mjslot', slot: 'sitstand' }); replies.push('Microduck·MJ: SIT·STAND-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(laufen|walk|laufe)\b)/.test(t)) { A({ op: 'mjslot', slot: 'walk' }); replies.push('Microduck·MJ: LAUF-Policy aktiv.'); return { actions: actions, replies: replies };
+    }
+    // Humanoid-MJ: stehen / gehen — Arm: greifen / loslassen
+    if (/\b(stehen|stand|still)\b/.test(t)) { A({ op: 'hummode', mode: 'stehen' }); replies.push('ROBOTIS OP3: STEHEN.'); return { actions: actions, replies: replies }; }
+    if (/\b(gehen|schritte|laufen lassen)\b/.test(t) || /\bgehen\b/.test(t)) { A({ op: 'hummode', mode: 'gehen' }); replies.push('ROBOTIS OP3: GEHEN (quasistatische Firmware-Gait).'); return { actions: actions, replies: replies }; }
+    if (/\b(greifen|zugreifen|grab|hebe|heben)\b/.test(t)) { A({ op: 'grip', closed: true }); replies.push('ARMBOT: Greifen (Auto-Aim auf den Ball).'); return { actions: actions, replies: replies }; }
+    if (/\b(loslassen|offen lassen|drop)\b/.test(t)) { A({ op: 'grip', closed: false }); replies.push('ARMBOT: Griff offen.'); return { actions: actions, replies: replies }; }
 
     // Modus
     if (/\b(manuell|manual|handbetrieb|joystick)\b/.test(t)) {
@@ -960,6 +972,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         if (['walk', 'drive', 'sitstand'].indexOf(obj.slot) < 0) { bad('unbekannter slot: ' + obj.slot); break; }
         actions.push({ op: 'mjslot', slot: obj.slot });
         replies.push('JSON: MuJoCo-Policy-Slot → ' + obj.slot + '.');
+        break;
+      case 'hummode':
+        if (['stehen', 'gehen'].indexOf(obj.mode) < 0) { bad('unbekannter modus (stehen|gehen): ' + obj.mode); break; }
+        actions.push({ op: 'hummode', mode: obj.mode });
+        replies.push('JSON: OP3-Modus → ' + obj.mode + '.');
+        break;
+      case 'grip':
+        actions.push({ op: 'grip', closed: !!obj.closed });
+        replies.push('JSON: Greifer ' + (obj.closed ? 'zu.' : 'offen.'));
         break;
       case 'mode':
         if (['manual', 'policy'].indexOf(obj.mode) < 0) { bad('unbekannter mode: ' + obj.mode); break; }
@@ -1099,12 +1120,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   function Mesh(gl, verts, idx, mode) {
     this.vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, verts instanceof Float32Array ? verts : new Float32Array(verts), gl.STATIC_DRAW);
     this.ibo = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+    var arr = (idx instanceof Uint16Array || idx instanceof Uint32Array) ? idx
+      : (verts && verts.length / 6 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx));
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, arr, gl.STATIC_DRAW);
     this.count = idx.length;
     this.mode = mode === undefined ? gl.TRIANGLES : mode;
+    this.type = arr instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
   }
 
   function pushBox(verts, idx, sx, sy, sz) {
@@ -1194,6 +1218,85 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       verts.push(-h, y, v, 0,1,0,  h, y, v, 0,1,0);
       verts.push(v, y, -h, 0,1,0,  v, y, h, 0,1,0);
     }
+  }
+
+  /* ---------- STL (binär/ASCII) → Mesh mit Vertex-Welding ---------- */
+  function parseSTL(bytes) {
+    // Binär-STL: 80 B Header + uint32 nTris + 50 B pro Dreieck
+    var isAscii = false;
+    try {
+      var head = '';
+      for (var k = 0; k < 5 && k < bytes.length; k++) head += String.fromCharCode(bytes[k]);
+      isAscii = (head === 'solid' && bytes.length < 15 * 1024 * 1024 &&
+        String.fromCharCode.apply(null, bytes.subarray(0, Math.min(512, bytes.length))).match(/facet/i) !== null);
+    } catch (e) { isAscii = false; }
+    var tris = [];
+    if (!isAscii) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var n = dv.getUint32(80, true);
+      tris = new Float32Array(n * 9);
+      for (var i = 0, o = 84; i < n; i++, o += 50) {
+        for (var v = 0; v < 9; v++) tris[i * 9 + v] = dv.getFloat32(o + 12 + v * 4, true);
+      }
+    } else {
+      var txt = '';
+      for (k = 0; k < bytes.length; k += 8192)
+        txt += String.fromCharCode.apply(null, bytes.subarray(k, Math.min(k + 8192, bytes.length)));
+      var nums = txt.match(/vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g) || [];
+      tris = new Float32Array(nums.length * 3);
+      for (i = 0; i < nums.length; i++) {
+        var p = nums[i].trim().split(/\s+/);
+        tris[i * 3] = +p[1]; tris[i * 3 + 1] = +p[2]; tris[i * 3 + 2] = +p[3];
+      }
+    }
+    return tris;
+  }
+
+  function stlToMeshData(bytes, weldEps) {
+    var tris = parseSTL(bytes);
+    var map = {};
+    var verts = [], idx = [];
+    var q = Math.pow(10, weldEps === undefined ? 4 : weldEps); // Welding: 1e-4-Grid
+    function vid(x, y, z) {
+      var key = Math.round(x * q) + ',' + Math.round(y * q) + ',' + Math.round(z * q);
+      var e = map[key];
+      if (e === undefined) {
+        e = verts.length / 3;
+        verts.push(x, y, z);
+        map[key] = e;
+      }
+      return e;
+    }
+    var nTris = tris.length / 9 | 0;
+    for (var t = 0; t < nTris; t++) {
+      var o = t * 9;
+      var a = vid(tris[o], tris[o + 1], tris[o + 2]);
+      var b = vid(tris[o + 3], tris[o + 4], tris[o + 5]);
+      var c = vid(tris[o + 6], tris[o + 7], tris[o + 8]);
+      if (a === b || b === c || a === c) continue;
+      idx.push(a, b, c);
+    }
+    // Normalen aus Geometrie (Flächennormale pro Weld-Vertel — Mittelung simpel:
+    // pro Vertex die summierten Flächennormalen, dann normieren)
+    var nv = verts.length;
+    var nrm = new Float32Array(nv);
+    for (t = 0; t < idx.length; t += 3) {
+      a = idx[t] * 3; b = idx[t + 1] * 3; c = idx[t + 2] * 3;
+      var ux = verts[b] - verts[a], uy = verts[b + 1] - verts[a + 1], uz = verts[b + 2] - verts[a + 2];
+      var wx = verts[c] - verts[a], wy = verts[c + 1] - verts[a + 1], wz = verts[c + 2] - verts[a + 2];
+      var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      for (var k = 0; k < 3; k++) {
+        nrm[idx[t + k] * 3] += nx; nrm[idx[t + k] * 3 + 1] += ny; nrm[idx[t + k] * 3 + 2] += nz;
+      }
+    }
+    var out = new Float32Array(nv / 3 * 6);
+    for (var i2 = 0; i2 < nv / 3; i2++) {
+      var l = Math.sqrt(nrm[i2 * 3] * nrm[i2 * 3] + nrm[i2 * 3 + 1] * nrm[i2 * 3 + 1] + nrm[i2 * 3 + 2] * nrm[i2 * 3 + 2]) || 1;
+      out[i2 * 6] = verts[i2 * 3]; out[i2 * 6 + 1] = verts[i2 * 3 + 1]; out[i2 * 6 + 2] = verts[i2 * 3 + 2];
+      out[i2 * 6 + 3] = nrm[i2 * 3] / l; out[i2 * 6 + 4] = nrm[i2 * 3 + 1] / l; out[i2 * 6 + 5] = nrm[i2 * 3 + 2] / l;
+    }
+    var use32 = verts.length / 3 > 65535;
+    return { verts: out, idx: use32 ? new Uint32Array(idx) : new Uint16Array(idx), use32: use32 };
   }
 
   /* ---------- Node (Szenengraph, minimal) ---------- */
@@ -1300,6 +1403,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
+    // Uint32-Indices für große STL-Meshes (so gut wie überall verfügbar)
+    this.uintIdx = !!gl.getExtension('OES_element_index_uint');
 
     this.lightDir = [0.45, 0.8, 0.35];
     this.lightColor = [1.0, 0.98, 0.92];
@@ -1380,7 +1485,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       gl.enableVertexAttribArray(this.a.pos);
       gl.enableVertexAttribArray(this.a.normal);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, node.mesh.ibo);
-      gl.drawElements(node.mesh.mode, node.mesh.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(node.mesh.mode, node.mesh.count, node.mesh.type || gl.UNSIGNED_SHORT, 0);
     }
     for (var i = 0; i < node.children.length; i++) this.drawNode(node.children[i], a);
     if (a < 0.999) { gl.disable(gl.BLEND); gl.depthMask(true); }
@@ -1412,6 +1517,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       var i = []; for (var k = 0; k < v.length / 6 / 2; k++) i.push(k*2, k*2+1);
       return mk(v, i, gl.LINES);
     })();
+    this.fromSTL = function (bytes) {
+      var d = stlToMeshData(bytes);
+      if (d.use32 && !gl.getExtension('OES_element_index_uint')) {
+        // Extremfall ohne uint-Extension: hartes Welding (1e-3-Grid)
+        d = stlToMeshData(bytes, 3);
+        return new Mesh(gl, d.verts, new Uint16Array(d.idx), gl.TRIANGLES);
+      }
+      return new Mesh(gl, d.verts, d.idx, gl.TRIANGLES);
+    };
   }
 
   global.TF07 = global.TF07 || {};
@@ -1423,6 +1537,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     quatAxis: quatAxis,
     quatMul: quatMul,
     mat4Compose: mat4Compose,
+    stlToMeshData: stlToMeshData,
     IDQ: IDQ
   };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -2315,6 +2430,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       .then(function (core) {
         var mujoco = core.mujoco;
         var vfs = new mujoco.MjVFS();
+        core.vfs = vfs;
         var names = ['bottom_head_shell.stl', 'hip_l.stl', 'jaw.stl', 'leg.stl', 'np_f970.stl',
           'power_support.stl', 'sole_left.stl', 'sole_right.stl', 'top_head_shell.stl', 'tire.stl'];
         return Promise.all(names.map(function (f) {
@@ -2552,6 +2668,538 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     this.ghost = !!ghost;
   }
 
+  /* ================================================================
+   * MENAGERIE-ROBOTER (fertige Modelle der MuJoCo Model Gallery):
+   *   arm  = WidowX 250 6DOF  (trossen_wx250s, 7 Positions-Aktuatoren)
+   *   hum  = ROBOTIS OP3      (robotis_op3, 20 Positions-Aktuatoren)
+   * Beide laufen im selben MuJoCo-WASM wie die Ente; die MJCFs liegen
+   * vorbereitet (Werkstatt-Arena, offline) in mjc/.
+   * ================================================================ */
+  var sharedVfs = null;      // ein MjVFS für alle Modelle
+  var robots = {};           // name → {model, data, ...} (arm | hum)
+
+  var ARM_JOINTS = ['waist', 'shoulder', 'elbow', 'forearm_roll', 'wrist_angle', 'wrist_rotate'];
+  var ARM_HOME = [0, -0.96, 1.16, 0, -0.3, 0];
+  var ARM_RANGE = [[-3.14, 3.14], [-1.885, 1.99], [-2.147, 1.606], [-3.14, 3.14], [-1.745, 2.147], [-3.14, 3.14]];
+  var GRIP_OPEN = 0.015, GRIP_CLOSED = 0.036;
+  var ARM_BALL = [0.28, 0.12, 0.05];       // Ball auf dem Tisch (Tischkante z=0)
+  var ARM_DT = 0.02, ARM_SUB = 4;          // 50 Hz Regelung
+
+  var HUM_JOINTS = ['head_pan', 'head_tilt', 'l_sho_pitch', 'l_sho_roll', 'l_el',
+    'r_sho_pitch', 'r_sho_roll', 'r_el',
+    'l_hip_yaw', 'l_hip_roll', 'l_hip_pitch', 'l_knee', 'l_ank_pitch', 'l_ank_roll',
+    'r_hip_yaw', 'r_hip_roll', 'r_hip_pitch', 'r_knee', 'r_ank_pitch', 'r_ank_roll'];
+  var HUM_HOME = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.5, 0.9, 0.52, 0, 0, 0, -0.5, 0.9, 0.52, 0];
+  var HUM_BALL = [0.5, 0.3, 0.05];
+  var HUM_DT = 0.02, HUM_SUB = 4;          // 50 Hz Regelung (4 × 5 ms Substeps)
+
+  function loadRobot(name) {
+    if (robots[name]) return Promise.resolve(robots[name]);
+    if (!mjc) return Promise.reject(new Error('mjc nicht initialisiert'));
+    var core = mjc, mujoco = core.mujoco;
+    if (!sharedVfs) sharedVfs = core.vfs || new mujoco.MjVFS();
+    var file, meshPrefixes;
+    if (name === 'arm') { file = 'wx250s.xml'; meshPrefixes = ['wx250s_']; }
+    else if (name === 'hum') { file = 'op3.xml'; meshPrefixes = ['op3c_']; }
+    else return Promise.reject(new Error('unbekannter MJ-Roboter: ' + name));
+    return ensureAssetsIndex().then(function (index) {
+      var jobs = [];
+      for (var p = 0; p < meshPrefixes.length; p++) {
+        for (var i = 0; i < index.length; i++) {
+          var f = index[i];
+          if (f.indexOf(meshPrefixes[p]) !== 0) continue;
+          if (sharedVfs._tf07 && sharedVfs._tf07[f]) continue;
+          (function (fn) {
+            jobs.push(readAsset(fn).then(function (b) { return { n: fn, b: b }; }));
+          })(f);
+        }
+      }
+      return Promise.all(jobs);
+    }).then(function (bufs) {
+      for (var i = 0; i < bufs.length; i++) {
+        sharedVfs.addBuffer('assets/' + bufs[i].n, bufs[i].b);
+        if (!sharedVfs._tf07) sharedVfs._tf07 = {};
+        sharedVfs._tf07[bufs[i].n] = true;
+      }
+      return readAssetText(file);
+    }).then(function (xml) {
+      var model = mujoco.MjModel.from_xml_string(xml, sharedVfs);
+      var data = new mujoco.MjData(model);
+      var r = { name: name, model: model, data: data, xml: xml };
+      if (name === 'arm') {
+        r.qadr = ARM_JOINTS.map(function (n) { return model.jnt(n).qposadr; });
+        r.dofadr = ARM_JOINTS.map(function (n) { return model.jnt(n).dofadr; });
+        r.eeId = model.body('wx250s/gripper_link').id;
+        r.ballAdr = model.jnt('ball_freejoint').qposadr;
+        r.freeBodyId = undefined;                 // Basis fest auf dem Tisch
+        mujoco.mj_resetDataKeyframe(model, data, 0);
+        armResetBall(r);
+        mujoco.mj_forward(model, data);
+      } else {
+        r.qadr = HUM_JOINTS.map(function (n) { return model.jnt(n).qposadr; });
+        r.dofadr = HUM_JOINTS.map(function (n) { return model.jnt(n).dofadr; });
+        r.ballAdr = model.jnt('ball_freejoint').qposadr;
+        r.trunkId = model.body('body_link').id;
+        r.freeBodyId = r.trunkId;                 // Freejoint-Body (qpos 0..6)
+        mujoco.mj_resetDataKeyframe(model, data, 0);
+        humResetBall(r);
+        mujoco.mj_forward(model, data);
+      }
+      robots[name] = r;
+      TF.ui && TF.ui.logLine && TF.ui.logLine('MJCF geladen: ' + (name === 'arm' ? 'WidowX 250 6DOF' : 'ROBOTIS OP3') + ' (MuJoCo Menagerie)', 'sys');
+      return r;
+    });
+  }
+  // Asset-Index: was liegt in mjc/? (für VFS-Fütterung; wird lazy gefüllt)
+  var assetsIndex = null;
+  function ensureAssetsIndex() {
+    if (assetsIndex) return Promise.resolve(assetsIndex);
+    if (global.AndroidBridge && global.AndroidBridge.listAssets) {
+      try { assetsIndex = JSON.parse(global.AndroidBridge.listAssets(MJC_DIR)); return Promise.resolve(assetsIndex); } catch (e) {}
+    }
+    return readAssetText('__index.json').then(function (t) {
+      assetsIndex = JSON.parse(t);
+      return assetsIndex;
+    }).catch(function () {
+      // Fallback: bekannte Präfixe durchprobieren ist teuer — stattdessen
+      // feste Dateilisten (stimmen mit prepare_menagerie.py überein).
+      assetsIndex = ['wx250s_1_base.stl', 'wx250s_2_shoulder.stl', 'wx250s_3_upper_arm.stl',
+        'wx250s_4_upper_forearm.stl', 'wx250s_5_lower_forearm.stl', 'wx250s_6_wrist.stl',
+        'wx250s_7_gripper.stl', 'wx250s_8_gripper_prop.stl', 'wx250s_9_gripper_bar.stl',
+        'wx250s_10_gripper_finger.stl', 'wx250s_11_ar_tag.stl',
+        'op3c_body.stl', 'op3c_body_sub1.stl', 'op3c_body_sub2.stl', 'op3c_body_sub3.stl',
+        'op3c_body_sub4.stl', 'op3c_h1.stl', 'op3c_h2.stl', 'op3c_h2_sub1.stl', 'op3c_h2_sub2.stl',
+        'op3c_ll1.stl', 'op3c_ll2.stl', 'op3c_ll3.stl', 'op3c_ll4.stl', 'op3c_ll5.stl', 'op3c_ll6.stl',
+        'op3c_rl1.stl', 'op3c_rl2.stl', 'op3c_rl3.stl', 'op3c_rl4.stl', 'op3c_rl5.stl', 'op3c_rl6.stl',
+        'op3c_la1.stl', 'op3c_la2.stl', 'op3c_la3.stl',
+        'op3c_ra1.stl', 'op3c_ra2.stl', 'op3c_ra3.stl'];
+      return assetsIndex;
+    });
+  }
+  function armResetBall(r) {
+    var a = r.ballAdr;
+    r.data.qpos[a] = ARM_BALL[0]; r.data.qpos[a + 1] = ARM_BALL[1]; r.data.qpos[a + 2] = ARM_BALL[2];
+    r.data.qpos[a + 3] = 1; r.data.qpos[a + 4] = 0; r.data.qpos[a + 5] = 0; r.data.qpos[a + 6] = 0;
+  }
+  function humResetBall(r) {
+    var a = r.ballAdr;
+    r.data.qpos[a] = HUM_BALL[0]; r.data.qpos[a + 1] = HUM_BALL[1]; r.data.qpos[a + 2] = HUM_BALL[2];
+    r.data.qpos[a + 3] = 1; r.data.qpos[a + 4] = 0; r.data.qpos[a + 5] = 0; r.data.qpos[a + 6] = 0;
+  }
+
+  /* ---------- ARMBOT: WidowX 250 auf echtem MuJoCo ---------- */
+  function ArmMj() {
+    var r = robots.arm;
+    this.r = r;
+    this.data = r.data;
+    this.obs = new Float32Array(16);      // qerr6 + qvel6 + ballDir3 + grip1
+    this.ref = ARM_HOME.slice();          // IK-/Policy-Referenz (6)
+    this.grip = 0;                        // 0 offen, 1 zu
+    this.target = [0.26, 0.06, 0.06];     // Kartesisches Ziel (Joystick)
+    this.steps = 0; this.fit = 0;
+    this.x0 = 0;
+  }
+  ArmMj.prototype.eePos = function () {
+    var p = this.data.body(this.r.eeId).xpos;
+    return [p[0], p[1], p[2]];
+  };
+  ArmMj.prototype.ballPos = function () {
+    var a = this.r.ballAdr, q = this.data.qpos;
+    return [q[a], q[a + 1], q[a + 2]];
+  };
+  ArmMj.prototype.getObs = function () {
+    var r = this.r, d = this.data, i = 0, obs = this.obs;
+    for (var j = 0; j < 6; j++) obs[i++] = d.qpos[r.qadr[j]] - this.ref[j];
+    for (j = 0; j < 6; j++) obs[i++] = d.qvel[r.dofadr[j]];
+    var bp = this.ballPos(), ep = this.eePos();
+    obs[i++] = bp[0] - ep[0]; obs[i++] = bp[1] - ep[1]; obs[i++] = bp[2] - ep[2];
+    obs[i++] = this.grip;
+    return obs;
+  };
+  ArmMj.prototype.reset = function () {
+    var r = this.r;
+    mjc.mujoco.mj_resetDataKeyframe(r.model, r.data, 0);
+    armResetBall(r);
+    mjc.mujoco.mj_forward(r.model, r.data);
+    this.ref = ARM_HOME.slice(); this.grip = 0;
+    this.steps = 0; this.fit = 0;
+  };
+  /* Numerische DLS-IK: Ziel → Gelenkreferenzen (6 Iterationen, deterministisch) */
+  ArmMj.prototype.solveIK = function (target) {
+    var r = this.r, d = r.data, mujoco = mjc.mujoco, k, j;
+    var q0 = [];
+    for (j = 0; j < 6; j++) q0.push(d.qpos[r.qadr[j]]);
+    for (k = 0; k < 6; k++) {
+      mujoco.mj_forward(r.model, d);
+      var p = this.eePos();
+      var ex = [target[0] - p[0], target[1] - p[1], target[2] - p[2]];
+      var en = Math.sqrt(ex[0] * ex[0] + ex[1] * ex[1] + ex[2] * ex[2]);
+      if (en < 0.004) break;
+      var J = [], it;
+      for (j = 0; j < 6; j++) {
+        var save = d.qpos[r.qadr[j]];
+        d.qpos[r.qadr[j]] = save + 1e-4;
+        mujoco.mj_kinematics(r.model, d);
+        var p2 = this.eePos();
+        d.qpos[r.qadr[j]] = save;
+        J.push([(p2[0] - p[0]) / 1e-4, (p2[1] - p[1]) / 1e-4, (p2[2] - p[2]) / 1e-4]);
+      }
+      // dq = Jᵀ(JJᵀ + λI)⁻¹ e  (3×3-System, λ=0.02)
+      var JTJ = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      for (it = 0; it < 3; it++) for (var iu = 0; iu < 3; iu++) {
+        var s = 0;
+        for (j = 0; j < 6; j++) s += J[j][it] * J[j][iu];
+        JTJ[it][iu] = s + (it === iu ? 0.02 : 0);
+      }
+      function inv3(m) {
+        var a = m[0][0], b = m[0][1], c = m[0][2], d2 = m[1][0], e = m[1][1], f = m[1][2], g = m[2][0], h = m[2][1], i2 = m[2][2];
+        var A = e * i2 - f * h, B = -(d2 * i2 - f * g), C = d2 * h - e * g;
+        var det = a * A + b * B + c * C || 1e-9;
+        return [[A / det, -(b * i2 - c * h) / det, (b * f - c * e) / det],
+          [B / det, (a * i2 - c * g) / det, -(a * f - c * d2) / det],
+          [C / det, -(a * h - b * g) / det, (a * e - b * d2) / det]];
+      }
+      var inv = inv3(JTJ);
+      var dq = [];
+      for (j = 0; j < 6; j++) {
+        // (JJᵀ+λI)⁻¹e zuerst, dann Jᵀ·y
+        var yv = [0, 0, 0];
+        for (iu = 0; iu < 3; iu++) yv[iu] = inv[iu][0] * ex[0] + inv[iu][1] * ex[1] + inv[iu][2] * ex[2];
+        dq.push(J[j][0] * yv[0] + J[j][1] * yv[1] + J[j][2] * yv[2]);
+      }
+      for (j = 0; j < 6; j++) {
+        var qn = d.qpos[r.qadr[j]] + Math.max(-0.25, Math.min(0.25, dq[j]));
+        d.qpos[r.qadr[j]] = Math.max(ARM_RANGE[j][0], Math.min(ARM_RANGE[j][1], qn));
+      }
+    }
+    var out = [];
+    for (j = 0; j < 6; j++) out.push(d.qpos[r.qadr[j]]);
+    for (j = 0; j < 6; j++) d.qpos[r.qadr[j]] = q0[j]; // qpos zurücksetzen (ctrl steuert)
+    mujoco.mj_forward(r.model, d);
+    return out;
+  };
+  ArmMj.prototype.applyRef = function () {
+    var d = this.data;
+    for (var j = 0; j < 6; j++) {
+      if (!isFinite(this.ref[j])) { this.reset(); return false; }
+      d.ctrl[j] = this.ref[j];
+    }
+    d.ctrl[6] = this.grip ? GRIP_CLOSED : GRIP_OPEN;
+    return true;
+  };
+  /* Ein Regelschritt: 50 Hz — IK/Policy setzt ref, dann Substeps */
+  ArmMj.prototype.substep = function () {
+    mjc.mujoco.mj_step(this.r.model, this.data);
+    this.steps++;
+    var bp = this.ballPos(), ep = this.eePos();
+    var dx = bp[0] - ep[0], dy = bp[1] - ep[1], dz = bp[2] - ep[2];
+    var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    var holding = this.grip && dist < 0.045 && bp[2] > 0.03;
+    // Fit: Ball berühren/greifen/hochheben
+    var touch = Math.max(0, 1 - dist / 0.3);
+    this.fit = touch * 3 + (holding ? 4 + (bp[2] - 0.05) * 30 : 0);
+  };
+  ArmMj.prototype.controlStepAsync = function (usePolicy, genome) {
+    var self = this;
+    if (usePolicy && genome) {
+      var acts = TF.nn.forward(genome, this.getObs(), 7);
+      for (var j = 0; j < 6; j++) {
+        this.ref[j] = Math.max(ARM_RANGE[j][0], Math.min(ARM_RANGE[j][1], this.ref[j] + acts[j] * 0.3));
+      }
+      this.grip = acts[6] > 0 ? 1 : 0;
+      if (!this.applyRef()) return Promise.resolve();
+      for (var k = 0; k < ARM_SUB; k++) this.substep();
+      return Promise.resolve();
+    }
+    // Manuell: IK zum Joystick-Ziel (in 50-Hz-Takten nachziehen)
+    this.ref = this.solveIK(this.target);
+    if (!this.applyRef()) return Promise.resolve();
+    for (k = 0; k < ARM_SUB; k++) this.substep();
+    return Promise.resolve();
+  };
+
+  /* Trainings-Geist für den Arm: eigenes MjData */
+  function GhostArm(genome) {
+    var r = robots.arm;
+    this.r = r;
+    this.data = new mjc.mujoco.MjData(r.model);
+    this.genome = genome;
+    this.obs = new Float32Array(16);
+    this.ref = ARM_HOME.slice();
+    this.grip = 0;
+    this.steps = 0; this.fit = 0; this.done = false;
+    mjc.mujoco.mj_resetDataKeyframe(r.model, this.data, 0);
+    armResetBall(r);
+    mjc.mujoco.mj_forward(r.model, this.data);
+  }
+  GhostArm.prototype.getObs = function () {
+    var r = this.r, d = this.data, i = 0, obs = this.obs;
+    for (var j = 0; j < 6; j++) obs[i++] = d.qpos[r.qadr[j]] - this.ref[j];
+    for (j = 0; j < 6; j++) obs[i++] = d.qvel[r.dofadr[j]];
+    var a = r.ballAdr, q = d.qpos;
+    var ee = d.body(r.eeId).xpos;
+    obs[i++] = q[a] - ee[0]; obs[i++] = q[a + 1] - ee[1]; obs[i++] = q[a + 2] - ee[2];
+    obs[i++] = this.grip;
+    return obs;
+  };
+  GhostArm.prototype.step = function (acts) {
+    var r = this.r, d = this.data;
+    for (var j = 0; j < 6; j++) {
+      var a = clampNum(acts[j]);
+      this.ref[j] = Math.max(ARM_RANGE[j][0], Math.min(ARM_RANGE[j][1], this.ref[j] + a * 0.3));
+      d.ctrl[j] = this.ref[j];
+    }
+    this.grip = acts[6] > 0 ? 1 : 0;
+    d.ctrl[6] = this.grip ? GRIP_CLOSED : GRIP_OPEN;
+    for (var k = 0; k < ARM_SUB; k++) {
+      mjc.mujoco.mj_step(r.model, d);
+      this.steps++;
+    }
+    var a2 = r.ballAdr, q = d.qpos, ee = d.body(r.eeId).xpos;
+    var dx = q[a2] - ee[0], dy = q[a2 + 1] - ee[1], dz = q[a2 + 2] - ee[2];
+    var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    var holding = this.grip && dist < 0.045 && q[a2 + 2] > 0.03;
+    this.fit = Math.max(0, 1 - dist / 0.3) * 3 + (holding ? 4 + (q[a2 + 2] - 0.05) * 30 : 0);
+    if (this.steps >= 400) this.done = true;
+    return this.done;
+  };
+
+  /* ---------- HUMANOID: ROBOTIS OP3 auf echtem MuJoCo ---------- */
+  function HumanoidMj() {
+    var r = robots.hum;
+    this.r = r;
+    this.data = r.data;
+    this.obs = new Float32Array(46);      // projGrav3 + qerr20 + qvel20 + cmd3
+    this.cmd = new Float32Array(3);       // [vx, wz, balance] von Joystick
+    this.mode = 'stehen';                 // stehen | gehen
+    this.steps = 0; this.fit = 0; this.fallen = false;
+    this.phase = 0;
+    this._cur = HUM_HOME.slice();
+    this.x0 = 0; this.y0 = 0;
+  }
+  HumanoidMj.prototype.getObs = function () {
+    var r = this.r, d = this.data, i = 0, obs = this.obs;
+    var g = projGrav(d.body(r.trunkId).xquat);
+    obs[i++] = g[0]; obs[i++] = g[1]; obs[i++] = g[2];
+    for (var j = 0; j < 20; j++) obs[i++] = d.qpos[r.qadr[j]] - HUM_HOME[j];
+    for (j = 0; j < 20; j++) obs[i++] = d.qvel[r.dofadr[j]];
+    obs[i++] = this.cmd[0]; obs[i++] = this.cmd[1]; obs[i++] = this.cmd[2];
+    return obs;
+  };
+  HumanoidMj.prototype.reset = function () {
+    var r = this.r;
+    mjc.mujoco.mj_resetDataKeyframe(r.model, r.data, 0);
+    humResetBall(r);
+    mjc.mujoco.mj_forward(r.model, r.data);
+    this.steps = 0; this.fit = 0; this.fallen = false; this.phase = 0;
+    this._cur = HUM_HOME.slice();
+    this.x0 = r.data.qpos[0]; this.y0 = r.data.qpos[1];
+  };
+  /* Werks-Gait (Firmware): quasistatischer Schüttel-Schrittzyklus.
+   * 4 Phasen à PH_T Regeltakte (50 Hz): Gewichtsverlagerung + Beinschwung.
+   * Schwache Aktuatoren (±5 Nm) → kleine Amplituden, Interpolation. */
+  HumanoidMj.prototype.gait = function () {
+    var PH_T = 30;                       // 0,6 s pro Phase
+    var CYC = PH_T * 4;
+    var ph = Math.floor(this.phase) % CYC;
+    var u = (this.phase % PH_T) / PH_T;  // 0..1 in der Phase
+    this.phase += 1;
+    // Ziel-Pose der aktuellen Phase
+    var tgt = HUM_HOME.slice();
+    var sw = Math.max(-0.3, Math.min(0.3, this.cmd[1]));   // Lenken → Hüft-Yaw
+    var A = 0.20;                        // Hüftpitch-Schwung
+    var K = 0.45;                        // Knie-Anhebung
+    var R = 0.06;                        // Roll-Gewichtsverlagerung
+    var f = ph < PH_T ? 0 : (ph < 2 * PH_T ? 1 : (ph < 3 * PH_T ? 2 : 3));
+    // l_hip_roll=9, r_hip_roll=15, l_hip_yaw=8, r_hip_yaw=14
+    // l_hip_pitch=10, l_knee=11, l_ank_pitch=12, r_…=16,17,18
+    if (f === 0) {                       // Gewicht nach links, rechtes Bein entlasten
+      tgt[9] = HUM_HOME[9] + R; tgt[15] = HUM_HOME[15] + R;
+      tgt[11] = HUM_HOME[11] - 0.06;     // linkes Knie streckt leicht (Hub)
+      tgt[17] = HUM_HOME[17] + K * 0.35; // rechtes Knie entlasten
+    } else if (f === 1) {                // rechtes Bein schwingt vor
+      tgt[9] = HUM_HOME[9] + R; tgt[15] = HUM_HOME[15] + R;
+      tgt[16] = HUM_HOME[16] + A;        // r_hip_pitch vor
+      tgt[17] = HUM_HOME[17] + K;        // r_knee an
+      tgt[18] = HUM_HOME[18] - A * 0.6;
+      tgt[14] = HUM_HOME[14] - sw;       // Lenken
+    } else if (f === 2) {                // Gewicht in die Mitte/rechts
+      tgt[9] = HUM_HOME[9] - R * 0.4; tgt[15] = HUM_HOME[15] - R * 0.4;
+      tgt[16] = HUM_HOME[16] + A * 0.6;
+    } else {                             // linkes Bein schwingt vor
+      tgt[9] = HUM_HOME[9] - R * 0.4; tgt[15] = HUM_HOME[15] - R * 0.4;
+      tgt[10] = HUM_HOME[10] + A;        // l_hip_pitch vor
+      tgt[11] = HUM_HOME[11] + K;        // l_knee an
+      tgt[12] = HUM_HOME[12] - A * 0.6;
+      tgt[8] = HUM_HOME[8] - sw;
+    }
+    // Sanfte Interpolation (quasistatisch)
+    var a = Math.min(1, 0.10);
+    for (var j = 0; j < 20; j++) {
+      this._cur[j] = this._cur[j] === undefined ? tgt[j] : this._cur[j] + (tgt[j] - this._cur[j]) * a;
+    }
+    return this._cur;
+  };
+  HumanoidMj.prototype.applyPose = function (pose) {
+    var d = this.data;
+    for (var j = 0; j < 20; j++) {
+      if (!isFinite(pose[j])) { this.reset(); return false; }
+      d.ctrl[j] = pose[j];
+    }
+    return true;
+  };
+  HumanoidMj.prototype.substep = function () {
+    mjc.mujoco.mj_step(this.r.model, this.data);
+    this.steps++;
+    var g = projGrav(this.data.body(this.r.trunkId).xquat);
+    this.fallen = (g[2] > -0.5 || this.data.qpos[2] < 0.18);
+    this.fit = (this.data.qpos[0] - this.x0) * 10 - (this.fallen ? 3 : 0);
+  };
+  HumanoidMj.prototype.controlStepAsync = function (genome) {
+    var pose;
+    if (genome) {
+      var acts = TF.nn.forward(genome, this.getObs(), 20);
+      pose = new Float32Array(20);
+      for (var j = 0; j < 20; j++) pose[j] = HUM_HOME[j] + clampNum(acts[j]) * 0.5;
+    } else if (this.fallen) {
+      this.reset();
+      pose = HUM_HOME;
+    } else if (this.mode === 'gehen') {
+      pose = this.gait();
+    } else {
+      pose = HUM_HOME;
+    }
+    if (!this.applyPose(pose)) return Promise.resolve();
+    for (var k = 0; k < HUM_SUB; k++) this.substep();
+    if (this.fallen && !genome) this.reset();
+    return Promise.resolve();
+  };
+
+  /* Trainings-Geist für den Humanoiden */
+  function GhostHumanoid(genome) {
+    var r = robots.hum;
+    this.r = r;
+    this.data = new mjc.mujoco.MjData(r.model);
+    this.genome = genome;
+    this.obs = new Float32Array(46);
+    this.steps = 0; this.fit = 0; this.done = false; this.fallen = false;
+    mjc.mujoco.mj_resetDataKeyframe(r.model, this.data, 0);
+    humResetBall(r);
+    mjc.mujoco.mj_forward(r.model, this.data);
+    this.x0 = this.data.qpos[0];
+  }
+  GhostHumanoid.prototype.getObs = function () {
+    var r = this.r, d = this.data, i = 0, obs = this.obs;
+    var g = projGrav(d.body(r.trunkId).xquat);
+    obs[i++] = g[0]; obs[i++] = g[1]; obs[i++] = g[2];
+    for (var j = 0; j < 20; j++) obs[i++] = d.qpos[r.qadr[j]] - HUM_HOME[j];
+    for (j = 0; j < 20; j++) obs[i++] = d.qvel[r.dofadr[j]];
+    obs[i++] = 0; obs[i++] = 0; obs[i++] = 0;   // Trainings-Command neutral
+    return obs;
+  };
+  GhostHumanoid.prototype.step = function (acts) {
+    var d = this.data;
+    for (var j = 0; j < 20; j++) d.ctrl[j] = HUM_HOME[j] + clampNum(acts[j]) * 0.5;
+    for (var k = 0; k < HUM_SUB; k++) {
+      mjc.mujoco.mj_step(this.r.model, d);
+      this.steps++;
+    }
+    var g = projGrav(d.body(this.r.trunkId).xquat);
+    this.fallen = (g[2] > -0.5 || d.qpos[2] < 0.18);
+    this.fit = (d.qpos[0] - this.x0) * 10 - (this.fallen ? 3 : 0);
+    if (this.fallen || this.steps >= 600) this.done = true;
+    return this.done;
+  };
+
+  /* ---------- Mesh-Rig: echte STL-Visuals aus dem Manifest ---------- */
+  /* Manifest: [{m: 'op3vis_body.stl', b: 'body_link', p: [..], q: [wxyz]}]  */
+  function MeshRig(R, lib, manifestFile, opts) {
+    opts = opts || {};
+    var name = opts.robot;                 // 'arm' | 'hum'
+    var robot = robots[name];
+    var model = robot.model;
+    var alpha = opts.ghost ? 0.22 : 1;
+    var COL = opts.colors || (name === 'arm'
+      ? { body: [0.30, 0.32, 0.38, alpha], accent: [1, 0.48, 0.18, alpha] }
+      : { body: [0.93, 0.93, 0.95, alpha], accent: [0.15, 0.15, 0.18, alpha] });
+    var ACCENT = { 'wx250s_10_gripper_finger.stl': 1, 'wx250s_9_gripper_bar.stl': 1 };
+    var bp = model.body_pos, bq = model.body_quat;
+    var jt = model.jnt_type, jb = model.jnt_bodyid, ja = model.jnt_axis;
+    var qadr = model.jnt_qposadr;
+    this.root = new R.Node();
+    this.root.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    var nodes = {}, bodyIds = {};
+    var nbody = model.nbody;
+    for (var b = 1; b < nbody; b++) {
+      var n = new R.Node();
+      n.pos = [bp[b * 3], bp[b * 3 + 1], bp[b * 3 + 2]];
+      n.quat = [bq[b * 4 + 1], bq[b * 4 + 2], bq[b * 4 + 3], bq[b * 4]];
+      nodes[b] = n;
+      bodyIds[model.body_id2name ? model.body_id2name(b) : b] = b;
+    }
+    var parentId = model.body_parentid;
+    for (b = 1; b < nbody; b++) {
+      var p = parentId[b];
+      (p === 0 ? this.root : nodes[p]).add(nodes[b]);
+    }
+    // Gelenk-Updates wie SkeletonRig
+    var jointNodes = [];
+    for (var j = 0; j < model.njnt; j++) {
+      if (jt[j] === 0) continue;
+      var tgt = nodes[jb[j]];
+      if (tgt) jointNodes.push({ node: tgt, axis: [ja[j * 3], ja[j * 3 + 1], ja[j * 3 + 2]], qadr: qadr[j], base: null });
+    }
+    var self = this;
+    this._meshes = {};
+    this.update = function (data) {
+      var q = data.qpos;
+      var fb = robot.freeBodyId;
+      if (fb !== undefined) {
+        nodes[fb].pos = [q[0], q[1], q[2]];
+        nodes[fb].quat = [q[4], q[5], q[6], q[3]];
+      }
+      for (var i = 0; i < jointNodes.length; i++) {
+        var jn = jointNodes[i];
+        if (data.qpos.length <= jn.qadr) continue;
+        if (jn.node === nodes[fb]) continue;
+        var ang = q[jn.qadr];
+        if (jn.base === null) jn.base = jn.node.quat.slice();
+        jn.node.quat = quatMulR(jn.base, jn.axis, ang);
+      }
+    };
+    function quatMulR(base, axis, ang) {
+      var l = Math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]) || 1;
+      var s = Math.sin(ang / 2);
+      var b2 = [axis[0] / l * s, axis[1] / l * s, axis[2] / l * s, Math.cos(ang / 2)];
+      var ax = base[0], ay = base[1], az = base[2], aw = base[3];
+      return [
+        aw * b2[0] + ax * b2[3] + ay * b2[2] - az * b2[1],
+        aw * b2[1] + ay * b2[3] + az * b2[0] - ax * b2[2],
+        aw * b2[2] + az * b2[3] + ax * b2[1] - ay * b2[0],
+        aw * b2[3] - ax * b2[0] - ay * b2[1] - az * b2[2]
+      ];
+    }
+    /* Visuals anhängen (asynchron: STLs laden → Mesh-Nodes) */
+    this.attachVisuals = function (manifest, loadBytes) {
+      return Promise.all(manifest.map(function (e) {
+        var bid = null;
+        try { bid = model.body(e.b).id; } catch (err) { bid = null; }
+        if (bid === null || bid === undefined) return null;
+        return loadBytes(e.m).then(function (bytes) {
+          var mesh = self._meshes[e.m];
+          if (!mesh) { mesh = lib.fromSTL(bytes); self._meshes[e.m] = mesh; }
+          var node = new R.Node(mesh, ACCENT[e.m] ? COL.accent : COL.body);
+          node.pos = e.p; node.quat = [e.q[1], e.q[2], e.q[3], e.q[0]];
+          node.scale = [0.001, 0.001, 0.001];   // STLs liegen in mm
+          nodes[bid].add(node);
+        });
+      })).then(function () { return self; });
+    };
+    this.ghost = !!opts.ghost;
+  }
+
+  var ROBOT_XML = { arm: 'wx250s', hum: 'op3' };   // Präfixe der Manifeste
+
   /* ---------- Öffentliche API ---------- */
   TF.mjc = {
     init: init,
@@ -2568,8 +3216,38 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     makeDuck: function () { return mjc ? new DuckMj() : null; },
     makeGhost: function () { return mjc ? new GhostDuck() : null; },
     makeSkeletonRig: function (R, lib, ghost) { return mjc ? new SkeletonRig(R, lib, ghost) : null; },
+    /* --- Menagerie-Roboter (arm = WidowX 250, hum = OP3) --- */
+    ensureRobot: function (name) {
+      if (!mjc) return Promise.reject(new Error('mjc nicht initialisiert'));
+      return loadRobot(name);
+    },
+    hasRobot: function (name) { return !!robots[name]; },
+    makeArm: function () { return robots.arm ? new ArmMj() : null; },
+    makeHum: function () { return robots.hum ? new HumanoidMj() : null; },
+    makeGhostArm: function (genome) { return robots.arm ? new GhostArm(genome) : null; },
+    makeGhostHum: function (genome) { return robots.hum ? new GhostHumanoid(genome) : null; },
+    makeMeshRig: function (R, lib, robot, ghost) {
+      if (!robots[robot]) return null;
+      return new MeshRig(R, lib, (ROBOT_XML[robot] || robot) + '_visual.json', { robot: robot, ghost: ghost });
+    },
+    attachRigVisuals: function (rig, robot) {
+      if (!robots[robot] || !rig.attachVisuals) return Promise.resolve(rig);
+      return readAssetText((ROBOT_XML[robot] || robot) + '_visual.json').then(function (t) {
+        return rig.attachVisuals(JSON.parse(t), readAsset);
+      });
+    },
+    ARM: { HOME: ARM_HOME, RANGE: ARM_RANGE, BALL: ARM_BALL, GRIP_OPEN: GRIP_OPEN, GRIP_CLOSED: GRIP_CLOSED },
+    HUM: { HOME: HUM_HOME, BALL: HUM_BALL },
+    robotInfo: function (name) {
+      var r = robots[name];
+      if (!r) return null;
+      return { nq: r.model.nq, nv: r.model.nv, nu: r.model.nu, nbody: r.model.nbody };
+    },
     // Nur für Tests: Kern von außen setzen (Node-Smoke ohne Browser)
     __setCore: function (c) { mjc = c; },
+    __setRobot: function (name, r) { robots[name] = r; },
+    __readAsset: readAsset,
+    __readAssetText: readAssetText,
     info: function () {
       if (!mjc) return null;
       return { nq: mjc.model.nq, nv: mjc.model.nv, nu: mjc.model.nu, nsensor: mjc.model.nsensor };
@@ -2611,12 +3289,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     var S = this.state = {
       robot: 'duck', mode: 'manual', tod: 'day',
       colorIdx: 0, showRays: true, gripClosed: false,
-      champions: { duck: null, arm: null, humanoid: null }, // {genome, gen, fit, src}
+      champions: { duck: null, arm: null, humanoid: null, duckmj: null, armmj: null, op3mj: null }, // {genome, gen, fit, src}
       training: { active: false, robot: 'duck', gens: 0, gen: 0, batchIdx: 0,
         pop: null, fits: null, envs: [], genomes: [], batchFits: null,
         history: [], bestFit: null, avgFit: null, champFit: null, champGenome: null, baseSeed: 1000 },
       // Echtes MuJoCo (WASM) + Werks-ONNX-Policies des HF-Space
-      mjc: { ready: false, err: null, duck: null, slot: 'walk', ghosts: [], ghostRigs: [], mjRig: null, mjFrame: null },
+      // + Menagerie-Roboter: arm = WidowX 250, hum = ROBOTIS OP3
+      mjc: { ready: false, err: null, duck: null, slot: 'walk', ghosts: [], ghostRigs: [], mjRig: null, mjFrame: null,
+        arm: null, armRig: null, hum: null, humRig: null, humMode: 'stehen' },
       fps: 0
     };
     this.joystick = { x: 0, y: 0 };
@@ -2679,12 +3359,28 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     var ghostRigs = [];
     this.worlds = worlds; this.envs = envs;
 
-    /* ---------- MuJoCo-Frame (MJCF ist Z-up, Renderer Y-up) ---------- */
+    /* ---------- MuJoCo-Frames (MJCF ist Z-up, Renderer Y-up) ---------- */
     var mjFrame = new TF.render.Node();
     mjFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
     mjFrame.visible = false;
     worlds.duck.arena.add(mjFrame);
     S.mjc.mjFrame = mjFrame;
+    // Eigene Frames für die Menagerie-Roboter (Arm-Tisch = Werkstatt-Bodenniveau)
+    var armFrame = new TF.render.Node();
+    armFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    armFrame.visible = false;
+    worlds.arm.arena.add(armFrame);
+    var humFrame = new TF.render.Node();
+    humFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    humFrame.visible = false;
+    worlds.humanoid.arena.add(humFrame);
+    // Physik-Bälle (MJCF-Ball) in den Frames — Position wird pro Frame gesetzt
+    var armBallNode = new TF.render.Node(lib.unitSphere, [0.95, 0.5, 0.16, 1]);
+    armBallNode.scale = [0.05, 0.05, 0.05];
+    armFrame.add(armBallNode);
+    var humBallNode = new TF.render.Node(lib.unitSphere, [0.95, 0.5, 0.16, 1]);
+    humBallNode.scale = [0.05, 0.05, 0.05];
+    humFrame.add(humBallNode);
 
     /* ---------- Render-Interpolation: Physik fix 30 Hz, Grafik Display-Rate.
      * visFor() mischt prev→currzustand mit alpha = akkumulierte Restzeit/DT.
@@ -2881,6 +3577,65 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       TF.ui.status('MICRODUCK·MJ · ' + names[S.mjc.slot]);
     };
 
+    /* ---------- Menagerie-Roboter lazy laden (arm = WidowX, hum = OP3) ---------- */
+    function ensureMjRobot(key, cb) {
+      if (!TF.mjc || !S.mjc.ready) return;
+      if (S.mjc[key]) { if (cb) cb(); return; }
+      TF.ui.logLine('Lade MuJoCo-Modell: ' + (key === 'arm' ? 'WidowX 250 6DOF' : 'ROBOTIS OP3') + ' …', 'sys');
+      TF.mjc.ensureRobot(key).then(function () {
+        var frame = key === 'arm' ? armFrame : humFrame;
+        var rig = TF.mjc.makeMeshRig(TF.render, lib, key, false);
+        frame.add(rig.root);
+        S.mjc[key + 'Rig'] = rig;
+        S.mjc[key] = key === 'arm' ? TF.mjc.makeArm() : TF.mjc.makeHum();
+        TF.mjc.attachRigVisuals(rig, key).then(function () {
+          TF.ui.logLine('Originale STL-Visuals aktiv (' + (key === 'arm' ? 'Interbotix' : 'ROBOTIS') + ').', 'sys');
+        }).catch(function () {});
+        var info = TF.mjc.robotInfo(key);
+        TF.ui.logLine('ECHTES MUJOCO: ' + (key === 'arm' ? 'WIDOWX 250 6DOF' : 'ROBOTIS OP3') + ' (Menagerie, nq ' + info.nq + ', nu ' + info.nu + ').', 'sys');
+        if (key === 'arm') TF.ui.logLine('Joystick = Greifziel · GRIP-Taste greift den Ball (Auto-Aim).', 'sys');
+        else TF.ui.logLine('Joystick = Command · "POLICY" wechselt STEHEN → GEHEN · Training: "trainiere den humanoiden".', 'sys');
+        if (cb) cb();
+      }).catch(function (e) {
+        TF.ui.logLine('MJ-Modell fehlgeschlagen: ' + e.message + ' — Werkstatt-Kern bleibt aktiv.', 'warn');
+      });
+    }
+    function mjDriveArm() {
+      var a = S.mjc.arm;
+      if (S.gripClosed) {
+        // Auto-Aim: Ziel = Ball, nach Griffversuch hochheben
+        var bp = a.ballPos();
+        a.target = [bp[0], bp[1], a.grip ? 0.21 : 0.09];
+        a.grip = 1;
+      } else {
+        a.grip = 0;
+        a.target = [0.28 + self.joystick.y * 0.11, self.joystick.x * 0.17, 0.07];
+      }
+      if (!a.busy) {
+        a.busy = true;
+        a.controlStepAsync(false, null)
+          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+          .then(function () { a.busy = false; });
+      }
+    }
+    function mjDriveHum() {
+      var h = S.mjc.hum;
+      h.cmd[0] = self.joystick.y * 1.0;
+      h.cmd[1] = -self.joystick.x * 0.5;
+      if (!h.busy) {
+        h.busy = true;
+        h.controlStepAsync(null)
+          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+          .then(function () { h.busy = false; });
+      }
+    }
+    this.mjcCycleHum = function () {
+      S.mjc.humMode = S.mjc.humMode === 'stehen' ? 'gehen' : 'stehen';
+      if (S.mjc.hum) S.mjc.hum.mode = S.mjc.humMode;
+      TF.ui.logLine('ROBOTIS OP3: ' + S.mjc.humMode.toUpperCase() + (S.mjc.humMode === 'gehen' ? ' (quasistatische Firmware-Gait — RL-Training macht es schneller)' : ''), 'sys');
+      TF.ui.status('HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase());
+    };
+
     /* ---------- Neuroevolution ---------- */
     function gauss() {
       var u = 0, v = 0;
@@ -2897,13 +3652,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     }
 
     this.startTraining = function (robot, gens) {
-      // MuJoCo-Ente da? Dann auf dem echten Roboter trainieren.
+      // MuJoCo da? Dann auf den echten Robotern trainieren.
       if (robot === 'duck' && S.mjc.ready) {
         TF.ui.logLine('MuJoCo aktiv — Training läuft auf dem echten Microduck (61→14).', 'sys');
         robot = 'duckmj';
       }
+      if (robot === 'arm' && S.mjc.arm) {
+        TF.ui.logLine('MuJoCo aktiv — Training läuft auf der echten WidowX 250 (16→7).', 'sys');
+        robot = 'armmj';
+      }
+      if (robot === 'humanoid' && S.mjc.hum) {
+        TF.ui.logLine('MuJoCo aktiv — Training läuft auf dem echten ROBOTIS OP3 (46→20).', 'sys');
+        robot = 'op3mj';
+      }
       if (S.training.active) this.stopTraining();
-      var mj = robot === 'duckmj';
+      var mj = robot === 'duckmj' || robot === 'armmj' || robot === 'op3mj';
       S.training = {
         active: true, robot: robot, gens: gens, gen: 0, batchIdx: 0,
         pop: [], fits: new Float64Array(40), envs: [], genomes: [],
@@ -2918,20 +3681,23 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         else S.training.pop.push(TF.nn.initGenome(1234 + i * 17, TF.nn.ARCHS[robot][0], TF.nn.ARCHS[robot][3]));
       }
       newBatch();
-      if (mj) buildMjGhosts(); else buildGhosts(robot);
+      if (mj) buildMjGhosts(robot); else buildGhosts(robot);
       rigRootFor(robot).visible = false;
       TF.ui.logLine('TRAINING ' + robot.toUpperCase() + ': ' + gens + ' Generationen, Population 40, ' + (mj ? '4 MuJoCo-Geister/Batch (10 Batches)' : '8 Geister/Batch') + '.', 'sys');
       TF.ui.buildTopbar();
     };
     function rigRootFor(robot) {
-      return robot === 'duckmj' ? (S.mjc.mjRig ? S.mjc.mjRig.root : mjFrame) : worlds[robot].rig.root;
+      if (robot === 'duckmj') return S.mjc.mjRig ? S.mjc.mjRig.root : mjFrame;
+      if (robot === 'armmj') return S.mjc.armRig ? S.mjc.armRig.root : armFrame;
+      if (robot === 'op3mj') return S.mjc.humRig ? S.mjc.humRig.root : humFrame;
+      return worlds[robot] ? worlds[robot].rig.root : mjFrame;
     }
     this.stopTraining = function () {
       if (!S.training.active) return;
       S.training.active = false;
       finishChampion('abgebrochen');
       rigRootFor(S.training.robot).visible = true;
-      if (S.training.robot === 'duckmj') clearMjGhosts(); else clearGhosts();
+      if (S.training.robot === 'duckmj' || S.training.robot === 'armmj' || S.training.robot === 'op3mj') clearMjGhosts(); else clearGhosts();
       TF.ui.logLine('Training beendet (Generation ' + S.training.gen + ').', 'sys');
       TF.ui.buildTopbar();
       TF.ui.updateTraining(S.training);
@@ -2942,13 +3708,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     };
     function newBatch() {
       var T = S.training;
-      var mj = T.robot === 'duckmj';
+      var mj = T.robot === 'duckmj' || T.robot === 'armmj' || T.robot === 'op3mj';
       var per = mj ? 4 : 8;
       T.envs = [];
       T.genomes = [];
       if (mj) {
         for (var k = 0; k < per; k++) {
-          T.envs.push(TF.mjc.makeGhost());
+          if (T.robot === 'duckmj') T.envs.push(TF.mjc.makeGhost());
+          else if (T.robot === 'armmj') T.envs.push(TF.mjc.makeGhostArm(null));
+          else T.envs.push(TF.mjc.makeGhostHum(null));
           T.genomes.push(T.pop[T.batchIdx * per + k]);
         }
       } else {
@@ -3000,7 +3768,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     function trainStep() {
       var T = S.training;
       if (!T.active) return;
-      var mj = T.robot === 'duckmj';
+      var mj = T.robot === 'duckmj' || T.robot === 'armmj' || T.robot === 'op3mj';
       var per = mj ? 4 : 8;
       var batches = mj ? 10 : 5;
       var iters = mj ? 1 : 3;
@@ -3037,12 +3805,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     }
 
     /* ---------- Geister ---------- */
-    function buildMjGhosts() {
+    function buildMjGhosts(robot) {
       clearMjGhosts();
+      var kind = robot === 'armmj' ? 'arm' : robot === 'op3mj' ? 'hum' : 'duck';
+      var frame = kind === 'arm' ? armFrame : kind === 'hum' ? humFrame : mjFrame;
       for (var k = 0; k < 4; k++) {
-        S.mjc.ghosts.push(TF.mjc.makeGhost());
-        var rig = TF.mjc.makeSkeletonRig(TF.render, lib, true);
-        S.mjc.mjFrame.add(rig.root);
+        if (kind === 'arm') S.mjc.ghosts.push(TF.mjc.makeGhostArm(null));
+        else if (kind === 'hum') S.mjc.ghosts.push(TF.mjc.makeGhostHum(null));
+        else S.mjc.ghosts.push(TF.mjc.makeGhost());
+        var rig;
+        if (kind === 'duck') rig = TF.mjc.makeSkeletonRig(TF.render, lib, true);
+        else {
+          rig = TF.mjc.makeMeshRig(TF.render, lib, kind, true);
+          TF.mjc.attachRigVisuals(rig, kind).catch(function () {});
+        }
+        frame.add(rig.root);
         S.mjc.ghostRigs.push(rig);
       }
     }
@@ -3077,7 +3854,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       cam.yaw = CAM_DEF[id].yaw; cam.pitch = CAM_DEF[id].pitch; cam.dist = CAM_DEF[id].dist;
       for (var r in worlds) worlds[r].arena.visible = (r === id) && true;
       if (S.training.active && S.training.robot !== id) this.stopTraining();
-      TF.ui.logLine('Roboter: ' + id.toUpperCase(), 'sys');
+      // Menagerie-Roboter: MuJoCo-Modell lazy laden (Werkstatt-Kern läuft bis dahin)
+      if (id === 'arm') ensureMjRobot('arm');
+      if (id === 'humanoid') ensureMjRobot('hum');
+      TF.ui.logLine('Roboter: ' + id.toUpperCase() + (id === 'arm' && S.mjc.arm ? ' · MUJOCO WIDOWX 250' : id === 'humanoid' && S.mjc.hum ? ' · MUJOCO ROBOTIS OP3' : ''), 'sys');
       TF.ui.status('ROBOT ' + id.toUpperCase() + ' / ' + S.mode.toUpperCase());
       save();
     };
@@ -3086,6 +3866,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       // Microduck-MJ: POLICY-Knopf zyklisiert die Werks-Policy-Slots
       if (m === 'policy' && S.mjc.ready && S.robot === 'duck') {
         this.mjcCycleSlot();
+        TF.ui.buildTopbar();
+        return;
+      }
+      // Humanoid-MJ: POLICY-Knopf wechselt STEHEN ↔ GEHEN
+      if (m === 'policy' && S.robot === 'humanoid' && S.mjc.hum) {
+        this.mjcCycleHum();
+        TF.ui.buildTopbar();
+        return;
+      }
+      // Arm-MJ: POLICY-Knopf = Greifen (Auto-Aim auf den Ball)
+      if (m === 'policy' && S.robot === 'arm' && S.mjc.arm) {
+        S.gripClosed = !S.gripClosed;
+        TF.ui.logLine(S.gripClosed ? 'ARMBOT·MJ: Greifen (Auto-Aim auf den Ball).' : 'ARMBOT·MJ: Griff offen.', 'sys');
         TF.ui.buildTopbar();
         return;
       }
@@ -3124,6 +3917,16 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       if (S.robot === 'duck' && S.mjc.ready && S.mjc.duck) {
         S.mjc.duck.reset();
         TF.ui.logLine('MICRODUCK·MJ zurückgesetzt (STAND-Keyframe).', 'sys');
+        return;
+      }
+      if (S.robot === 'arm' && S.mjc.arm) {
+        S.mjc.arm.reset();
+        TF.ui.logLine('ARMBOT·MJ zurückgesetzt (Home-Keyframe, Ball zurück auf den Tisch).', 'sys');
+        return;
+      }
+      if (S.robot === 'humanoid' && S.mjc.hum) {
+        S.mjc.hum.reset();
+        TF.ui.logLine('HUMANOID·MJ zurückgesetzt (Home-Keyframe).', 'sys');
         return;
       }
       envs[S.robot].reset(envs[S.robot].rngSeed || 1);
@@ -3207,8 +4010,16 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         switch (a.op) {
           case 'train': this.startTraining(a.robot, a.gens); break;
           case 'trainStop': this.stopTraining(); break;
-          case 'robot': this.setRobot(a.id === 'duckmj' ? 'duck' : a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
+          case 'robot': this.setRobot({ duckmj: 'duck', armmj: 'arm', op3mj: 'humanoid' }[a.id] || a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
           case 'mjslot': if (S.mjc.ready) { S.mjc.slot = a.slot; TF.ui.logLine('MuJoCo-Policy-Slot: ' + a.slot.toUpperCase(), 'sys'); } else TF.ui.logLine('MuJoCo nicht aktiv — Slot nicht gesetzt.', 'warn'); break;
+          case 'hummode':
+            if (S.mjc.hum) { S.mjc.humMode = a.mode; S.mjc.hum.mode = a.mode; TF.ui.logLine('ROBOTIS OP3: ' + a.mode.toUpperCase(), 'sys'); }
+            else TF.ui.logLine('Humanoid-MJ noch nicht geladen.', 'warn');
+            break;
+          case 'grip':
+            S.gripClosed = !!a.closed;
+            TF.ui.logLine('Greifer: ' + (a.closed ? 'ZU (Auto-Aim)' : 'OFFEN'), 'sys');
+            break;
           case 'mode': this.setMode(a.mode); break;
           case 'tod': this.setTod(a.tod); TF.ui.buildTopbar(); break;
           case 'save': this.saveChampionNamed(a.name); break;
@@ -3227,7 +4038,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       var T = S.training;
       var lines = [
         'STATUS — Roboter: ' + S.robot.toUpperCase() + ' | Modus: ' + S.mode.toUpperCase() + ' | TOD: ' + S.tod.toUpperCase(),
-        'Champions: ' + ['duck', 'duckmj', 'arm', 'humanoid'].map(function (r) {
+        'Champions: ' + ['duck', 'duckmj', 'arm', 'armmj', 'humanoid', 'op3mj'].map(function (r) {
           var c = S.champions[r];
           return r + (c ? '(gen ' + c.gen + ', fit ' + c.fit.toFixed(1) + ', ' + c.src + ')' : '(—)');
         }).join('  '),
@@ -3352,6 +4163,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       if (S.mjc.ready && S.robot === 'duck' && !S.training.active) {
         // Echtes MuJoCo: 50-Hz-Policy-Regelung, Joystick = Velocity-Command
         mjDrive(dt);
+      } else if (S.mjc.ready && S.robot === 'arm' && S.mjc.arm && !S.training.active) {
+        mjDriveArm();
+      } else if (S.mjc.ready && S.robot === 'humanoid' && S.mjc.hum && !S.training.active) {
+        mjDriveHum();
       } else if (!S.training.active) {
         acc += dt;
         var n = 0;
@@ -3387,7 +4202,52 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         requestAnimationFrame(frame);
         return; // eigener Pfad fertig gezeichnet
       }
+      // ARMBOT·MJ / HUMANOID·MJ: eigener Physik-Pfad mit Mesh-Rig
+      if (S.mjc.ready && !S.training.active &&
+          ((S.robot === 'arm' && S.mjc.arm) || (S.robot === 'humanoid' && S.mjc.hum))) {
+        var key = S.robot === 'arm' ? 'arm' : 'hum';
+        var envM = S.mjc[key], rigM = S.mjc[key + 'Rig'];
+        var frameM = key === 'arm' ? armFrame : humFrame;
+        frameM.visible = true;
+        mjFrame.visible = false;
+        var otherFrame = key === 'arm' ? humFrame : armFrame;
+        otherFrame.visible = false;
+        if (rigM) rigM.update(envM.data);
+        worlds[key === 'arm' ? 'arm' : 'humanoid'].rig.root.visible = false;
+        var wM = worlds[key === 'arm' ? 'arm' : 'humanoid'];
+        wM.target.root.visible = key === 'arm';
+        if (key === 'arm') {
+          var tM = envM.target;
+          wM.target.root.pos = [tM[0], tM[2] + 0.4, -tM[1]];
+          wM.target.ring.scale = [0.3, 1, 0.3];
+        }
+        var bpos = envM.data.qpos;
+        var ballN = key === 'arm' ? armBallNode : humBallNode;
+        var ba = envM.r.ballAdr;
+        ballN.pos = [bpos[ba], bpos[ba + 1], bpos[ba + 2]];
+        ballN.visible = true;
+        var focusM2 = key === 'arm' ? [0, 0.55, 0] : [bpos[0], 0.45, -bpos[1]];
+        var distM = key === 'arm' ? 1.5 : 2.0;
+        var cxM2 = focusM2[0] + distM * Math.cos(cam.pitch) * Math.sin(cam.yaw);
+        var cyM2 = focusM2[1] + distM * Math.sin(cam.pitch);
+        var czM2 = focusM2[2] + distM * Math.cos(cam.pitch) * Math.cos(cam.yaw);
+        renderer.camDist = distM;
+        renderer.setCamera([cxM2, cyM2, czM2], focusM2, [0, 1, 0]);
+        renderer.begin();
+        renderer.drawNode(wM.arena, 1);
+        var st = key === 'arm'
+          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · 50 HZ'
+          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · 50 HZ';
+        TF.ui.status(st);
+        requestAnimationFrame(frame);
+        return;
+      }
       mjFrame.visible = false;
+      // Ghost-Frames während MJ-Training sichtbar schalten
+      armFrame.visible = S.training.active && S.training.robot === 'armmj';
+      humFrame.visible = S.training.active && S.training.robot === 'op3mj';
+      armBallNode.visible = !armFrame.visible;
+      humBallNode.visible = !humFrame.visible;
       // Rig-Updates — interpolierte Anzeige-Pose (kein Physik-Zustand!)
       var vis = visFor(S.robot, env, S.training.active ? 1 : alpha);
       if (S.robot === 'duck') {
@@ -3449,10 +4309,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       var lsOk = true;
       try { global.localStorage.setItem('tf07.test', '1'); global.localStorage.removeItem('tf07.test'); } catch (e) { lsOk = false; }
       TF.ui.bootSequence([
-        'TESTFELD·07 BIOS v1.0.0 — (c) Werkstatt',
+        'TESTFELD·07 BIOS v2.0.0 — (c) Werkstatt',
         'CPU: WEBVIEW-ARM64 ................ OK',
         'GRAFIK: ' + gpu.slice(0, 34) + (softGL ? ' [SOFTWARE]' : '') + ' ... OK',
-        'PHYSIK: TF07-KERN @ 30 HZ (FIX) ... OK',
+        'PHYSIK: MUJOCO 3.11 (WASM) + TF07 ... OK',
+        'MODELLGALERIE: MICRODUCK + WIDOWX 250 + OP3 ... OK',
         'RENDER: DISPLAY-RATE + INTERPOLATION ... OK',
         'ROBOTER: MICRODUCK / ARMBOT / HUMANOID ... 3 GEFUNDEN',
         'POLICY-FORMAT: robofield-policy-v1 ....... BEREIT',

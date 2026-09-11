@@ -21,9 +21,11 @@
     duck: ['duck', 'entchen', 'roller', 'ente'],
     duckmj: ['microduck', 'mjc', 'mujoco'],
     arm: ['arm', 'armbot', 'greifarm', 'greifer', 'arm-bot'],
-    humanoid: ['humanoid', 'läufer', 'laeufer', 'walker', 'mensch', 'humanoider']
+    humanoid: ['humanoid', 'läufer', 'laeufer', 'walker', 'mensch', 'humanoider'],
+    armmj: ['widowx', 'wx250', 'menagerie-arm'],
+    op3mj: ['op3', 'robotis', 'menagerie-humanoid']
   };
-  var ROBOT_IDS = ['duck', 'duckmj', 'arm', 'humanoid'];
+  var ROBOT_IDS = ['duck', 'duckmj', 'arm', 'armmj', 'humanoid', 'op3mj'];
 
   function norm(s) {
     return String(s || '').toLowerCase().replace(/[,.;:!?"'`´]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -89,9 +91,15 @@
     if (r3 && t.split(' ').length <= 3) { A({ op: 'robot', id: r3 }); replies.push('Roboter: ' + r3.toUpperCase() + '.'); return { actions: actions, replies: replies }; }
 
     // MuJoCo-Policy-Slots (Microduck): laufen / skaten / hinsetzen
-    if (/\b(skate|skaten|roller fahren|drive)\b/.test(t)) { A({ op: 'mjslot', slot: 'drive' }); replies.push('Microduck·MJ: ROLLER-Policy aktiv.'); return { actions: actions, replies: replies }; }
-    if (/\b(hinsetzen|hinsitzen|sitzen|sit stand|sitstand)\b/.test(t)) { A({ op: 'mjslot', slot: 'sitstand' }); replies.push('Microduck·MJ: SIT·STAND-Policy aktiv.'); return { actions: actions, replies: replies }; }
-    if (/\b(laufen|gehen|walk|laufe)\b/.test(t)) { A({ op: 'mjslot', slot: 'walk' }); replies.push('Microduck·MJ: LAUF-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(skate|skaten|roller fahren|drive)\b)/.test(t)) { A({ op: 'mjslot', slot: 'drive' }); replies.push('Microduck·MJ: ROLLER-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(hinsetzen|hinsitzen|sitzen|sit stand|sitstand)\b)/.test(t)) { A({ op: 'mjslot', slot: 'sitstand' }); replies.push('Microduck·MJ: SIT·STAND-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/(\b(laufen|walk|laufe)\b)/.test(t)) { A({ op: 'mjslot', slot: 'walk' }); replies.push('Microduck·MJ: LAUF-Policy aktiv.'); return { actions: actions, replies: replies };
+    }
+    // Humanoid-MJ: stehen / gehen — Arm: greifen / loslassen
+    if (/\b(stehen|stand|still)\b/.test(t)) { A({ op: 'hummode', mode: 'stehen' }); replies.push('ROBOTIS OP3: STEHEN.'); return { actions: actions, replies: replies }; }
+    if (/\b(gehen|schritte|laufen lassen)\b/.test(t) || /\bgehen\b/.test(t)) { A({ op: 'hummode', mode: 'gehen' }); replies.push('ROBOTIS OP3: GEHEN (quasistatische Firmware-Gait).'); return { actions: actions, replies: replies }; }
+    if (/\b(greifen|zugreifen|grab|hebe|heben)\b/.test(t)) { A({ op: 'grip', closed: true }); replies.push('ARMBOT: Greifen (Auto-Aim auf den Ball).'); return { actions: actions, replies: replies }; }
+    if (/\b(loslassen|offen lassen|drop)\b/.test(t)) { A({ op: 'grip', closed: false }); replies.push('ARMBOT: Griff offen.'); return { actions: actions, replies: replies }; }
 
     // Modus
     if (/\b(manuell|manual|handbetrieb|joystick)\b/.test(t)) {
@@ -160,6 +168,15 @@
         if (['walk', 'drive', 'sitstand'].indexOf(obj.slot) < 0) { bad('unbekannter slot: ' + obj.slot); break; }
         actions.push({ op: 'mjslot', slot: obj.slot });
         replies.push('JSON: MuJoCo-Policy-Slot → ' + obj.slot + '.');
+        break;
+      case 'hummode':
+        if (['stehen', 'gehen'].indexOf(obj.mode) < 0) { bad('unbekannter modus (stehen|gehen): ' + obj.mode); break; }
+        actions.push({ op: 'hummode', mode: obj.mode });
+        replies.push('JSON: OP3-Modus → ' + obj.mode + '.');
+        break;
+      case 'grip':
+        actions.push({ op: 'grip', closed: !!obj.closed });
+        replies.push('JSON: Greifer ' + (obj.closed ? 'zu.' : 'offen.'));
         break;
       case 'mode':
         if (['manual', 'policy'].indexOf(obj.mode) < 0) { bad('unbekannter mode: ' + obj.mode); break; }
