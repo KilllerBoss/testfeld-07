@@ -297,7 +297,12 @@
   };
 
   Renderer.prototype.setCamera = function (eye, ctr, up) {
-    mat4LookAt(this.view, eye, ctr, up || [0,1,0]);
+    // NaN/∞-Schutz (z. B. bei Grenzfällen) — letzte gültige Kamera behalten
+    var ok = eye && ctr && isFinite(eye[0]) && isFinite(eye[1]) && isFinite(eye[2]) &&
+             isFinite(ctr[0]) && isFinite(ctr[1]) && isFinite(ctr[2]);
+    if (!ok) return;
+    this._eye = eye; this._ctr = ctr;
+    mat4LookAt(this.view, eye, ctr, up || [0, 1, 0]);
     mat4Mul(this.vp, this.proj, this.view);
   };
 

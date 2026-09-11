@@ -428,7 +428,7 @@ class HumanoidEnvScalar:
         self.pz = 0.0
         self.vx = 0.0
         self.x = 0.0
-        self.s = -0.1
+        self.s = -0.02
         self.tau = 0.0
         self.side = 1
         self.lean = 0.0
@@ -439,7 +439,7 @@ class HumanoidEnvScalar:
         self.reached = 0
         self.fallen = False
         self._new_target()
-        self.rel = self.x - (self.s + self.lean * 0.3)
+        self.rel = self.x - (self.s + self.lean * 2.5)
 
     def get_obs(self):
         o = [0.0] * 10
@@ -476,8 +476,8 @@ class HumanoidEnvScalar:
             self.side = -self.side
             swing_hip = a[3] if self.side == 1 else a[1]
             sl = 0.15 + 0.30 * clamp((clamp(swing_hip, -1, 1) + 1) / 2, 0, 1)
-            self.s = self.x + 0.35 * self.vx + 0.5 * sl
-        s_eff = self.s + self.lean * 0.3
+            self.s = self.x + 0.29 * self.vx + 0.1 * sl
+        s_eff = self.s + self.lean * 2.5
         w2 = HUM["G"] / HUM["H"]
         ax = w2 * (self.x - s_eff)
         self.vx += ax * DT
@@ -755,9 +755,9 @@ class ArmEnvBatch:
             self.ball[hold, 0] = self.ee[hold, 0]
             self.ball[hold, 1] = self.ee[hold, 1] - 0.06
             self.ball[hold, 2] = self.ee[hold, 2]
-            d_bd = np.linalg.norm(self.ball[hold] - dz, axis=1)
-            r[hold] += 4.0 * (self.prev_bd[hold] - d_bd)
-            self.prev_bd[hold] = d_bd
+            d_bd = np.linalg.norm(self.ball - dz, axis=1)   # volle Länge
+            r[hold] += 4.0 * (self.prev_bd[hold] - d_bd[hold])
+            self.prev_bd[hold] = d_bd[hold]
             deliv = hold & (d_bd < ARM["DELIVER_D"])
             if deliv.any():
                 r[deliv] += 25.0
@@ -790,7 +790,7 @@ class HumanoidEnvBatch:
         self.pz = np.zeros(n)
         self.vx = np.zeros(n)
         self.x = np.zeros(n)
-        self.s = np.full(n, -0.1)
+        self.s = np.full(n, -0.02)
         self.tau = np.zeros(n)
         self.side = np.ones(n, dtype=int)
         self.lean = np.zeros(n)
@@ -810,7 +810,7 @@ class HumanoidEnvBatch:
         self.target_dist = np.zeros(n)
         for k in range(n):
             self._new_target(int(k))
-        self.rel = self.x - (self.s + self.lean * 0.3)
+        self.rel = self.x - (self.s + self.lean * 2.5)
 
     def _new_target(self, k):
         rg = self.rngs[k]
@@ -868,9 +868,9 @@ class HumanoidEnvBatch:
             self.side[wrap] *= -1
             swing_hip = np.where(self.side == 1, z(a[:, 3]), z(a[:, 1]))
             sl = 0.15 + 0.30 * np.clip((swing_hip + 1) / 2, 0, 1)
-            self.s[wrap] = self.x[wrap] + 0.35 * self.vx[wrap] + 0.5 * sl[wrap]
+            self.s[wrap] = self.x[wrap] + 0.29 * self.vx[wrap] + 0.1 * sl[wrap]
         self.tau += (DT / HUM["STEP_T"]) * alive
-        s_eff = self.s + self.lean * 0.3
+        s_eff = self.s + self.lean * 2.5
         w2 = HUM["G"] / HUM["H"]
         ax = w2 * (self.x - s_eff) * alive
         self.vx += ax * DT

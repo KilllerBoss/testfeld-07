@@ -12,7 +12,7 @@ import numpy as np
 from robofield_common import genome_to_policy_json
 from trainer import train
 
-GENS = 200      # Zielvorgabe des Nutzers: erst 200 Generationen
+GENS = 600      # Humanoid ist hart — 600 Generationen (~10 min Kaggle-CPU)
 SEED = 42
 OUT = "policy.json"
 

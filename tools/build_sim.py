@@ -19,6 +19,23 @@ def main():
         code = (SRC / name).read_text(encoding="utf-8")
         js_parts.append(f"/* ======== {name} ======== */\n{code}")
     js = "\n\n".join(js_parts)
+    # Eingebaute Champions (Werks-Policies, z. B. von Kaggle) injizieren
+    builtin_dir = ROOT / "policies" / "builtin"
+    builtin = {}
+    if builtin_dir.is_dir():
+        for f in sorted(builtin_dir.glob("*.json")):
+            try:
+                import json as _json
+                p = _json.loads(f.read_text(encoding="utf-8"))
+                if isinstance(p, dict) and p.get("format") == "robofield-policy-v1":
+                    builtin[p.get("robot", f.stem)] = p
+            except Exception as e:
+                print(f"WARN: builtin-Policy {f.name} übersprungen: {e}")
+    js += ("\n\n/* ======== eingebaute Champions ======== */\n"
+           + "TF07.BUILTIN_POLICIES = " + repr(builtin).replace("'", '"') + ";\n")
+    if builtin:
+        for r, p in builtin.items():
+            print(f"  eingebaut: {r} (gen {p.get('gen')}, fit {round(p.get('fit',0),1)}, src {p.get('src')})")
     # </script> im JS-Code würde das Inline-Script brechen — absichern:
     assert "</script" not in js.lower(), "JS enthält </script> — nicht inline-fähig"
     html = template.replace("/*__CSS__*/", css).replace("/*__JS__*/", js)

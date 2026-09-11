@@ -174,7 +174,7 @@
       var swing = Math.sin(2 * Math.PI * env.tau);
       var supL = env.side === 1;
       var amp = 0.55 * Math.min(1, Math.abs(vT) / 0.4 + 0.25);
-      var a0 = clamp(1.2 * (env.rel - 0.06) + 0.3 * (vT - env.vx), -1, 1);
+      var a0 = clamp(2.0 * (env.rel - 0.12) + 0.2 * (vT - env.vx), -1, 1);
       function hipA(x) { return clamp(x / 0.8, -1, 1); }
       function kneeA(x) { return clamp(2 * clamp(x / 0.6, 0, 1) - 1, -1, 1); }
       var hipSw = hipA(amp * swing), hipSup = hipA(-0.15);
@@ -660,6 +660,15 @@
     /* ---------- Boot ---------- */
     this.boot = function () {
       load();
+      // Werks-Champions (z. B. von Kaggle eingebaut), falls nichts Gespeichertes da ist
+      if (TF.BUILTIN_POLICIES) {
+        for (var r in TF.BUILTIN_POLICIES) {
+          if (!S.champions[r]) {
+            var v = TF.nn.validatePolicy(TF.BUILTIN_POLICIES[r]);
+            if (v.ok) S.champions[r] = { genome: v.genome, gen: TF.BUILTIN_POLICIES[r].gen || 0, fit: TF.BUILTIN_POLICIES[r].fit || 0, src: TF.BUILTIN_POLICIES[r].src || 'import' };
+          }
+        }
+      }
       TF.ui.init(this);
       this.resize();
       for (var r in worlds) worlds[r].arena.visible = (r === S.robot);

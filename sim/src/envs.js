@@ -296,13 +296,13 @@
     this.rngSeed = seed >>> 0;
     this.rng = rng;
     this.px = 0; this.pz = 0;
-    this.vx = 0; this.x = 0; this.s = -0.1;
+    this.vx = 0; this.x = 0; this.s = -0.02;
     this.tau = 0; this.side = 1;
     this.lean = 0;
     this.hipL = -0.2; this.kneeL = 0.1; this.hipR = 0.2; this.kneeR = 0.1;
     this.steps = 0; this.fit = 0; this.reached = 0; this.fallen = false;
     this._newTarget(rng);
-    this.rel = this.x - (this.s + this.lean * 0.3);
+    this.rel = this.x - (this.s + this.lean * 2.5);
     return this.getObs();
   };
 
@@ -337,9 +337,9 @@
       this.side = -this.side;
       var swingHipA = (this.side === 1) ? a[3] : a[1];
       var SL = 0.15 + 0.30 * clamp((clamp(swingHipA, -1, 1) + 1) / 2, 0, 1);
-      this.s = this.x + 0.35 * this.vx + 0.5 * SL;
+      this.s = this.x + 0.29 * this.vx + 0.1 * SL;
     }
-    var sEff = this.s + this.lean * 0.3;
+    var sEff = this.s + this.lean * 2.5;
     var W2 = HUM.G / HUM.H;
     var ax = W2 * (this.x - sEff);
     this.vx += ax * DT;

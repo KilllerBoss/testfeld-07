@@ -284,7 +284,7 @@ class HumanoidEnvScalar:
         self.pz = 0.0
         self.vx = 0.0
         self.x = 0.0
-        self.s = -0.1
+        self.s = -0.02
         self.tau = 0.0
         self.side = 1
         self.lean = 0.0
@@ -295,7 +295,7 @@ class HumanoidEnvScalar:
         self.reached = 0
         self.fallen = False
         self._new_target()
-        self.rel = self.x - (self.s + self.lean * 0.3)
+        self.rel = self.x - (self.s + self.lean * 2.5)
 
     def get_obs(self):
         o = [0.0] * 10
@@ -332,8 +332,8 @@ class HumanoidEnvScalar:
             self.side = -self.side
             swing_hip = a[3] if self.side == 1 else a[1]
             sl = 0.15 + 0.30 * clamp((clamp(swing_hip, -1, 1) + 1) / 2, 0, 1)
-            self.s = self.x + 0.35 * self.vx + 0.5 * sl
-        s_eff = self.s + self.lean * 0.3
+            self.s = self.x + 0.29 * self.vx + 0.1 * sl
+        s_eff = self.s + self.lean * 2.5
         w2 = HUM["G"] / HUM["H"]
         ax = w2 * (self.x - s_eff)
         self.vx += ax * DT
