@@ -204,13 +204,45 @@ des Space**:
   Kern weiter — die App ist damit immer benutzbar.
 - **Danksagung**: Modelle + Policies + Verdrahtungsmuster stammen aus dem
   Space von pollen-robotics (MIT/© Microsoft für ORT; MuJoCo Apache-2.0).
-  Die Kaggle-Kernels (§5) spiegeln bislang noch die Werkstatt-Envs —
-  Migration auf `pip mujoco` mit demselben MJCF ist vorbereitet.
 
-## 10. Phase 3 (geplant): MuJoCo für Arm/Humanoid
+## 10. Menagerie-Philosophie: ALLE 3 Roboter auf fertigen Modellen (GEBAUT)
 
-MJCF für ARMBOT/HUMANOID (z. B. aus MuJoCo Menagerie), gleiche
-WASM-Integration wie §9; danach Ablösung des NDK-Pfads (ehem. Phase 2):
+Nach Nutzervorgabe („fertige Modelle benutzen und MuJoCo wie im Space — nicht
+selbst machen") laufen jetzt **alle drei Roboter auf Modellen der MuJoCo
+Model Gallery / des HF-Space** im selben MuJoCo-WASM-Kern:
+
+| Roboter | Modell | Quelle | Aktuatoren |
+|---|---|---|---|
+| MICRODUCK | Microduck MJCF + 9 ONNX-Policies | HF-Space pollen-robotics | 14 × Position |
+| ARMBOT | **WidowX 250 6DOF** (`wx250s.xml`) | MuJoCo Menagerie (BSD-3) | 7 × Position |
+| HUMANOID | **ROBOTIS OP3** (`op3.xml`) | MuJoCo Menagerie (Apache-2.0) | 20 × Position |
+
+- **ARMBOT·MJ**: numerische DLS-IK (deterministisch, 6 Iterationen) auf der
+  echten WidowX-Kinematik; Joystick fährt das Greifziel über den Werkstatt-Tisch,
+  GRIP/POLICY-Taste = Auto-Aim auf den Physik-Ball (hingreifen → schließen →
+  hochheben). Werkstatt-Kernsteuerung bleibt als Fallback, bis das MJCF geladen ist.
+- **HUMANOID·MJ**: stabile Stand-Pose per Grid-Search gefunden (hip −0,5 /
+  knee 0,9 / ankle 0,52 rad, 10 s standfest) und als `home`-Keyframe ins MJCF
+  gebacken. „Gehen" = quasistatische Firmware-Gait (4-Phasen-Zustandsautomat:
+  Gewichtsverlagerung → Beinschwung, kleine Amplituden wegen der schwachen
+  Original-Servos ±5 Nm); schneller wird es per RL-Training (`trainiere den
+  humanoiden` → obs 46 → act 20 auf der echten OP3-Dynamik).
+- **Echte Meshes im Renderer**: eigener STL-Parser (Binär/ASCII, Vertex-Welding,
+  uint32-Indices) + Mesh-Rig aus buildzeitischen Manifesten — die App zeigt die
+  ORIGINAL-Geometrie (10 Arm-Meshes, 21 OP3-Meshes; OP3-Visuals per
+  Vertex-Clustering von 46,5 MB auf 3,84 MB decimiert, Kollisions-/Visual-Meshes
+  bleiben getrennt wie im Menagerie-Original).
+- **Kaggle-Spiegel auf `pip mujoco`**: 3 neue Kernels (`testfeld07-mj-duck/arm/op3`)
+  installieren mujoco 3.11.0, laden die Physik-Meshes von den öffentlichen
+  Quellen (HF-Space / Menagerie-GitHub) und kompilieren DIESELBE vorbereitete
+  MJCF wie die App (eingebettet) — Champions kommen als `robofield-policy-v1`
+  mit `robot:"duckmj|armmj|op3mj"` zurück. Die alten NumPy-Spiegel-Kernels
+  bleiben als Determinismus-Referenz erhalten.
+- **Legacy-Kern**: die werkstattseigenen Envs (`duck/arm/humanoid`) bleiben
+  vollständig erhalten — als Determinismus-Referenz (JS≙NumPy < 5e-15) und als
+  Fallback, falls MuJoCo-WASM auf einem Gerät nicht initialisierbar ist.
+
+## 11. Phase 4 (optional): NDK-Kern
+
 1. MuJoCo 3.x mit NDK cross-kompilieren (`libmujoco.so`), JNI-Brücke.
-2. ML-Spiegel der 3 Roboter auf `pip mujoco` (Determinismus JS≙WASM≙Python).
-3. Schrittweise Ablösung pro Roboter — Neuroevolution/Policy-Struktur bleibt.
+2. Ablösung des WASM-Pfads auf alten Geräten (WebView ohne WASM-SIMD).

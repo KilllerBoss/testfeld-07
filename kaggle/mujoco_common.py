@@ -107,6 +107,15 @@ class GhostDuckMj:
             self.fallen = True
             self.done = True
             return self.done
+        if (abs(d.qpos[0]) > 3.0 or abs(d.qpos[1]) > 3.0 or d.qpos[2] > 2.0
+                or not np.all(np.isfinite(d.qpos))):
+            # Sim-Explosion (QACC) zählt als Sturz — kein Belohnungs-Bonus
+            self.mj.mj_resetDataKeyframe(self.model, d, 0)
+            self.mj.mj_forward(self.model, self.data)
+            self.fallen = True
+            self.fit = -1.0
+            self.done = True
+            return self.done
         g = _proj_grav(d.body(self.trunkId).xquat)
         self.fallen = (g[2] > -0.5) or (d.qpos[2] < 0.02)
         self.fit = d.qpos[0] - (-0.6) - (1.0 if self.fallen else 0.0)
@@ -180,6 +189,12 @@ class GhostArmMj:
             self.fallen = True
             self.done = True
             return self.done
+        if (abs(d.qpos[self.ballAdr]) > 3.0 or not np.all(np.isfinite(d.qpos))):
+            self.mj.mj_resetDataKeyframe(self.model, d, 0)
+            self.mj.mj_forward(self.model, self.data)
+            self.fit = -1.0
+            self.done = True
+            return self.done
         dist = float(np.linalg.norm(self.ball_pos() - self.ee_pos()))
         holding = self.grip and dist < 0.045 and self.ball_pos()[2] > 0.03
         self.fit = max(0.0, 1 - dist / 0.3) * 3 + ((4 + (self.ball_pos()[2] - 0.05) * 30) if holding else 0.0)
@@ -245,6 +260,13 @@ class GhostHumMj:
             self.fallen = True
             self.done = True
             return self.done
+        if (abs(d.qpos[0]) > 3.0 or not np.all(np.isfinite(d.qpos))):
+            self.mj.mj_resetDataKeyframe(self.model, d, 0)
+            self.mj.mj_forward(self.model, self.data)
+            self.fallen = True
+            self.fit = -3.0
+            self.done = True
+            return self.done
         g = _proj_grav(d.body(self.trunkId).xquat)
         self.fallen = (g[2] > -0.5) or (d.qpos[2] < 0.18)
         self.fit = (d.qpos[0] - self.x0) * 10 - (3.0 if self.fallen else 0.0)
@@ -306,10 +328,10 @@ def train(model, GhostClass, gens, seed=1234, pop_size=40, log_every=10):
         for b in range(10):  # 10 Batches à 4 (wie On-Device)
             envs = [GhostClass(model) for _ in range(4)]
             genomes = pop[b * 4:(b + 1) * 4]
-            for env, g in zip(envs, genomes):
+            for bi, (env, g) in enumerate(zip(envs, genomes)):
                 while not env.done:
                     env.step(forward(g, env.get_obs(), act))
-                fits[b * 4 + list(genomes).index(g)] = env.fit
+                fits[b * 4 + bi] = env.fit
             for env in envs:
                 del env
         best_i = int(np.argmax(fits))

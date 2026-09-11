@@ -42,7 +42,7 @@ HEADER = '''# Testfeld·07 — MuJoCo-Training auf Kaggle ({label})
 # Gleicher Physikkern wie die App: mujoco 3.11.0 + die vorbereitete MJCF
 # (Menagerie/HF-Space) + Neuroevolution wie On-Device (Ghost-Spiegel).
 # Ausgabe: robofield-policy-v1 Champion-JSON (Kaggle-Output).
-import base64, io, math, os, subprocess, sys, zipfile
+import base64, io, json, math, os, subprocess, sys, zipfile
 import numpy as np
 
 def _ensure(pkg, ver=None):
@@ -67,7 +67,7 @@ RENAME = {rename!r}
 
 os.makedirs('assets', exist_ok=True)
 for f in FILES:
-    dst = os.path.join('assets', RENAME.get(f[:-4], f) + '.stl')
+    dst = os.path.join('assets', RENAME.get(f[:-4], f[:-4]) + '.stl')
     if os.path.exists(dst):
         continue
     urllib.request.urlretrieve(URL_BASE + f, dst)
