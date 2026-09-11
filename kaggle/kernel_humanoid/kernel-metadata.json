@@ -1,0 +1,14 @@
+{
+  "id": "rudolfbewer/testfeld07-humanoid",
+  "title": "testfeld07-humanoid",
+  "code_file": "train_humanoid.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

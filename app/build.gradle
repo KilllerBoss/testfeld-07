@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.testfeld07.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.testfeld07.app"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    // Vorgabe AGENT.md: Release-APK debug-signiert → direkt installierbar.
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// Bewusst null Abhängigkeiten — die komplette Sim liegt in assets/index.html.
+dependencies {
+}

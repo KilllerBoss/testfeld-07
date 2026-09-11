@@ -1,0 +1,17 @@
+# Geheimnisse — NIEMALS committen (AGENT.md Sicherheitsregeln)
+kaggle.json
+*.kaggle
+.kaggle/
+.env
+GITHUB_TOKEN*
+
+# Build-Artefakte
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+!policies/*.json
+
+# System
+.DS_Store
