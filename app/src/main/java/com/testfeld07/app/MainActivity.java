@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView v, android.webkit.ValueCallback<Uri[]> cb,
-                                             android.webkit.FileChooserParams params) {
+                                             WebChromeClient.FileChooserParams params) {
                 // Datei-Import (Policy-JSON) über Systemdialog
                 try {
                     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
