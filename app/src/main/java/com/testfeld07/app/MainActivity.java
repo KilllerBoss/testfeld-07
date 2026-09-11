@@ -145,6 +145,43 @@ public class MainActivity extends Activity {
             }
         }
 
+        /**
+         * v1.2-Fix: Chunk-Reader für große WASM-Dateien (mujoco.wasm ~10 MB,
+         * ort-wasm ~13,5 MB). Ein einzelner readAssetBase64-Call erzeugte einen
+         * Main-Thread-Block von Sekunden + einen ~18-MB-String pro Datei.
+         * JS liest jetzt in 1-MB-Chunks und lässt zwischen den Calls rAF/Input
+         * laufen. Semantik: exakt [offset, offset+length) Bytes, Base64 NO_WRAP;
+         * leerer/fehlender Bereich → null. offset > Größe → null.
+         */
+        @JavascriptInterface
+        public String readAssetChunkBase64(String path, int offset, int length) {
+            try {
+                if (offset < 0 || length <= 0) return null;
+                InputStream in = getAssets().open("mjc/" + relAsset(path));
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                try {
+                    long toSkip = offset;
+                    while (toSkip > 0) { // skip() kann kürzer springen als gefordert
+                        long s = in.skip(toSkip);
+                        if (s <= 0) return null; // offset jenseits des Dateiendes
+                        toSkip -= s;
+                    }
+                    byte[] buf = new byte[65536];
+                    int remaining = length, n;
+                    while (remaining > 0 && (n = in.read(buf, 0, Math.min(buf.length, remaining))) > 0) {
+                        bos.write(buf, 0, n);
+                        remaining -= n;
+                    }
+                } finally {
+                    in.close();
+                }
+                if (bos.size() == 0) return null;
+                return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         @JavascriptInterface
         public String readAssetText(String path) {
             try {

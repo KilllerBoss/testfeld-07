@@ -1,4 +1,4 @@
-/* Bridge-Kontrakt-Test (v1.1-Regression): Der Produktions-Bug war ein
+/* Bridge-Kontrakt-Test (v1.1/v1.2-Regression): Der Produktions-Bug war ein
  * doppelt präfixierter Asset-Pfad ("mjc/mjc/…") zwischen mjc.js und der
  * Java-Bridge → Bridge lieferte null → atob("null") → Müll-Bytes → MJ-Boot
  * scheiterte STILL → unsichtbarer Werkstatt-Fallback.
@@ -8,6 +8,9 @@
  *  2. Java-seitige Semantik (Map-Schlüssel "mjc/" + bare) muss matchen.
  *  3. null-Antworten → saubere Ableitung mit klarem Fehler (kein atob-Garbage).
  *  4. Konsole: "version"/"engine" liefert op:engine (sichtbare Kennung).
+ *  5. v1.2: readAssetChunkBase64-Kontrakt — [offset,offset+length) exakt,
+ *     Multi-Chunk-Reassemblierung byteidentisch, offset>Größe → null,
+ *     Fallback auf readAssetBase64 wenn Chunk-Methode fehlt.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -37,11 +40,14 @@ check('bridgePath("/mjc/x") wird normalisiert', TF.mjc.bridgePath('/mjc/x') === 
 check('bridgePath(null) → ""', TF.mjc.bridgePath(null) === '');
 
 /* --- 2) Java-Bridge-Semantik simulieren (exakt wie MainActivity) ---
- * Map-Schlüssel = "mjc/" + übergebener Pfad; nicht gefunden → null. */
+ * Map-Schlüssel = "mjc/" + übergebener Pfad; nicht gefunden → null.
+ * v1.2: Chunk-Reader mit exakter skip-Loop-Semantik wie MainActivity. */
 const files = {
   'mjc/mujoco.wasm': new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]),
   'mjc/__index.json': '{"meshes":[]}',
   'mjc/policies/walk.onnx': new Uint8Array([0x4f, 0x4e, 0x4e, 0x10]),
+  /* 2,5 MB Pseudo-Zufall (deterministisch) für Multi-Chunk-Test */
+  'mjc/big.bin': (() => { const a = new Uint8Array(2.5 * 1048576 | 0); let x = 123456789; for (let i = 0; i < a.length; i++) { x = (1103515245 * x + 12345) & 0x7fffffff; a[i] = x & 0xff; } return a; })(),
 };
 const receivedPaths = [];
 globalThis.atob = (s) => Buffer.from(s, 'base64').toString('binary');
@@ -51,6 +57,15 @@ globalThis.AndroidBridge = {
     const hit = files['mjc/' + path];
     if (!hit) return null;
     return Buffer.from(hit).toString('base64');
+  },
+  readAssetChunkBase64(path, offset, length) {
+    receivedPaths.push(path);
+    const hit = files['mjc/' + path];
+    if (hit == null) return null;
+    if (offset < 0 || length <= 0 || offset >= hit.length) return null;
+    const slice = hit.subarray(offset, Math.min(offset + length, hit.length));
+    if (!slice.length) return null;
+    return Buffer.from(slice).toString('base64');
   },
   readAssetText(path) {
     const hit = files['mjc/' + path];
@@ -86,7 +101,37 @@ const ok4 = await TF.mjc._readAssetText('__index.json').then(
 );
 check('readAssetText("__index.json") liest Text', ok4);
 
-/* --- 4) Konsole: „version" / „engine" / JSON cmd:engine --- */
+/* --- 5) v1.2 Chunk-Kontrakt --- */
+const big = files['mjc/big.bin'];
+const chunked = await TF.mjc._readAsset('big.bin').then(
+  (b) => {
+    if (b.length !== big.length) return false;
+    for (let i = 0; i < big.length; i += 65536) { // Stichproben über die ganze Datei
+      if (b[i] !== big[i]) return false;
+    }
+    return b[big.length - 1] === big[big.length - 1];
+  },
+  (e) => { console.log('      err:', e.message); return false; }
+);
+check('Chunked readAsset("big.bin", 2,5 MB) = Multi-Chunk, byteidentisch', chunked);
+
+const chunkMiss = await TF.mjc._readAsset('gibtsnicht.bin').then(
+  () => false,
+  (e) => /Asset fehlt/.test(e.message)
+);
+check('Chunked readAsset(miss) → klarer Fehler "Asset fehlt"', chunkMiss);
+
+/* Fallback: ohne Chunk-Methode muss der Whole-Call weiterhin funktionieren */
+const saved = globalThis.AndroidBridge.readAssetChunkBase64;
+delete globalThis.AndroidBridge.readAssetChunkBase64;
+const fallback = await TF.mjc._readAsset('mujoco.wasm').then(
+  (b) => b.length === 8 && b[0] === 0x00,
+  () => false
+);
+globalThis.AndroidBridge.readAssetChunkBase64 = saved;
+check('Ohne Chunk-Methode: Fallback auf readAssetBase64 funktioniert', fallback);
+
+/* --- 6) Konsole: „version" / „engine" / JSON cmd:engine --- */
 delete globalThis.AndroidBridge;
 const conSrc = readFileSync(join(ROOT, 'sim/src/console.js'), 'utf8');
 new Function(conSrc)();

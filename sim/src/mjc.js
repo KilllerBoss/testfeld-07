@@ -58,11 +58,50 @@
   }
   function readAsset(rel) {
     if (global.AndroidBridge && global.AndroidBridge.readAssetBase64) {
-      var b64;
-      try { b64 = global.AndroidBridge.readAssetBase64(bridgePath(rel)); }
-      catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
-      if (!b64) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
-      return Promise.resolve(b64ToBytes(b64));
+      /* v1.2-Fix: GROSSE Dateien (mujoco.wasm 10 MB, ort-wasm 13,5 MB) vorher
+       * in EINEM Bridge-Call = ein einziger langer Main-Thread-Block + ein
+       * ~18-MB-Base64-String (Geräte: rAF/Input starvation, IPC-Risiko).
+       * Jetzt: 1-MB-Chunks, zwischen den Calls yield → UI bleibt flüssig,
+       * Fortschritt im Konsole-Log sichtbar. Kleine Dateien: 1 Call. */
+      var br = global.AndroidBridge;
+      var CHUNK = 1048576, USE_CHUNKS = typeof br.readAssetChunkBase64 === 'function';
+      function whole() {
+        var b64;
+        try { b64 = br.readAssetBase64(bridgePath(rel)); }
+        catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+        if (!b64) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+        return Promise.resolve(b64ToBytes(b64));
+      }
+      function yieldNow() { return new Promise(function (r) { setTimeout(r, 0); }); }
+      function chunked() {
+        var parts = [], off = 0, lastLog = 0;
+        function step() {
+          var b64;
+          try { b64 = br.readAssetChunkBase64(bridgePath(rel), off, CHUNK); }
+          catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+          if (b64 == null) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+          var bytes = b64ToBytes(b64);
+          if (!bytes.length) return Promise.reject(new Error('Bridge: Chunk leer (mjc/' + rel + ' @ ' + off + ')'));
+          parts.push(bytes); off += bytes.length;
+          if (off - lastLog >= 4194304) { // Progress alle ~4 MB
+            TF.ui.logLine && TF.ui.logLine('Lade ' + rel + ' … ' + (off / 1048576).toFixed(1) + ' MB', 'sys');
+            lastLog = off;
+          }
+          if (bytes.length < CHUNK) return Promise.resolve(concatParts(parts));
+          return yieldNow().then(step);
+        }
+        return step();
+      }
+      function concatParts(parts) {
+        var n = 0, i;
+        for (i = 0; i < parts.length; i++) n += parts[i].length;
+        var out = new Uint8Array(n), o = 0;
+        for (i = 0; i < parts.length; i++) { out.set(parts[i], o); o += parts[i].length; }
+        return out;
+      }
+      if (!USE_CHUNKS) return whole();
+      /* Chunked wenn möglich (1. Chunk < CHUNK → fertig, wie 1 Call) */
+      return chunked();
     }
     return global.fetch(MJC_DIR + rel).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' für ' + rel);
@@ -93,11 +132,18 @@
   var sessions = {};       // slot → InferenceSession (lazy)
   var loadingSessions = {};
 
+  var SESSION_TIMEOUT = 20000; // ms — Gerätetreiber-Hänger sichtbar machen
+  function withTimeout(p, what) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { rej(new Error('ONNX-Timeout (' + what + ' nach ' + (SESSION_TIMEOUT / 1000) + ' s)')); }, SESSION_TIMEOUT);
+      p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); });
+    });
+  }
   function getSession(slot) {
     if (sessions[slot]) return Promise.resolve(sessions[slot]);
     if (loadingSessions[slot]) return loadingSessions[slot];
     loadingSessions[slot] = readAsset('policies/' + POLICY_FILES[slot]).then(function (bytes) {
-      return mjc.ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
+      return withTimeout(mjc.ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] }), 'Session ' + slot);
     }).then(function (s) {
       sessions[slot] = s; delete loadingSessions[slot];
       TF.ui && TF.ui.logLine && TF.ui.logLine('Policy geladen: ' + slot.toUpperCase() + ' (' + POLICY_FILES[slot] + ')', 'sys');
@@ -163,7 +209,12 @@
       })
       .then(function (module) {
         var ort = global.ort;
+        /* v1.2-Härtung: pthread-Pool NIEMALS spawnen (Worker von file:// aus
+         * nicht ladbar, Pool-Warten würde session.create() endlos blockieren),
+         * Proxy-Worker explizit aus. Gültige Werte überschreiben den
+         * hardwareConcurrency-Autowert von ort.global.js zuverlässig. */
         ort.env.wasm.numThreads = 1;
+        ort.env.wasm.proxy = false;
         onStage('ORT WASM …');
         return readAsset('ort-wasm-simd-threaded.wasm').then(function (b) {
           ort.env.wasm.wasmBinary = b;
@@ -202,16 +253,37 @@
         mujoco.mj_resetDataKeyframe(model, data, 0);
         mujoco.mj_forward(model, data);
         mjc = core;
-        onStage('POLICIES …');
-        // Eager: walk + drive + sitstand + stand parallel
-        return Promise.all(EAGER.map(function (s) { return getSession(s); }));
-      })
-      .then(function () {
         onStage('BEREIT');
+        /* v1.2-Fix: Werkspolicies NICHT mehr im Boot-Pfad kompilieren —
+         * auf Geräten kann InferenceSession.create je Policy Sekunden
+         * dauern; Promise.all(4×) blockierte „BEREIT“ endlos („lädt nicht
+         * zu Ende“). Jetzt: Modell sofort aktiv, Policies sequential im
+         * Hintergrund — getSession(slot) liefert sie lazy ohnehin. */
+        warmEager(onStage);
         return mjc;
       });
     p.catch(stageErr);
     return p;
+  }
+
+  /* Werkspolicies nacheinander im Hintergrund kompilieren — zwischen den
+   * Sessions yield (setTimeout 0), damit rAF/Input weiterlaufen. */
+  function warmEager(onStage) {
+    var i = 0;
+    function next() {
+      if (i >= EAGER.length) {
+        if (onStage) onStage('POLICIES ' + EAGER.length + '/' + EAGER.length);
+        return;
+      }
+      var slot = EAGER[i++];
+      getSession(slot).then(function () {
+        setTimeout(next, 0);
+      }).catch(function (e) {
+        TF.ui.logLine && TF.ui.logLine('Policy ' + slot + ' nicht ladbar: ' + (e && e.message || e) + ' — Slot wird bei Bedarf erneut versucht.', 'warn');
+        setTimeout(next, 250);
+      });
+    }
+    setTimeout(next, 0);
   }
 
   var isReady = function () { return !!mjc; };

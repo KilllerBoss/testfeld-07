@@ -20,7 +20,10 @@ const { chromium } = require('playwright');
       const cks = await context.cookies('http://localhost:8788');
       const get = (n) => { const c = cks.find((c) => c.name === n); return c ? decodeURIComponent(c.value) : null; };
       err = get('tf07mjerr');
-      ready = get('tf07mj') === 'BEREIT';
+      /* v1.2: BEREIT = Modell bereit (Policies laden im Hintergrund weiter,
+       * letzte Stage ist dann 'POLICIES n/4' — beides zählt als bereit). */
+      const stg = get('tf07mj') || '';
+      ready = stg === 'BEREIT' || stg.indexOf('POLICIES') === 0;
       if (i % 10 === 0) console.log(`[${t()}s] stage=${get('tf07mj')} err=${err}`);
     } catch (e) { /* ignorieren */ }
   }

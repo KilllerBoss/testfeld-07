@@ -10,8 +10,8 @@ android {
         applicationId "com.testfeld07.app"
         minSdk 26
         targetSdk 35
-        versionCode 2           // v1.1: Bridge-Doppelprefix-Fix → MuJoCo lädt wirklich im WebView
-        versionName "1.1.0"
+        versionCode 3           // v1.2: 50Hz-Wanduhr-Takt (UI-Freeze/Sturz-Fix), Policy-Hintergrund-Boot, Chunk-Bridge
+        versionName "1.2.0"
     }
 
     // Vorgabe AGENT.md: Release-APK debug-signiert → direkt installierbar.

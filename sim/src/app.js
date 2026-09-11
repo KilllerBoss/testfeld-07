@@ -269,6 +269,37 @@
     }
 
     /* ---------- MuJoCo: Boot, Fahrlogik, Training ---------- */
+    /* 50-Hz-WANDUHR-TAKT (v1.2-Fix): Vorher lief controlStepAsync in JEDER
+     * rAF-Frame — auf 120-Hz-Geräten (S26 Ultra) also 120 Regelschritte/s
+     * statt 50. Jeder Schritt = ONNX + 4×5 ms Physik → Physik lief ~2,4× bis
+     * 12× schneller als Echtzeit (Duck stürzte sofort ab: „liegt im Boden“)
+     * und der Main-Thread verhungerte komplett („nichts reagiert“).
+     * Jetzt: Schritt nur, wenn 20 ms Wandzeit kumuliert sind; Rückstand wird
+     * auf ~1 Schritt/Frame gedeckelt → UI bleibt immer bedienbar. */
+    var CTRL_DT = 1 / 50;
+    function makePacer() {
+      var acc = 0;
+      return function (dt) {
+        acc += Math.min(Math.max(dt, 0), 0.1);
+        if (acc < CTRL_DT) return false;
+        acc = Math.min(acc - CTRL_DT, 1.5 * CTRL_DT); // Rückstand decken, max ~1 Schritt/Frame
+        return true;
+      };
+    }
+    var paceDuck = makePacer(), paceArm = makePacer(), paceHum = makePacer();
+    /* Gemessene Regelrate (für Statuszeile/Engine-Report) */
+    var ctrlCnt = 0, ctrlHzMeas = 0, ctrlT0 = 0;
+    this.noteCtrlStep = function (now) {
+      ctrlCnt++;
+      if (!ctrlT0) ctrlT0 = now;
+      else if (now - ctrlT0 >= 500) { ctrlHzMeas = ctrlCnt * 1000 / (now - ctrlT0); ctrlCnt = 0; ctrlT0 = now; }
+    };
+    this.ctrlHzMeasured = function () { return ctrlHzMeas; };
+    /* Test-Hook: echte mjDrive-Logik mit synthetischem dt pumpen (E2E
+     * prüft damit den 50-Hz-Pacer deterministisch — ohne Headless-rAF-
+     * Sturm, der im Headless-Chromium ohne Vsync ohnehin artefaktisch
+     * prioritätssättigend läuft). */
+    this.__testDrive = function (dt) { mjDrive(dt); };
     function mjcBoot() {
       if (!TF.mjc || !TF.mjc.init) { TF.ui.setEngineBadge('fail'); return; }
       TF.ui.setEngineBadge('load');
@@ -306,12 +337,11 @@
       var d = S.mjc.duck;
       var lim = d.velLims();
       d.setCmd(self.joystick.y * lim[0], 0, -self.joystick.x * lim[2]);
-      if (!d.busy) {
-        d.busy = true;
-        d.controlStepAsync()
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { d.busy = false; });
-      }
+      if (!paceDuck(dt) || d.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      d.busy = true;
+      d.controlStepAsync()
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { d.busy = false; self.noteCtrlStep(performance.now()); });
     }
     this.mjcCycleSlot = function () {
       var order = ['walk', 'drive', 'sitstand'];
@@ -344,7 +374,7 @@
         TF.ui.logLine('MJ-Modell fehlgeschlagen: ' + e.message + ' — Werkstatt-Kern bleibt aktiv.', 'warn');
       });
     }
-    function mjDriveArm() {
+    function mjDriveArm(dt) {
       var a = S.mjc.arm;
       if (S.gripClosed) {
         // Auto-Aim: Ziel = Ball, nach Griffversuch hochheben
@@ -355,23 +385,21 @@
         a.grip = 0;
         a.target = [0.28 + self.joystick.y * 0.11, self.joystick.x * 0.17, 0.07];
       }
-      if (!a.busy) {
-        a.busy = true;
-        a.controlStepAsync(false, null)
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { a.busy = false; });
-      }
+      if (!paceArm(dt) || a.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      a.busy = true;
+      a.controlStepAsync(false, null)
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { a.busy = false; self.noteCtrlStep(performance.now()); });
     }
-    function mjDriveHum() {
+    function mjDriveHum(dt) {
       var h = S.mjc.hum;
       h.cmd[0] = self.joystick.y * 1.0;
       h.cmd[1] = -self.joystick.x * 0.5;
-      if (!h.busy) {
-        h.busy = true;
-        h.controlStepAsync(null)
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { h.busy = false; });
-      }
+      if (!paceHum(dt) || h.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      h.busy = true;
+      h.controlStepAsync(null)
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { h.busy = false; self.noteCtrlStep(performance.now()); });
     }
     this.mjcCycleHum = function () {
       S.mjc.humMode = S.mjc.humMode === 'stehen' ? 'gehen' : 'stehen';
@@ -803,8 +831,9 @@
         var robots = ['duck', 'arm', 'hum'].filter(function (k) { return TF.mjc.hasRobot(k); });
         TF.ui.logLine('ENGINE: ECHTES MUJOCO (WASM) AKTIV — duck nq ' + i.nq + '/nu ' + i.nu +
           ' · MJ-Roboter geladen: ' + (robots.join(', ') || 'duck (Basis)') +
-          ' · ONNX-Policies: ' + TF.mjc.policiesLoaded().join(', '), 'sys');
-        TF.ui.logLine('Physik: MJCF timestep 5 ms, Regelung 50 Hz (Decimation 4) — Policies vom HF-Space pollen-robotics/microduck-simulator.', 'sys');
+          ' · ONNX-Policies: ' + (TF.mjc.policiesLoaded().join(', ') || 'laden im Hintergrund …') +
+          ' · Regelrate gemessen: ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' Hz (Soll 50, 1 Schritt/Frame max)', 'sys');
+        TF.ui.logLine('Physik: MJCF timestep 5 ms, Regelung 50 Hz (Decimation 4, Wanduhr-Takt seit v1.2) — Policies vom HF-Space pollen-robotics/microduck-simulator.', 'sys');
       } else {
         TF.ui.logLine('ENGINE: WERKSTATT-FALLBACK (Eigenbau-Kern) — MuJoCo NICHT aktiv.', 'warn');
         TF.ui.logLine('MJ-Fehler: ' + (S.mjc.err || 'lädt noch … (Badge im Topbar zeigt den Status)'), 'warn');
@@ -927,9 +956,9 @@
         // Echtes MuJoCo: 50-Hz-Policy-Regelung, Joystick = Velocity-Command
         mjDrive(dt);
       } else if (S.mjc.ready && S.robot === 'arm' && S.mjc.arm && !S.training.active) {
-        mjDriveArm();
+        mjDriveArm(dt);
       } else if (S.mjc.ready && S.robot === 'humanoid' && S.mjc.hum && !S.training.active) {
-        mjDriveHum();
+        mjDriveHum(dt);
       } else if (!S.training.active) {
         acc += dt;
         var n = 0;
@@ -961,7 +990,7 @@
         renderer.begin();
         renderer.drawNode(w.arena, 1);
         TF.ui.status('MICRODUCK·MJ · ' + S.mjc.slot.toUpperCase() + (d2.fallen ? ' · AUFSTEHEN…' : '') +
-          ' · REND ' + S.fps + ' FPS · 50 HZ · x=' + qx.toFixed(2) + ' m');
+          ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ · x=' + qx.toFixed(2) + ' m');
         requestAnimationFrame(frame);
         return; // eigener Pfad fertig gezeichnet
       }
@@ -999,8 +1028,8 @@
         renderer.begin();
         renderer.drawNode(wM.arena, 1);
         var st = key === 'arm'
-          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · 50 HZ'
-          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · 50 HZ';
+          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ'
+          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ';
         TF.ui.status(st);
         requestAnimationFrame(frame);
         return;

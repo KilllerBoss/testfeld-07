@@ -2360,11 +2360,50 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   }
   function readAsset(rel) {
     if (global.AndroidBridge && global.AndroidBridge.readAssetBase64) {
-      var b64;
-      try { b64 = global.AndroidBridge.readAssetBase64(bridgePath(rel)); }
-      catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
-      if (!b64) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
-      return Promise.resolve(b64ToBytes(b64));
+      /* v1.2-Fix: GROSSE Dateien (mujoco.wasm 10 MB, ort-wasm 13,5 MB) vorher
+       * in EINEM Bridge-Call = ein einziger langer Main-Thread-Block + ein
+       * ~18-MB-Base64-String (Geräte: rAF/Input starvation, IPC-Risiko).
+       * Jetzt: 1-MB-Chunks, zwischen den Calls yield → UI bleibt flüssig,
+       * Fortschritt im Konsole-Log sichtbar. Kleine Dateien: 1 Call. */
+      var br = global.AndroidBridge;
+      var CHUNK = 1048576, USE_CHUNKS = typeof br.readAssetChunkBase64 === 'function';
+      function whole() {
+        var b64;
+        try { b64 = br.readAssetBase64(bridgePath(rel)); }
+        catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+        if (!b64) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+        return Promise.resolve(b64ToBytes(b64));
+      }
+      function yieldNow() { return new Promise(function (r) { setTimeout(r, 0); }); }
+      function chunked() {
+        var parts = [], off = 0, lastLog = 0;
+        function step() {
+          var b64;
+          try { b64 = br.readAssetChunkBase64(bridgePath(rel), off, CHUNK); }
+          catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+          if (b64 == null) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+          var bytes = b64ToBytes(b64);
+          if (!bytes.length) return Promise.reject(new Error('Bridge: Chunk leer (mjc/' + rel + ' @ ' + off + ')'));
+          parts.push(bytes); off += bytes.length;
+          if (off - lastLog >= 4194304) { // Progress alle ~4 MB
+            TF.ui.logLine && TF.ui.logLine('Lade ' + rel + ' … ' + (off / 1048576).toFixed(1) + ' MB', 'sys');
+            lastLog = off;
+          }
+          if (bytes.length < CHUNK) return Promise.resolve(concatParts(parts));
+          return yieldNow().then(step);
+        }
+        return step();
+      }
+      function concatParts(parts) {
+        var n = 0, i;
+        for (i = 0; i < parts.length; i++) n += parts[i].length;
+        var out = new Uint8Array(n), o = 0;
+        for (i = 0; i < parts.length; i++) { out.set(parts[i], o); o += parts[i].length; }
+        return out;
+      }
+      if (!USE_CHUNKS) return whole();
+      /* Chunked wenn möglich (1. Chunk < CHUNK → fertig, wie 1 Call) */
+      return chunked();
     }
     return global.fetch(MJC_DIR + rel).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' für ' + rel);
@@ -2395,11 +2434,18 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   var sessions = {};       // slot → InferenceSession (lazy)
   var loadingSessions = {};
 
+  var SESSION_TIMEOUT = 20000; // ms — Gerätetreiber-Hänger sichtbar machen
+  function withTimeout(p, what) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { rej(new Error('ONNX-Timeout (' + what + ' nach ' + (SESSION_TIMEOUT / 1000) + ' s)')); }, SESSION_TIMEOUT);
+      p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); });
+    });
+  }
   function getSession(slot) {
     if (sessions[slot]) return Promise.resolve(sessions[slot]);
     if (loadingSessions[slot]) return loadingSessions[slot];
     loadingSessions[slot] = readAsset('policies/' + POLICY_FILES[slot]).then(function (bytes) {
-      return mjc.ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
+      return withTimeout(mjc.ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] }), 'Session ' + slot);
     }).then(function (s) {
       sessions[slot] = s; delete loadingSessions[slot];
       TF.ui && TF.ui.logLine && TF.ui.logLine('Policy geladen: ' + slot.toUpperCase() + ' (' + POLICY_FILES[slot] + ')', 'sys');
@@ -2465,7 +2511,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       })
       .then(function (module) {
         var ort = global.ort;
+        /* v1.2-Härtung: pthread-Pool NIEMALS spawnen (Worker von file:// aus
+         * nicht ladbar, Pool-Warten würde session.create() endlos blockieren),
+         * Proxy-Worker explizit aus. Gültige Werte überschreiben den
+         * hardwareConcurrency-Autowert von ort.global.js zuverlässig. */
         ort.env.wasm.numThreads = 1;
+        ort.env.wasm.proxy = false;
         onStage('ORT WASM …');
         return readAsset('ort-wasm-simd-threaded.wasm').then(function (b) {
           ort.env.wasm.wasmBinary = b;
@@ -2504,16 +2555,37 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         mujoco.mj_resetDataKeyframe(model, data, 0);
         mujoco.mj_forward(model, data);
         mjc = core;
-        onStage('POLICIES …');
-        // Eager: walk + drive + sitstand + stand parallel
-        return Promise.all(EAGER.map(function (s) { return getSession(s); }));
-      })
-      .then(function () {
         onStage('BEREIT');
+        /* v1.2-Fix: Werkspolicies NICHT mehr im Boot-Pfad kompilieren —
+         * auf Geräten kann InferenceSession.create je Policy Sekunden
+         * dauern; Promise.all(4×) blockierte „BEREIT“ endlos („lädt nicht
+         * zu Ende“). Jetzt: Modell sofort aktiv, Policies sequential im
+         * Hintergrund — getSession(slot) liefert sie lazy ohnehin. */
+        warmEager(onStage);
         return mjc;
       });
     p.catch(stageErr);
     return p;
+  }
+
+  /* Werkspolicies nacheinander im Hintergrund kompilieren — zwischen den
+   * Sessions yield (setTimeout 0), damit rAF/Input weiterlaufen. */
+  function warmEager(onStage) {
+    var i = 0;
+    function next() {
+      if (i >= EAGER.length) {
+        if (onStage) onStage('POLICIES ' + EAGER.length + '/' + EAGER.length);
+        return;
+      }
+      var slot = EAGER[i++];
+      getSession(slot).then(function () {
+        setTimeout(next, 0);
+      }).catch(function (e) {
+        TF.ui.logLine && TF.ui.logLine('Policy ' + slot + ' nicht ladbar: ' + (e && e.message || e) + ' — Slot wird bei Bedarf erneut versucht.', 'warn');
+        setTimeout(next, 250);
+      });
+    }
+    setTimeout(next, 0);
   }
 
   var isReady = function () { return !!mjc; };
@@ -3587,6 +3659,37 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     }
 
     /* ---------- MuJoCo: Boot, Fahrlogik, Training ---------- */
+    /* 50-Hz-WANDUHR-TAKT (v1.2-Fix): Vorher lief controlStepAsync in JEDER
+     * rAF-Frame — auf 120-Hz-Geräten (S26 Ultra) also 120 Regelschritte/s
+     * statt 50. Jeder Schritt = ONNX + 4×5 ms Physik → Physik lief ~2,4× bis
+     * 12× schneller als Echtzeit (Duck stürzte sofort ab: „liegt im Boden“)
+     * und der Main-Thread verhungerte komplett („nichts reagiert“).
+     * Jetzt: Schritt nur, wenn 20 ms Wandzeit kumuliert sind; Rückstand wird
+     * auf ~1 Schritt/Frame gedeckelt → UI bleibt immer bedienbar. */
+    var CTRL_DT = 1 / 50;
+    function makePacer() {
+      var acc = 0;
+      return function (dt) {
+        acc += Math.min(Math.max(dt, 0), 0.1);
+        if (acc < CTRL_DT) return false;
+        acc = Math.min(acc - CTRL_DT, 1.5 * CTRL_DT); // Rückstand decken, max ~1 Schritt/Frame
+        return true;
+      };
+    }
+    var paceDuck = makePacer(), paceArm = makePacer(), paceHum = makePacer();
+    /* Gemessene Regelrate (für Statuszeile/Engine-Report) */
+    var ctrlCnt = 0, ctrlHzMeas = 0, ctrlT0 = 0;
+    this.noteCtrlStep = function (now) {
+      ctrlCnt++;
+      if (!ctrlT0) ctrlT0 = now;
+      else if (now - ctrlT0 >= 500) { ctrlHzMeas = ctrlCnt * 1000 / (now - ctrlT0); ctrlCnt = 0; ctrlT0 = now; }
+    };
+    this.ctrlHzMeasured = function () { return ctrlHzMeas; };
+    /* Test-Hook: echte mjDrive-Logik mit synthetischem dt pumpen (E2E
+     * prüft damit den 50-Hz-Pacer deterministisch — ohne Headless-rAF-
+     * Sturm, der im Headless-Chromium ohne Vsync ohnehin artefaktisch
+     * prioritätssättigend läuft). */
+    this.__testDrive = function (dt) { mjDrive(dt); };
     function mjcBoot() {
       if (!TF.mjc || !TF.mjc.init) { TF.ui.setEngineBadge('fail'); return; }
       TF.ui.setEngineBadge('load');
@@ -3624,12 +3727,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       var d = S.mjc.duck;
       var lim = d.velLims();
       d.setCmd(self.joystick.y * lim[0], 0, -self.joystick.x * lim[2]);
-      if (!d.busy) {
-        d.busy = true;
-        d.controlStepAsync()
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { d.busy = false; });
-      }
+      if (!paceDuck(dt) || d.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      d.busy = true;
+      d.controlStepAsync()
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { d.busy = false; self.noteCtrlStep(performance.now()); });
     }
     this.mjcCycleSlot = function () {
       var order = ['walk', 'drive', 'sitstand'];
@@ -3662,7 +3764,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         TF.ui.logLine('MJ-Modell fehlgeschlagen: ' + e.message + ' — Werkstatt-Kern bleibt aktiv.', 'warn');
       });
     }
-    function mjDriveArm() {
+    function mjDriveArm(dt) {
       var a = S.mjc.arm;
       if (S.gripClosed) {
         // Auto-Aim: Ziel = Ball, nach Griffversuch hochheben
@@ -3673,23 +3775,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         a.grip = 0;
         a.target = [0.28 + self.joystick.y * 0.11, self.joystick.x * 0.17, 0.07];
       }
-      if (!a.busy) {
-        a.busy = true;
-        a.controlStepAsync(false, null)
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { a.busy = false; });
-      }
+      if (!paceArm(dt) || a.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      a.busy = true;
+      a.controlStepAsync(false, null)
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { a.busy = false; self.noteCtrlStep(performance.now()); });
     }
-    function mjDriveHum() {
+    function mjDriveHum(dt) {
       var h = S.mjc.hum;
       h.cmd[0] = self.joystick.y * 1.0;
       h.cmd[1] = -self.joystick.x * 0.5;
-      if (!h.busy) {
-        h.busy = true;
-        h.controlStepAsync(null)
-          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
-          .then(function () { h.busy = false; });
-      }
+      if (!paceHum(dt) || h.busy) return; // 50-Hz-Takt (v1.2-Fix)
+      h.busy = true;
+      h.controlStepAsync(null)
+        .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+        .then(function () { h.busy = false; self.noteCtrlStep(performance.now()); });
     }
     this.mjcCycleHum = function () {
       S.mjc.humMode = S.mjc.humMode === 'stehen' ? 'gehen' : 'stehen';
@@ -4121,8 +4221,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         var robots = ['duck', 'arm', 'hum'].filter(function (k) { return TF.mjc.hasRobot(k); });
         TF.ui.logLine('ENGINE: ECHTES MUJOCO (WASM) AKTIV — duck nq ' + i.nq + '/nu ' + i.nu +
           ' · MJ-Roboter geladen: ' + (robots.join(', ') || 'duck (Basis)') +
-          ' · ONNX-Policies: ' + TF.mjc.policiesLoaded().join(', '), 'sys');
-        TF.ui.logLine('Physik: MJCF timestep 5 ms, Regelung 50 Hz (Decimation 4) — Policies vom HF-Space pollen-robotics/microduck-simulator.', 'sys');
+          ' · ONNX-Policies: ' + (TF.mjc.policiesLoaded().join(', ') || 'laden im Hintergrund …') +
+          ' · Regelrate gemessen: ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' Hz (Soll 50, 1 Schritt/Frame max)', 'sys');
+        TF.ui.logLine('Physik: MJCF timestep 5 ms, Regelung 50 Hz (Decimation 4, Wanduhr-Takt seit v1.2) — Policies vom HF-Space pollen-robotics/microduck-simulator.', 'sys');
       } else {
         TF.ui.logLine('ENGINE: WERKSTATT-FALLBACK (Eigenbau-Kern) — MuJoCo NICHT aktiv.', 'warn');
         TF.ui.logLine('MJ-Fehler: ' + (S.mjc.err || 'lädt noch … (Badge im Topbar zeigt den Status)'), 'warn');
@@ -4245,9 +4346,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         // Echtes MuJoCo: 50-Hz-Policy-Regelung, Joystick = Velocity-Command
         mjDrive(dt);
       } else if (S.mjc.ready && S.robot === 'arm' && S.mjc.arm && !S.training.active) {
-        mjDriveArm();
+        mjDriveArm(dt);
       } else if (S.mjc.ready && S.robot === 'humanoid' && S.mjc.hum && !S.training.active) {
-        mjDriveHum();
+        mjDriveHum(dt);
       } else if (!S.training.active) {
         acc += dt;
         var n = 0;
@@ -4279,7 +4380,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         renderer.begin();
         renderer.drawNode(w.arena, 1);
         TF.ui.status('MICRODUCK·MJ · ' + S.mjc.slot.toUpperCase() + (d2.fallen ? ' · AUFSTEHEN…' : '') +
-          ' · REND ' + S.fps + ' FPS · 50 HZ · x=' + qx.toFixed(2) + ' m');
+          ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ · x=' + qx.toFixed(2) + ' m');
         requestAnimationFrame(frame);
         return; // eigener Pfad fertig gezeichnet
       }
@@ -4317,8 +4418,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         renderer.begin();
         renderer.drawNode(wM.arena, 1);
         var st = key === 'arm'
-          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · 50 HZ'
-          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · 50 HZ';
+          ? 'ARMBOT·MJ · IK · GRIP ' + (S.gripClosed ? 'ZU' : 'OFFEN') + ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ'
+          : 'HUMANOID·MJ · ' + S.mjc.humMode.toUpperCase() + ' · REND ' + S.fps + ' FPS · ' + (self.ctrlHzMeasured() || 0).toFixed(0) + ' HZ';
         TF.ui.status(st);
         requestAnimationFrame(frame);
         return;
@@ -4426,7 +4527,7 @@ TF07.BUILTIN_POLICIES = {"arm": {"format": "robofield-policy-v1", "robot": "arm"
 
 
 /* ======== Build-Kennung ======== */
-TF07.BUILD = { version: '1.1.0', id: 'a5a6290' };
+TF07.BUILD = { version: '1.2.0', id: '2a86047' };
 
 </script>
 </body>
