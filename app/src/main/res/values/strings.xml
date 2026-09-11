@@ -2,8 +2,12 @@
 <resources>
     <string name="app_name">Trainrobot</string>
     <string name="title">Trainrobot — RL-Trainingssimulator</string>
-    <string name="subtitle">Offizieller microduck-simulator-Kern: MuJoCo-WASM-Physik, trainierte Policy @ 50 Hz, komplett offline auf dem Gerät.</string>
-    <string name="sim_open">3D-Simulation starten</string>
+    <string name="subtitle">3 Roboter auf echter MuJoCo-WASM-Physik, komplett offline auf dem Gerät. Ohne Fallback.</string>
+    <string name="robot_prompt">Roboter wählen</string>
+    <string name="robot_duck">Microduck — offizieller Simulator (Laufen, Rollen, Tricks)</string>
+    <string name="robot_arm">Armbot — WidowX 250 6DOF (Greifen, Ball, Training)</string>
+    <string name="robot_humanoid">Humanoid — ROBOTIS OP3 (Stehen, Gehen, Training)</string>
+    <string name="sim_open">Simulation starten</string>
     <string name="sim_desc">Touch-Stick steuert direkt · Laufen, Rollen, Sitzen, Stehen, Ball-Kicks. Kein Fallback — die App startet direkt in die echte Physiksimulation.</string>
     <string name="gemini_toggle">Gemini-High-Level aktiv (Subgoals 1–2 Hz, Benachrichtigungen)</string>
     <string name="gemini_key_hint">Gemini API-Key (optional, bleibt auf dem Gerät)</string>

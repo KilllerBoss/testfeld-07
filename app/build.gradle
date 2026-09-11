@@ -11,8 +11,8 @@ android {
         // minSdk 30 wie die Referenz-App (MicroDuck): moderner WebView/WebGL-Stapel
         minSdk 30
         targetSdk 35
-        versionCode 4          // v2.0: offizieller Simulator-Kern, kein Fallback mehr
-        versionName "2.0.0"
+        versionCode 5          // v2.1: ROBOLAB (Armbot + Humanoid) zurueck, Vollbild-Sim ohne Overlay-Buttons
+        versionName "2.1.0"
     }
 
     // Release-APK debug-signiert -> direkt installierbar (Projekt-Vorgabe).

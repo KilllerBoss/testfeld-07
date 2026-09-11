@@ -3,7 +3,8 @@
  *   1. Dist-Integrität (Dateien, wasm-Magic, Patches im App-Bundle)
  *   2. Bridge-Vertrag (md_bridge.js: GeminiSource, addSource, __mdGetState)
  *   3. Android-Verkabelung (Zwei-Handler-Logik, loadUrl-Flags, kein file://)
- *   4. Identität (Trainrobot.apk-Name, appId, versionCode 4, kein Fallback-Marker)
+ *   4. Identität (Trainrobot.apk-Name, appId, versionCode 5, kein Fallback-Marker)
+ *   5. ROBOLAB-Zweig (assets/robo: MJCF-Menagerie arm/hum, kein ONNX, kein Fallback)
  * Der Browser-Boot-Test (tests/browser_official_boot.js) deckt Verhalten ab.
  */
 import fs from 'fs';
@@ -82,7 +83,7 @@ console.log('>> 4. Identität & Fallback-frei');
 const gradle = read(path.join(ROOT, 'app', 'build.gradle'));
 check(gradle.includes('outputFileName = "Trainrobot.apk"'), 'APK heißt Trainrobot.apk');
 check(gradle.includes('applicationId "com.trainrobot.app"'), 'appId com.trainrobot.app');
-check(gradle.includes('versionCode 4') && gradle.includes('versionName "2.0.0"'), 'versionCode 4 / versionName 2.0.0');
+check(gradle.includes('versionCode 5') && gradle.includes('versionName "2.1.0"'), 'versionCode 5 / versionName 2.1.0');
 const javaFiles = ['MainActivity.java', 'SimActivity.java', 'SimAssetHandler.java', 'GeminiClient.java', 'Notifier.java'];
 for (const f of javaFiles) {
   check(fs.existsSync(path.join(A('java'), 'com/trainrobot/app', f)), 'Klasse vorhanden: ' + f);
@@ -91,6 +92,28 @@ check(!fs.existsSync(path.join(ROOT, 'sim', 'src')), 'Alte Eigenbau-Engine (Fall
 check(!fs.existsSync(path.join(A('assets'), 'index.html')), 'Kein altes assets/index.html mehr');
 check(manifest.includes('android.permission.POST_NOTIFICATIONS'), 'POST_NOTIFICATIONS (Notifier)');
 check(simAct.includes('setAllowFileAccess(false)'), 'allowFileAccess=false (wie Referenz)');
+
+// ── 5. ROBOLAB-Zweig (assets/robo) ─────────────────────────────
+console.log('>> 5. ROBOLAB-Zweig (Armbot + Humanoid, MJ-only)');
+const ROBO = path.join(A('assets'), 'robo');
+check(fs.existsSync(path.join(ROBO, 'index.html')), 'robo/index.html vorhanden');
+check(simAct.includes('/assets/robo/'), 'SimActivity: robo-Handler registriert');
+check(simAct.includes('?robot='), 'SimActivity: robot-Parameter an ROBOLAB-URL');
+check(simAct.includes('"robot"'), 'SimActivity: robot-Extra gelesen');
+check(fs.existsSync(path.join(ROBO, 'mjc', 'wx250s.xml')), 'MJCF vorhanden: wx250s.xml (Armbot)');
+check(fs.existsSync(path.join(ROBO, 'mjc', 'op3.xml')), 'MJCF vorhanden: op3.xml (Humanoid)');
+check(fs.existsSync(path.join(ROBO, 'mjc', 'mujoco.wasm')), 'MuJoCo-WASM im ROBOLAB-Zweig');
+check(fs.existsSync(path.join(ROBO, 'mjc', 'mujoco.wrapped.js')), 'MuJoCo-Glue im ROBOLAB-Zweig');
+const roboHtml = read(path.join(ROBO, 'index.html'));
+check(roboHtml.includes('TF07.BUILTIN_POLICIES'), 'ROBOLAB: Builtin-Champions eingebettet');
+check(roboHtml.includes('armmj') && roboHtml.includes('op3mj'), 'ROBOLAB: armmj + op3mj Champions');
+check(!/inferencesession|ort\.glue|ort\.global|ort-wasm/i.test(roboHtml), 'ROBOLAB: kein ONNX/ORT');
+check(!/DuckEnv|ArmEnv|HumanoidEnv|makeEnv/.test(roboHtml), 'ROBOLAB: kein Werkstatt-Env-Kern');
+check(!/Werkstatt-Kern bleibt aktiv|WERKSTATT-FALLBACK/.test(roboHtml), 'ROBOLAB: kein Fallback-Zweig');
+check(roboHtml.includes('KEIN FALLBACK'), 'ROBOLAB: Fallback-freiheit explizit deklariert');
+const roboIdx = JSON.parse(fs.readFileSync(path.join(ROBO, 'mjc', '__index.json'), 'utf8'));
+check(Array.isArray(roboIdx) && roboIdx.length >= 30, 'mjc/__index.json: ' + roboIdx.length + ' Mesh-Einträge');
+check(!fs.existsSync(path.join(ROBO, 'mjc', 'policies')), 'Kein ONNX-Policy-Ordner im ROBOLAB-Zweig');
 
 console.log(`\n>> ERGEBNIS: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

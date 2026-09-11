@@ -29,11 +29,55 @@
             android:textColor="#9CA3AF"
             android:textSize="14sp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/robot_prompt"
+            android:textColor="#EDEDF2"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/robotGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/robotDuck"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:minHeight="44dp"
+                android:text="@string/robot_duck"
+                android:textColor="#EDEDF2"
+                android:textSize="15sp" />
+
+            <RadioButton
+                android:id="@+id/robotArm"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="44dp"
+                android:text="@string/robot_arm"
+                android:textColor="#EDEDF2"
+                android:textSize="15sp" />
+
+            <RadioButton
+                android:id="@+id/robotHumanoid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="44dp"
+                android:text="@string/robot_humanoid"
+                android:textColor="#EDEDF2"
+                android:textSize="15sp" />
+        </RadioGroup>
+
         <Button
             android:id="@+id/btnSim"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
+            android:layout_marginTop="20dp"
             android:backgroundTint="#22C55E"
             android:textColor="#04140A"
             android:textStyle="bold"
@@ -91,7 +135,7 @@
             android:fontFamily="monospace"
             android:textSize="11sp"
             android:textColor="#4B5563"
-            android:text="Trainrobot v2.0.0 · offizieller microduck-simulator (MuJoCo-WASM + onnxruntime-web) · appassets.androidplatform.net" />
+            android:text="Trainrobot v2.1.0 · 3 Roboter auf echtem MuJoCo-WASM · appassets.androidplatform.net" />
 
     </LinearLayout>
 </ScrollView>

@@ -3,7 +3,6 @@ package com.trainrobot.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.os.Bundle;
-import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
@@ -11,42 +10,29 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
-import android.widget.TextView;
 import android.widget.Toast;
 import androidx.webkit.WebViewAssetLoader;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Trainrobot — 3D-Simulation mit dem virtuellen Roboter.
+ * Trainrobot — 3D-Simulation in Vollbild-WebView.
  *
- * 1:1-Portierung der Referenz-App (MicroDuck SimActivity.kt): Der Nutzer
- * startet den offiziellen microduck-simulator (bundled Vite-Build) in einer
- * WebView. Assets werden ueber https://appassets.androidplatform.net/assets/
- * serviert (WebViewAssetLoader + SimAssetHandler), damit relative fetches,
- * ES-Module und WASM offline funktionieren. Kein file://, kein Fallback.
+ * Zwei Sim-Zweige, beide 100 % MuJoCo-WASM, KEIN Fallback:
+ *   MICRODUCK : offizieller microduck-simulator (HF-Space-Dist) unter
+ *               /assets/sim/  — onnxruntime-web-Policies @ 50 Hz.
+ *   ARMBOT /  : ROBOLAB (Menagerie-Modelle WidowX 250 + ROBOTIS OP3) unter
+ *   HUMANOID    /assets/robo/index.html?robot=arm|humanoid — robofield-
+ *               policy-v1-Champions direkt auf den MJ-Geistern (nn.js).
  *
- * Low-Level : onnxruntime-web (WebView) @ 50 Hz auf MuJoCo-WASM  [im Sim-Bundle]
- * High-Level: GeminiClient erzeugt @ ~1 Hz Subgoal-JSONs und injiziert sie
- *             per JS-Source in den Controller der Simulation (Nutzer-Eingabe
- *             und Waypoint-Klicks haben jederzeit Vorrang).
- * Feedback  : "notify" -> App-Benachrichtigung (kein TTS).
+ * Assets laufen über https://appassets.androidplatform.net (WebViewAssetLoader),
+ * damit relative fetches, ES-Module und WASM offline funktionieren. Kein file://.
+ *
+ * Die frühere native Kontrollleiste (Autopilot/Reset/Zurück) ist ENTFERNT —
+ * Zurück funktioniert über die System-Zurück-Taste. Der Gemini-Autopilot
+ * bleibt als Bibliothek (GeminiClient) erhalten, hat aber keine
+ * Overlay-Buttons mehr in der Szene.
  */
 public class SimActivity extends Activity {
     private WebView web;
-    private TextView statusView;
-    private Button autopilotBtn;
-    private Notifier notifier;
-
-    private final java.util.concurrent.ExecutorService pool = Executors.newFixedThreadPool(2);
-    private final AtomicBoolean running = new AtomicBoolean(false);
-    private final AtomicInteger subgoalCount = new AtomicInteger(0);
-    private final AtomicReference<String> lastStateLine = new AtomicReference<>("boote …");
-    private final AtomicReference<String> lastNotify = new AtomicReference<>("");
-    private String geminiModel = "gemini-2.0-flash";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -54,12 +40,9 @@ public class SimActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_sim);
-        notifier = new Notifier(this);
 
-        statusView = findViewById(R.id.simStatus);
-        autopilotBtn = findViewById(R.id.btnAutopilot);
-        String gm = getIntent().getStringExtra("gemini_model");
-        if (gm != null && !gm.trim().isEmpty()) geminiModel = gm;
+        robot = getIntent().getStringExtra("robot");
+        if (robot == null || robot.isEmpty()) robot = DUCK;
 
         web = findViewById(R.id.simWebView);
         WebSettings s = web.getSettings();
@@ -73,16 +56,14 @@ public class SimActivity extends Activity {
         web.setBackgroundColor(0xFF0B0B10);
 
         // Asset-Hosting ueber https://appassets.androidplatform.net —
-        // (relative fetches der Sim sowie ES-Module/WASM funktionieren so offline;
-        //  korrektes MIME fuer .wasm/.onnx/.glb wird von unserem Handler gesetzt).
-        // Handler-Reihenfolge entscheidet: erst das Dokument unter
-        // /assets/sim/, danach ein Root-Handler fuer die host-absoluten
-        // Vite-Pfade (/bundle, /policies, /robot, /assets). Siehe
-        // SimAssetHandler-Doku: die Referenz-App hatte hier den
-        // "sim/sim"-Bug (alles fiel aufs Netz -> Sim bootete nie).
+        // Handler-Reihenfolge entscheidet: erst die Dokumente unter
+        // /assets/sim/ (offizieller Space) und /assets/robo/ (ROBOLAB),
+        // danach Root-Handler für die host-absoluten Vite-Pfade
+        // (/bundle, /policies, /robot, /assets).
         WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
                 .setDomain("appassets.androidplatform.net")
                 .addPathHandler("/assets/sim/", new SimAssetHandler(this, "sim"))
+                .addPathHandler("/assets/robo/", new SimAssetHandler(this, "robo"))
                 .addPathHandler("/", new SimAssetHandler(this, "sim"))
                 .build();
         web.setWebViewClient(new WebViewClient() {
@@ -93,37 +74,37 @@ public class SimActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                pollGameReady(0);
+                if (DUCK.equals(robot)) pollGameReady(0); // md_bridge fuer den offiziellen Sim
             }
         });
         web.addJavascriptInterface(new Bridge(), "AndroidHost");
 
-        // ?boot=1: Title-Screen ueberspringen (eingebauter Test-Hook der Sim)
-        // ?touch=1: Touch-Steuerung aktivieren, ?noghosts: kein WebRTC-Multiplayer
-        web.loadUrl("https://appassets.androidplatform.net/assets/sim/index.html?boot=1&touch=1&noghosts");
-
-        autopilotBtn.setOnClickListener(v -> {
-            if (running.get()) stopAutopilot(); else startAutopilot();
-        });
-        findViewById(R.id.btnSimReset).setOnClickListener(v ->
-                web.evaluateJavascript("window.rl && rl.resetSim ? rl.resetSim() : null", null));
-        findViewById(R.id.btnSimBack).setOnClickListener(v -> finish());
+        String url;
+        if (!DUCK.equals(robot)) {
+            // ROBOLAB-Zweig (Menagerie): eigener Joystick, eigene KONSOLE
+            url = "https://appassets.androidplatform.net/assets/robo/index.html?robot=" + robot;
+        } else {
+            // Offizieller microduck-simulator.
+            // ?boot=1: Title-Screen überspringen (eingebauter Test-Hook der Sim)
+            // ?touch=1: Touch-Steuerung aktivieren, ?noghosts: kein WebRTC-Multiplayer
+            url = "https://appassets.androidplatform.net/assets/sim/index.html?boot=1&touch=1&noghosts";
+        }
+        web.loadUrl(url);
     }
 
-    /** Wartet darauf, dass window.rl (Game-API der Sim) bereit ist, injiziert dann die Bridge. */
+    private static final String DUCK = "duck";
+    private String robot = DUCK;
+
+    /** Wartet darauf, dass window.rl (Game-API des offiziellen Sims) bereit ist,
+     *  injiziert dann die md_bridge.js (GeminiSource + getState + notify). */
     private void pollGameReady(int attempt) {
-        if (attempt > 120) { // ~60 s
-            statusView.setText(getString(R.string.boot_failed));
-            return;
-        }
+        if (attempt > 120) return; // ~60 s — Sim laeuft auch ohne Bridge weiter
         web.evaluateJavascript("(!!(window.rl && rl.controller))", ready -> {
             if ("true".equals(ready)) injectBridge();
             else web.postDelayed(() -> pollGameReady(attempt + 1), 500);
         });
     }
 
-    /** JS-Bridge: GeminiSource (Subgoal-Queue) + getState + notify-Rueckkanal.
-     *  Liegt als Asset (assets/md_bridge.js) — wartbar und versionierbar. */
     private void injectBridge() {
         String js;
         try (java.io.InputStream in = getAssets().open("md_bridge.js");
@@ -133,84 +114,15 @@ public class SimActivity extends Activity {
             while ((line = r.readLine()) != null) sb.append(line).append('\n');
             js = sb.toString();
         } catch (Exception e) {
-            statusView.setText(getString(R.string.bridge_missing));
             return;
         }
         web.evaluateJavascript(js, null);
-        statusView.setText(getString(R.string.sim_ready));
     }
 
-    private void startAutopilot() {
-        String key = getIntent().getStringExtra("gemini_key");
-        if (key == null || key.trim().isEmpty()) {
-            Toast.makeText(this, getString(R.string.no_key_toast), Toast.LENGTH_LONG).show();
-            return;
-        }
-        running.set(true);
-        autopilotBtn.setText(getString(R.string.autopilot_stop));
-        String mission = getIntent().getStringExtra("mission");
-        if (mission == null || mission.trim().isEmpty()) {
-            mission = "Erkunde langsam die Arena, wechsle ab zwischen Gehen, Drehen und Pausen.";
-        }
-        GeminiClient gem = new GeminiClient(key);
-        final String missionF = mission;
-        pool.execute(() -> {
-            while (running.get()) {
-                try {
-                    String state = lastStateLine.get();
-                    org.json.JSONObject sg = gem.requestSubgoal(geminiModel, missionF, state);
-                    if (sg != null && running.get()) {
-                        subgoalCount.incrementAndGet();
-                        runOnUiThread(() -> web.evaluateJavascript(
-                                "window.__mdBridge && (function(){var s=rl.controller.sources.find(function(x){return x.id==='gemini';}); if(s){s.setSubgoal("
-                                        + sg + "); window.__mdGeminiActiveFlag=true;}})()", null));
-                        String notify = sg.optString("notify", "");
-                        String stim = sg.optString("stimmung", "");
-                        if (!notify.trim().isEmpty() && !notify.equals(lastNotify.get())) {
-                            lastNotify.set(notify);
-                            notifier.post(notify, stim);
-                            runOnUiThread(() -> ((TextView) findViewById(R.id.simNotify))
-                                    .setText(notify + " [" + stim + "]"));
-                        }
-                    }
-                } catch (Throwable ignored) {}
-                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
-            }
-        });
-        pool.execute(() -> {
-            while (running.get()) {
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__mdGetState ? window.__mdGetState() : 'null'", state -> {
-                            String line = state == null ? "null" : state.trim();
-                            if (line.startsWith("\"") && line.endsWith("\"") && line.length() >= 2) {
-                                line = line.substring(1, line.length() - 1);
-                            }
-                            if (!"null".equals(line) && !line.isEmpty()) {
-                                lastStateLine.set(line.replace("\\\"", "\"").replace("\\\\", "\\"));
-                            }
-                            statusView.setText("Autopilot aktiv · Subgoals: " + subgoalCount.get()
-                                    + "\n" + lastStateLine.get());
-                        }));
-                try { Thread.sleep(1200); } catch (InterruptedException e) { return; }
-            }
-        });
-    }
-
-    private void stopAutopilot() {
-        running.set(false);
-        autopilotBtn.setText(getString(R.string.autopilot_start));
-        web.evaluateJavascript(
-                "(function(){var s=rl.controller.sources.find(function(x){return x.id==='gemini';}); if(s){s.queue.length=0; s.command.fill(0); window.__mdGeminiActiveFlag=false;}})()",
-                null);
-        statusView.setText("Autopilot gestoppt. Sim läuft manuell weiter (Touch-Stick).");
-    }
-
-    /** Rueckkanal JS -> Kotlin/Java. */
+    /** Rueckkanal JS -> Java (Fehler-Toast; offizieller Sim kann notify nutzen). */
     private class Bridge {
         @JavascriptInterface
-        public void ready(String s) {
-            runOnUiThread(() -> statusView.setText("3D-Sim & Bridge bereit (" + s + ")"));
-        }
+        public void ready(String s) { /* Platzhalter: Vollbild hat keine Statuszeile */ }
 
         @JavascriptInterface
         public void error(String s) {
@@ -218,15 +130,11 @@ public class SimActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void notify(String text, String stimmung) {
-            notifier.post(text, stimmung);
-        }
+        public void notify(String text, String stimmung) { /* ohne UI: still */ }
     }
 
     @Override
     protected void onDestroy() {
-        running.set(false);
-        pool.shutdownNow();
         if (web != null) web.destroy();
         super.onDestroy();
     }
