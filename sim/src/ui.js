@@ -235,23 +235,31 @@
   }
   function openImport() { el('fileImport').click(); }
 
-  /* ---------- Boot-Log ---------- */
+  /* ---------- Boot-Log ----------
+   * WICHTIG: rAF-getrieben, NICHT setTimeout. Bei sattem Main-Thread
+   * (Software-GL/GPU-Stalls) verhungern Timer — rAF läuft solange Frames
+   * kommen. Sicherheitsventil: nach 4 s ohne Fortschritt alles auf einmal. */
   function bootSequence(lines, done) {
     var veil = el('bootVeil'), pre = el('bootLog');
     veil.classList.remove('gone');
-    var i = 0;
-    function next() {
-      if (i < lines.length) {
-        pre.textContent += lines[i++] + '\n';
-        global.setTimeout(next, 130);
-      } else {
-        global.setTimeout(function () {
-          veil.classList.add('gone');
-          if (done) done();
-        }, 420);
-      }
+    pre.textContent = '';
+    var i = 0, sinceLine = 0, PER = 7, slowT0 = 0;
+    function finish() {
+      veil.classList.add('gone');
+      if (done) done();
     }
-    next();
+    function tick(now) {
+      if (i >= lines.length) { finish(); return; }
+      if (!slowT0) slowT0 = now;
+      if (now - slowT0 > 4000) { // Notventil: Gerät zu langsam für Typing-Effekt
+        while (i < lines.length) pre.textContent += lines[i++] + '\n';
+        finish(); return;
+      }
+      if (sinceLine >= PER) { pre.textContent += lines[i++] + '\n'; sinceLine = 0; slowT0 = now; }
+      sinceLine++;
+      global.requestAnimationFrame(tick);
+    }
+    global.requestAnimationFrame(tick);
   }
 
   function status(text) { el('statusLine').textContent = text; }

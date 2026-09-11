@@ -242,6 +242,15 @@
     if (!gl) throw new Error('WebGL nicht verfügbar');
     this.gl = gl;
     this.canvas = canvas;
+    // Echte GPU-Kennung (falls freigegeben) — zeigt im BIOS sofort Software-Rendering an
+    var gpu = 'WebGL';
+    try {
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      gpu = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+                       : gl.getParameter(gl.RENDERER) || 'WebGL');
+    } catch (e) { gpu = 'WebGL'; }
+    this.gpuInfo = gpu;
+    this.resScale = 1; // dynamische Auflösung (App regelt bei Bedarf runter)
 
     function sh(type, src) {
       var s = gl.createShader(type);
@@ -287,9 +296,9 @@
   }
 
   Renderer.prototype.setSize = function (w, h, dpr) {
-    dpr = Math.min(dpr || 1, 2);
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
+    dpr = Math.min(dpr || 1, 2) * (this.resScale || 1);
+    this.canvas.width = Math.max(2, Math.round(w * dpr));
+    this.canvas.height = Math.max(2, Math.round(h * dpr));
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);

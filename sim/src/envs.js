@@ -63,6 +63,7 @@
     this._newTarget(rng);
     this._updateDist();
     this.prevDist = this.dist;
+    this._snap();
     return this.getObs();
   };
 
@@ -128,8 +129,15 @@
     return o;
   };
 
+  DuckEnv.prototype._snap = function () {
+    // Visueller Snapshot für Render-Interpolation (vor jedem step)
+    if (!this.prev) this.prev = { x: 0, z: 0, heading: 0 };
+    this.prev.x = this.x; this.prev.z = this.z; this.prev.heading = this.heading;
+  };
+
   DuckEnv.prototype.step = function (a0, a1) {
     a0 = clamp(a0, -1, 1); a1 = clamp(a1, -1, 1);
+    this._snap();
     var prevDist = this.dist;
     var vl = a0 * W_MAX, vr = a1 * W_MAX;
     var v = WHEEL_R * (vl + vr) / 2;
@@ -192,6 +200,7 @@
     this.fk();
     this.prevEB = this._d3(this.ee, this.ball);
     this.prevBD = 0;
+    this._snap();
     return this.getObs();
   };
 
@@ -231,7 +240,14 @@
     return o;
   };
 
+  ArmEnv.prototype._snap = function () {
+    if (!this.prev) this.prev = { q: [0, 0, 0, 0], ball: [0, 0, 0] };
+    for (var i = 0; i < 4; i++) this.prev.q[i] = this.q[i];
+    for (i = 0; i < 3; i++) this.prev.ball[i] = this.ball[i];
+  };
+
   ArmEnv.prototype.step = function (a0, a1, a2, a3, a4) {
+    this._snap();
     var acts = [a0, a1, a2, a3];
     var ranges = [ARM.Q1, ARM.Q2, ARM.Q3, ARM.Q4];
     for (var i = 0; i < 4; i++) {
@@ -303,6 +319,7 @@
     this.steps = 0; this.fit = 0; this.reached = 0; this.fallen = false;
     this._newTarget(rng);
     this.rel = this.x - (this.s + this.lean * 2.5);
+    this._snap();
     return this.getObs();
   };
 
@@ -320,7 +337,16 @@
   };
 
   // a = [lean, hipL, kneeL, hipR, kneeR] je in [-1,1]
+  HumanoidEnv.prototype._snap = function () {
+    if (!this.prev) this.prev = { px: 0, pz: 0, dirX: 1, dirZ: 0, lean: 0, hipL: 0, kneeL: 0, hipR: 0, kneeR: 0 };
+    var p = this.prev;
+    p.px = this.px; p.pz = this.pz; p.dirX = this.dirX; p.dirZ = this.dirZ;
+    p.lean = this.lean; p.hipL = this.hipL; p.kneeL = this.kneeL;
+    p.hipR = this.hipR; p.kneeR = this.kneeR;
+  };
+
   HumanoidEnv.prototype.step = function (a) {
+    this._snap();
     var leanT = clamp(a[0], -1, 1) * HUM.LEAN;
     var hipLT = clamp(a[1], -1, 1) * 0.8;
     var kneeLT = 0.6 * clamp((clamp(a[2], -1, 1) + 1) / 2, 0, 1);

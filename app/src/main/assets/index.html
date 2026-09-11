@@ -452,6 +452,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     this._newTarget(rng);
     this._updateDist();
     this.prevDist = this.dist;
+    this._snap();
     return this.getObs();
   };
 
@@ -517,8 +518,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     return o;
   };
 
+  DuckEnv.prototype._snap = function () {
+    // Visueller Snapshot für Render-Interpolation (vor jedem step)
+    if (!this.prev) this.prev = { x: 0, z: 0, heading: 0 };
+    this.prev.x = this.x; this.prev.z = this.z; this.prev.heading = this.heading;
+  };
+
   DuckEnv.prototype.step = function (a0, a1) {
     a0 = clamp(a0, -1, 1); a1 = clamp(a1, -1, 1);
+    this._snap();
     var prevDist = this.dist;
     var vl = a0 * W_MAX, vr = a1 * W_MAX;
     var v = WHEEL_R * (vl + vr) / 2;
@@ -581,6 +589,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     this.fk();
     this.prevEB = this._d3(this.ee, this.ball);
     this.prevBD = 0;
+    this._snap();
     return this.getObs();
   };
 
@@ -620,7 +629,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     return o;
   };
 
+  ArmEnv.prototype._snap = function () {
+    if (!this.prev) this.prev = { q: [0, 0, 0, 0], ball: [0, 0, 0] };
+    for (var i = 0; i < 4; i++) this.prev.q[i] = this.q[i];
+    for (i = 0; i < 3; i++) this.prev.ball[i] = this.ball[i];
+  };
+
   ArmEnv.prototype.step = function (a0, a1, a2, a3, a4) {
+    this._snap();
     var acts = [a0, a1, a2, a3];
     var ranges = [ARM.Q1, ARM.Q2, ARM.Q3, ARM.Q4];
     for (var i = 0; i < 4; i++) {
@@ -692,6 +708,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     this.steps = 0; this.fit = 0; this.reached = 0; this.fallen = false;
     this._newTarget(rng);
     this.rel = this.x - (this.s + this.lean * 2.5);
+    this._snap();
     return this.getObs();
   };
 
@@ -709,7 +726,16 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   };
 
   // a = [lean, hipL, kneeL, hipR, kneeR] je in [-1,1]
+  HumanoidEnv.prototype._snap = function () {
+    if (!this.prev) this.prev = { px: 0, pz: 0, dirX: 1, dirZ: 0, lean: 0, hipL: 0, kneeL: 0, hipR: 0, kneeR: 0 };
+    var p = this.prev;
+    p.px = this.px; p.pz = this.pz; p.dirX = this.dirX; p.dirZ = this.dirZ;
+    p.lean = this.lean; p.hipL = this.hipL; p.kneeL = this.kneeL;
+    p.hipR = this.hipR; p.kneeR = this.kneeR;
+  };
+
   HumanoidEnv.prototype.step = function (a) {
+    this._snap();
     var leanT = clamp(a[0], -1, 1) * HUM.LEAN;
     var hipLT = clamp(a[1], -1, 1) * 0.8;
     var kneeLT = 0.6 * clamp((clamp(a[2], -1, 1) + 1) / 2, 0, 1);
@@ -1224,6 +1250,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     if (!gl) throw new Error('WebGL nicht verfügbar');
     this.gl = gl;
     this.canvas = canvas;
+    // Echte GPU-Kennung (falls freigegeben) — zeigt im BIOS sofort Software-Rendering an
+    var gpu = 'WebGL';
+    try {
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      gpu = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+                       : gl.getParameter(gl.RENDERER) || 'WebGL');
+    } catch (e) { gpu = 'WebGL'; }
+    this.gpuInfo = gpu;
+    this.resScale = 1; // dynamische Auflösung (App regelt bei Bedarf runter)
 
     function sh(type, src) {
       var s = gl.createShader(type);
@@ -1269,9 +1304,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   }
 
   Renderer.prototype.setSize = function (w, h, dpr) {
-    dpr = Math.min(dpr || 1, 2);
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
+    dpr = Math.min(dpr || 1, 2) * (this.resScale || 1);
+    this.canvas.width = Math.max(2, Math.round(w * dpr));
+    this.canvas.height = Math.max(2, Math.round(h * dpr));
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -1631,9 +1666,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       update: function (env, dt) {
         root.pos[0] = env.x; root.pos[1] = 0; root.pos[2] = env.z;
         root.quat = R.quatAxis([0, 1, 0], -env.heading);
-        // Rad-Drehung
-        var v = TF.WHEEL_R * 0; // Spin visuell aus Aktionen via setSpin()
-        this.spin += this.spinRate || 0;
+        // Rad-Drehung: Spin wird pro Physik-Step in app.js akkumuliert
         var ang = this.spin;
         for (var i = 0; i < wheels.length; i++) {
           var q = R.quatAxis([1, 0, 0], Math.PI / 2);
@@ -2064,23 +2097,31 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
   }
   function openImport() { el('fileImport').click(); }
 
-  /* ---------- Boot-Log ---------- */
+  /* ---------- Boot-Log ----------
+   * WICHTIG: rAF-getrieben, NICHT setTimeout. Bei sattem Main-Thread
+   * (Software-GL/GPU-Stalls) verhungern Timer — rAF läuft solange Frames
+   * kommen. Sicherheitsventil: nach 4 s ohne Fortschritt alles auf einmal. */
   function bootSequence(lines, done) {
     var veil = el('bootVeil'), pre = el('bootLog');
     veil.classList.remove('gone');
-    var i = 0;
-    function next() {
-      if (i < lines.length) {
-        pre.textContent += lines[i++] + '\n';
-        global.setTimeout(next, 130);
-      } else {
-        global.setTimeout(function () {
-          veil.classList.add('gone');
-          if (done) done();
-        }, 420);
-      }
+    pre.textContent = '';
+    var i = 0, sinceLine = 0, PER = 7, slowT0 = 0;
+    function finish() {
+      veil.classList.add('gone');
+      if (done) done();
     }
-    next();
+    function tick(now) {
+      if (i >= lines.length) { finish(); return; }
+      if (!slowT0) slowT0 = now;
+      if (now - slowT0 > 4000) { // Notventil: Gerät zu langsam für Typing-Effekt
+        while (i < lines.length) pre.textContent += lines[i++] + '\n';
+        finish(); return;
+      }
+      if (sinceLine >= PER) { pre.textContent += lines[i++] + '\n'; sinceLine = 0; slowT0 = now; }
+      sinceLine++;
+      global.requestAnimationFrame(tick);
+    }
+    global.requestAnimationFrame(tick);
   }
 
   function status(text) { el('statusLine').textContent = text; }
@@ -2195,6 +2236,34 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     });
     var ghostRigs = [];
     this.worlds = worlds; this.envs = envs;
+
+    /* ---------- Render-Interpolation: Physik fix 30 Hz, Grafik Display-Rate.
+     * visFor() mischt prev→currzustand mit alpha = akkumulierte Restzeit/DT.
+     * Determinismus bleibt unangetastet — nur die ANZEIGE interpoliert. */
+    var visCache = { duck: { rays: null }, arm: {}, humanoid: {} };
+    function lp(a, b, t) { a = +a; b = +b; return a + (b - a) * t; }
+    function visFor(robot, env, alpha) {
+      var v = visCache[robot], p = env.prev || env;
+      if (robot === 'duck') {
+        v.x = lp(p.x, env.x, alpha); v.z = lp(p.z, env.z, alpha);
+        v.heading = lp(p.heading, env.heading, alpha);
+        v.rays = env.rays;
+      } else if (robot === 'arm') {
+        v.q = v.q || [0, 0, 0, 0];
+        for (var i = 0; i < 4; i++) v.q[i] = lp(p.q[i], env.q[i], alpha);
+        v.ball = v.ball || [0, 0, 0];
+        for (i = 0; i < 3; i++) v.ball[i] = lp(p.ball[i], env.ball[i], alpha);
+        v.gripOpen = env.gripOpen;
+      } else {
+        v.px = lp(p.px, env.px, alpha); v.pz = lp(p.pz, env.pz, alpha);
+        v.dirX = lp(p.dirX, env.dirX, alpha); v.dirZ = lp(p.dirZ, env.dirZ, alpha);
+        v.lean = lp(p.lean, env.lean, alpha);
+        v.hipL = lp(p.hipL, env.hipL, alpha); v.kneeL = lp(p.kneeL, env.kneeL, alpha);
+        v.hipR = lp(p.hipR, env.hipR, alpha); v.kneeR = lp(p.kneeR, env.kneeR, alpha);
+        v.tau = env.tau; v.side = env.side; v.fallen = env.fallen;
+      }
+      return v;
+    }
 
     /* ---------- Kamera ---------- */
     var cam = this.cam = { yaw: CAM_DEF[S.robot].yaw, pitch: CAM_DEF[S.robot].pitch, dist: CAM_DEF[S.robot].dist };
@@ -2660,13 +2729,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
     /* ---------- Hauptschleife ---------- */
     var last = performance.now(), acc = 0, fpsT = 0, fpsN = 0, timeS = 0;
     var mainGenome = null, mainActs = null;
+    var resScale = 1, ftAvg = 1 / 60, resCooldown = 60;
 
     function stepMain(dt) {
       var env = envs[S.robot];
       var arch = TF.nn.ARCHS[S.robot];
       if (S.mode === 'policy' && S.champions[S.robot]) {
         var acts = TF.nn.forward(S.champions[S.robot].genome, env.getObs(), arch[3]);
-        if (S.robot === 'duck') { env.step(acts[0], acts[1]); worlds.duck.rig.spinRate = (acts[0] + acts[1]) / 2 * 4 / TF.WHEEL_R * TF.DT; }
+        if (S.robot === 'duck') { env.step(acts[0], acts[1]); worlds.duck.rig.spin += (acts[0] + acts[1]) / 2 * 4 * TF.DT; }
         else if (S.robot === 'arm') { env.step(acts[0], acts[1], acts[2], acts[3], acts[4]); env.gripOpen = acts[4] > 0; }
         else env.step(acts);
       } else {
@@ -2674,7 +2744,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         if (S.robot === 'duck') {
           env.step(a[0], a[1]);
           var v = TF.WHEEL_R * (a[0] + a[1]) * 4 / 2;
-          worlds.duck.rig.spinRate = v / TF.WHEEL_R * TF.DT;
+          worlds.duck.rig.spin += v / TF.WHEEL_R * TF.DT;
         } else if (S.robot === 'arm') {
           env.step(a[0], a[1], a[2], a[3], a[4]);
           env.gripOpen = !S.gripClosed;
@@ -2709,10 +2779,25 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       last = now; timeS += dt;
       fpsN++; if (now - fpsT > 500) { S.fps = Math.round(fpsN * 1000 / (now - fpsT)); fpsT = now; fpsN = 0; }
 
+      // Dynamische Auflösung: bei dauerhaft langen Frames Rückfahrstufe,
+      // bei Luft nach oben zurück — hält auch Software-GL bedienbar.
+      ftAvg += (dt - ftAvg) * 0.03;
+      if (resCooldown > 0) resCooldown--;
+      else if (ftAvg > 0.055 && resScale > 0.4) {
+        resScale = Math.max(0.4, resScale - 0.2);
+        renderer.resScale = resScale; self.resize(); resCooldown = 150;
+        TF.ui.logLine('Auto-Auflösung: ' + Math.round(resScale * 100) + ' %', 'warn');
+      } else if (ftAvg < 0.02 && resScale < 1) {
+        resScale = Math.min(1, resScale + 0.2);
+        renderer.resScale = resScale; self.resize(); resCooldown = 300;
+      }
+
+      var alpha = 0;
       if (!S.training.active) {
         acc += dt;
         var n = 0;
         while (acc >= TF.DT && n < 4) { stepMain(TF.DT); acc -= TF.DT; n++; }
+        alpha = clamp(acc / TF.DT, 0, 1);
       } else {
         trainStep();
         TF.ui.updateTraining(S.training);
@@ -2722,12 +2807,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       var env = envs[S.robot], w = worlds[S.robot];
       // Szenengraph-Transforme aktualisieren (vor dem Zeichnen!)
       w.arena.updateWorld(null);
-      // Rig-Updates
+      // Rig-Updates — interpolierte Anzeige-Pose (kein Physik-Zustand!)
+      var vis = visFor(S.robot, env, S.training.active ? 1 : alpha);
       if (S.robot === 'duck') {
-        w.rig.update(env);
+        w.rig.update(vis);
         w.rig.rayBars.forEach(function (b) { b.visible = S.showRays && !S.training.active; });
-      } else if (S.robot === 'arm') w.rig.update(env);
-      else w.rig.update(env);
+      } else if (S.robot === 'arm') w.rig.update(vis);
+      else w.rig.update(vis);
       // Zielmarker
       var showT = S.robot !== 'arm';
       w.target.root.visible = showT;
@@ -2737,8 +2823,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
         var pulse = 1 + 0.12 * Math.sin(timeS * 4);
         w.target.ring.scale = [pulse, 1, pulse];
       }
-      // Kamera
-      var focus = S.robot === 'arm' ? [0, 0.7, 0] : [env.px !== undefined ? env.px : env.x, CAM_DEF[S.robot].ty, env.pz !== undefined ? env.pz : env.z];
+      // Kamera (interpolierter Fokus, camDist für Nebel)
+      var fx = S.robot === 'arm' ? 0 : (vis.px !== undefined ? vis.px : vis.x);
+      var fz = S.robot === 'arm' ? 0 : (vis.pz !== undefined ? vis.pz : vis.z);
+      var focus = S.robot === 'arm' ? [0, 0.7, 0] : [fx, CAM_DEF[S.robot].ty, fz];
       var cx = focus[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw);
       var cy = focus[1] + cam.dist * Math.sin(cam.pitch);
       var cz = focus[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw);
@@ -2747,7 +2835,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       renderer.begin();
       renderer.drawNode(w.arena, 1);
 
-      TF.ui.status(S.mode.toUpperCase() + ' · ' + S.robot.toUpperCase() + ' · ' + S.fps + ' FPS' +
+      TF.ui.status(S.mode.toUpperCase() + ' · ' + S.robot.toUpperCase() + ' · REND ' + S.fps + ' FPS · SIM 30 HZ' +
         (S.training.active ? ' · TRAIN GEN ' + S.training.gen + '/' + S.training.gens : '') +
         ' · FIT ' + env.fit.toFixed(1));
 
@@ -2775,19 +2863,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--ink)
       for (var r in worlds) worlds[r].arena.visible = (r === S.robot);
       worlds.duck.rig.root.visible = true;
       rebuildDuck();
-      var glInfo = '';
-      try { glInfo = renderer.gl.getParameter(renderer.gl.RENDERER) || 'WebGL'; } catch (e) { glInfo = 'WebGL'; }
+      var gpu = String(renderer.gpuInfo || 'WebGL');
+      var softGL = /swiftshader|llvmpipe|software|basic render|angle \(software/i.test(gpu);
       var lsOk = true;
       try { global.localStorage.setItem('tf07.test', '1'); global.localStorage.removeItem('tf07.test'); } catch (e) { lsOk = false; }
       TF.ui.bootSequence([
         'TESTFELD·07 BIOS v1.0.0 — (c) Werkstatt',
         'CPU: WEBVIEW-ARM64 ................ OK',
-        'GRAFIK: ' + String(glInfo).slice(0, 28) + ' ... OK',
-        'PHYSIK: TF07-KERN @ 30 Hz ......... OK',
+        'GRAFIK: ' + gpu.slice(0, 34) + (softGL ? ' [SOFTWARE]' : '') + ' ... OK',
+        'PHYSIK: TF07-KERN @ 30 HZ (FIX) ... OK',
+        'RENDER: DISPLAY-RATE + INTERPOLATION ... OK',
         'ROBOTER: MICRODUCK / ARMBOT / HUMANOID ... 3 GEFUNDEN',
         'POLICY-FORMAT: robofield-policy-v1 ....... BEREIT',
         'STORAGE: ' + (lsOk ? 'OK' : 'OFFLINE-MODUS (ohne Speicherung)'),
         (S.champions.duck || S.champions.arm || S.champions.humanoid) ? 'CHAMPIONS: GELADEN' : 'CHAMPIONS: NOCH KEINE — TIPPE „TRAIN" ODER „TRAINIERE DEN DUCK 120 GENERATIONEN"',
+        softGL ? 'HINWEIS: SOFTWARE-RENDERING — AUTO-AUFLÖSUNG AKTIV' : 'GPU-BESCHLEUNIGUNG AKTIV',
         'STARTEN DER SANDBOX …'
       ], function () {
         TF.ui.logLine('Willkommen in der Werkstatt. „hilfe" zeigt alle Befehle (Deutsch + JSON).', 'sys');

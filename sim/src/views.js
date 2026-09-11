@@ -248,9 +248,7 @@
       update: function (env, dt) {
         root.pos[0] = env.x; root.pos[1] = 0; root.pos[2] = env.z;
         root.quat = R.quatAxis([0, 1, 0], -env.heading);
-        // Rad-Drehung
-        var v = TF.WHEEL_R * 0; // Spin visuell aus Aktionen via setSpin()
-        this.spin += this.spinRate || 0;
+        // Rad-Drehung: Spin wird pro Physik-Step in app.js akkumuliert
         var ang = this.spin;
         for (var i = 0; i < wheels.length; i++) {
           var q = R.quatAxis([1, 0, 0], Math.PI / 2);
