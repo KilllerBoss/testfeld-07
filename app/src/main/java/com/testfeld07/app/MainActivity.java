@@ -121,6 +121,37 @@ public class MainActivity extends Activity {
     private class Bridge {
 
         @JavascriptInterface
+        public String readAssetBase64(String path) {
+            // MuJoCo/ORT-WASM + MJCF-Meshes aus assets/ (offline, kein fetch auf file://)
+            try {
+                InputStream in = getAssets().open("mjc/" + path);
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+                in.close();
+                return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        @JavascriptInterface
+        public String readAssetText(String path) {
+            try {
+                InputStream in = getAssets().open("mjc/" + path);
+                BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = r.readLine()) != null) sb.append(line).append('\n');
+                r.close();
+                return sb.toString();
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        @JavascriptInterface
         public void exportFile(String name, String content) {
             try {
                 File dir = docsDir();

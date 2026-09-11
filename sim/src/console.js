@@ -18,11 +18,12 @@
   'use strict';
 
   var ROBOT_WORDS = {
-    duck: ['duck', 'microduck', 'entchen', 'roller', 'ente'],
+    duck: ['duck', 'entchen', 'roller', 'ente'],
+    duckmj: ['microduck', 'mjc', 'mujoco'],
     arm: ['arm', 'armbot', 'greifarm', 'greifer', 'arm-bot'],
     humanoid: ['humanoid', 'läufer', 'laeufer', 'walker', 'mensch', 'humanoider']
   };
-  var ROBOT_IDS = ['duck', 'arm', 'humanoid'];
+  var ROBOT_IDS = ['duck', 'duckmj', 'arm', 'humanoid'];
 
   function norm(s) {
     return String(s || '').toLowerCase().replace(/[,.;:!?"'`´]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -87,6 +88,11 @@
     var r3 = findRobot(t);
     if (r3 && t.split(' ').length <= 3) { A({ op: 'robot', id: r3 }); replies.push('Roboter: ' + r3.toUpperCase() + '.'); return { actions: actions, replies: replies }; }
 
+    // MuJoCo-Policy-Slots (Microduck): laufen / skaten / hinsetzen
+    if (/\b(skate|skaten|roller fahren|drive)\b/.test(t)) { A({ op: 'mjslot', slot: 'drive' }); replies.push('Microduck·MJ: ROLLER-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/\b(hinsetzen|hinsitzen|sitzen|sit stand|sitstand)\b/.test(t)) { A({ op: 'mjslot', slot: 'sitstand' }); replies.push('Microduck·MJ: SIT·STAND-Policy aktiv.'); return { actions: actions, replies: replies }; }
+    if (/\b(laufen|gehen|walk|laufe)\b/.test(t)) { A({ op: 'mjslot', slot: 'walk' }); replies.push('Microduck·MJ: LAUF-Policy aktiv.'); return { actions: actions, replies: replies }; }
+
     // Modus
     if (/\b(manuell|manual|handbetrieb|joystick)\b/.test(t)) {
       A({ op: 'mode', mode: 'manual' }); replies.push('Modus: MANUELL. Joystick links, Buttons rechts.');
@@ -149,6 +155,11 @@
         if (ROBOT_IDS.indexOf(obj.id) < 0) { bad('unbekannte id: ' + obj.id); break; }
         actions.push({ op: 'robot', id: obj.id });
         replies.push('JSON: Roboter → ' + obj.id + '.');
+        break;
+      case 'mjslot':
+        if (['walk', 'drive', 'sitstand'].indexOf(obj.slot) < 0) { bad('unbekannter slot: ' + obj.slot); break; }
+        actions.push({ op: 'mjslot', slot: obj.slot });
+        replies.push('JSON: MuJoCo-Policy-Slot → ' + obj.slot + '.');
         break;
       case 'mode':
         if (['manual', 'policy'].indexOf(obj.mode) < 0) { bad('unbekannter mode: ' + obj.mode); break; }

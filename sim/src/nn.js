@@ -89,7 +89,9 @@
   var ARCHS = {
     duck: [12, HIDDEN, HIDDEN, 2],
     arm: [15, HIDDEN, HIDDEN, 5],
-    humanoid: [10, HIDDEN, HIDDEN, 5]
+    humanoid: [10, HIDDEN, HIDDEN, 5],
+    // MuJoCo-Microduck (obs 61 → 14 Gelenk-Offsets, exakt wie die ONNX-Policies)
+    duckmj: [61, HIDDEN, HIDDEN, 14]
   };
 
   // Validierung gegen die App-Architektur

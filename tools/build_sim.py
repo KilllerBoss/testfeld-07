@@ -9,7 +9,50 @@ SRC = ROOT / "sim" / "src"
 ASSETS = ROOT / "app" / "src" / "main" / "assets"
 DOWNLOAD = ROOT.parent / "download"
 
-JS_ORDER = ["rng.js", "nn.js", "envs.js", "console.js", "render.js", "views.js", "ui.js", "app.js"]
+JS_ORDER = ["rng.js", "nn.js", "envs.js", "console.js", "render.js", "views.js", "ui.js", "mjc.js", "app.js"]
+
+# MuJoCo/ORT-Glue für klassische <script>-Tags aufbereiten (kein ESM in
+# der WebView von file:// aus):
+MUJOCO_SRC = ROOT.parent / "reference" / "pkg" / "mujoco311" / "mujoco.js"
+ORT_SRC = ROOT.parent / "reference" / "pkg" / "ort127" / "ort.min.js"
+ORT_MJS_SRC = ROOT.parent / "reference" / "pkg" / "ort127" / "ort-wasm-simd-threaded.mjs"
+
+
+def wrap_ort_mjs() -> str:
+    """ORT-WASM-Glue (ESM) → klassisches Skript mit globaler Factory.
+    Top-Level-await/if(isNode)-Block neutralisieren, import.meta ersetzen."""
+    code = ORT_MJS_SRC.read_text(encoding="utf-8")
+    code = code.replace("import.meta.url", '"https://tf07.invalid/ort.mjs"').replace("import.meta", '{url:"https://tf07.invalid/ort.mjs"}')
+    # Node-Zweig mit Top-Level-Await entfernen (im Browser toter Code,
+    # aber klassische Scripts verzeugen sonst einen SyntaxError)
+    import re as _re
+    code = _re.sub(r'if\(isNode\)isPthread=\(await import\("worker_threads"\)\)\.workerData==="em-pthread";', 'if(isNode)throw new Error("TF07: Node-Zweig im Browser?");', code)
+    code = _re.sub(r'export default (\w+);', r'globalThis.TF07_ortWasmThreaded = \1;', code)
+    code = _re.sub(r'export\{[^}]*\};?', '', code)
+    return code + '\n;globalThis.__tf07OrtImport = function () { return Promise.resolve({ default: globalThis.TF07_ortWasmThreaded }); };\n'
+
+
+def wrap_mujoco_js() -> str:
+    code = MUJOCO_SRC.read_text(encoding="utf-8")
+    # import.meta ist in klassischen Scripts ein SyntaxError — auch wenn
+    # es nie ausgeführt wird. Ersatz: gültige absolute URL (wird nie
+    # gefetcht, da wir immer wasmBinary übergeben).
+    code = code.replace("import.meta.url", '"https://tf07.invalid/mjc/mujoco.wasm"').replace("import.meta", '{url:"https://tf07.invalid/mjc/mujoco.wasm"}')
+    code = code.replace("export default loadMujoco;", "globalThis.TF07_loadMujoco = loadMujoco;")
+    return code
+
+
+def wrap_ort_js() -> str:
+    code = ORT_SRC.read_text(encoding="utf-8")
+    # Einzige dynamische Import-Stelle auf unseren Hook umleiten (die
+    # Factory kommt aus ort.glue.js als klassisches Script — kein ESM,
+    # kein Fetch, file://-fest in der WebView)
+    old = "await import(/*webpackIgnore:true*/ /*@vite-ignore*/e)"
+    if old not in code:
+        raise SystemExit("ORT-import-Site nicht gefunden — Bundle-Schema geändert?")
+    code = code.replace(old, "await globalThis.__tf07OrtImport(e)")
+    code += "\n;globalThis.ort = (typeof ort !== 'undefined') ? ort : globalThis.ort;\n"
+    return code
 
 def main():
     template = (ROOT / "sim" / "template.html").read_text(encoding="utf-8")
@@ -42,6 +85,13 @@ def main():
     ASSETS.mkdir(parents=True, exist_ok=True)
     out1 = ASSETS / "index.html"
     out1.write_text(html, encoding="utf-8")
+    # MuJoCo/ORT-Glue in assets/mjc/ (klassische Scripts) — nur wenn Quellen existieren
+    if MUJOCO_SRC.exists() and ORT_SRC.exists():
+        (ASSETS / "mjc").mkdir(parents=True, exist_ok=True)
+        (ASSETS / "mjc" / "mujoco.wrapped.js").write_text(wrap_mujoco_js(), encoding="utf-8")
+        (ASSETS / "mjc" / "ort.glue.js").write_text(wrap_ort_mjs(), encoding="utf-8")
+        (ASSETS / "mjc" / "ort.global.js").write_text(wrap_ort_js(), encoding="utf-8")
+        print(f"  glue: mujoco.wrapped.js ({len(wrap_mujoco_js())//1024} KB), ort.glue.js, ort.global.js")
     DOWNLOAD.mkdir(parents=True, exist_ok=True)
     out2 = DOWNLOAD / "testfeld07-preview.html"
     out2.write_text(html, encoding="utf-8")

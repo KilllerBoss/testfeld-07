@@ -33,6 +33,8 @@
       training: { active: false, robot: 'duck', gens: 0, gen: 0, batchIdx: 0,
         pop: null, fits: null, envs: [], genomes: [], batchFits: null,
         history: [], bestFit: null, avgFit: null, champFit: null, champGenome: null, baseSeed: 1000 },
+      // Echtes MuJoCo (WASM) + Werks-ONNX-Policies des HF-Space
+      mjc: { ready: false, err: null, duck: null, slot: 'walk', ghosts: [], ghostRigs: [], mjRig: null, mjFrame: null },
       fps: 0
     };
     this.joystick = { x: 0, y: 0 };
@@ -94,6 +96,13 @@
     });
     var ghostRigs = [];
     this.worlds = worlds; this.envs = envs;
+
+    /* ---------- MuJoCo-Frame (MJCF ist Z-up, Renderer Y-up) ---------- */
+    var mjFrame = new TF.render.Node();
+    mjFrame.quat = [-0.7071067811865476, 0, 0, 0.7071067811865476];
+    mjFrame.visible = false;
+    worlds.duck.arena.add(mjFrame);
+    S.mjc.mjFrame = mjFrame;
 
     /* ---------- Render-Interpolation: Physik fix 30 Hz, Grafik Display-Rate.
      * visFor() mischt prev→currzustand mit alpha = akkumulierte Restzeit/DT.
@@ -241,6 +250,55 @@
       return [env.q[0], q[0], q[1], q[2]];
     }
 
+    /* ---------- MuJoCo: Boot, Fahrlogik, Training ---------- */
+    function mjcBoot() {
+      if (!TF.mjc || !TF.mjc.init) return;
+      var mjOnly = /mjonly/.test(global.location.search); // Headless-Testmodus: kein Rendering
+      TF.mjc.init(function (stg) { TF.ui.logLine('MJ › ' + stg, 'sys'); })
+        .then(function () {
+          S.mjc.ready = true;
+          S.mjc.duck = TF.mjc.makeDuck();
+          S.mjc.mjRig = TF.mjc.makeSkeletonRig(TF.render, lib, false);
+          mjFrame.add(S.mjc.mjRig.root);
+          var info = TF.mjc.info();
+          TF.ui.logLine('ECHTES MUJOCO AKTIV — Microduck (nq ' + info.nq + ', nu ' + info.nu + ') mit Original-Policies des HF-Space.', 'sys');
+          TF.ui.logLine('Joystick = Lauf-Command · "POLICY"-Knopf wechselt LAUFEN → ROLLER → SIT·STAND · Trainieren: "trainiere den microduck 100 generationen"', 'sys');
+          TF.ui.buildTopbar();
+          if (mjOnly) {
+            document.getElementById('bootVeil').classList.add('gone');
+            setInterval(function () {
+              var d = S.mjc.duck;
+              if (!d.busy) {
+                d.busy = true;
+                d.controlStepAsync().catch(function () {}).then(function () { d.busy = false; });
+              }
+            }, 20);
+          }
+        })
+        .catch(function (e) {
+          S.mjc.err = (e && e.message) || String(e);
+          TF.ui.logLine('MuJoCo nicht verfügbar (' + S.mjc.err + ') — Werkstatt-Kern bleibt aktiv.', 'warn');
+        });
+    }
+    function mjDrive(dt) {
+      var d = S.mjc.duck;
+      var lim = d.velLims();
+      d.setCmd(self.joystick.y * lim[0], 0, -self.joystick.x * lim[2]);
+      if (!d.busy) {
+        d.busy = true;
+        d.controlStepAsync()
+          .catch(function (e) { TF.ui.logLine('MJ-FEHLER: ' + e.message, 'warn'); })
+          .then(function () { d.busy = false; });
+      }
+    }
+    this.mjcCycleSlot = function () {
+      var order = ['walk', 'drive', 'sitstand'];
+      S.mjc.slot = order[(order.indexOf(S.mjc.slot) + 1) % order.length];
+      var names = { walk: 'LAUFEN (alpha walking)', drive: 'ROLLER (skating)', sitstand: 'SIT·STAND' };
+      TF.ui.logLine('Policy-Slot: ' + names[S.mjc.slot], 'sys');
+      TF.ui.status('MICRODUCK·MJ · ' + names[S.mjc.slot]);
+    };
+
     /* ---------- Neuroevolution ---------- */
     function gauss() {
       var u = 0, v = 0;
@@ -257,7 +315,13 @@
     }
 
     this.startTraining = function (robot, gens) {
+      // MuJoCo-Ente da? Dann auf dem echten Roboter trainieren.
+      if (robot === 'duck' && S.mjc.ready) {
+        TF.ui.logLine('MuJoCo aktiv — Training läuft auf dem echten Microduck (61→14).', 'sys');
+        robot = 'duckmj';
+      }
       if (S.training.active) this.stopTraining();
+      var mj = robot === 'duckmj';
       S.training = {
         active: true, robot: robot, gens: gens, gen: 0, batchIdx: 0,
         pop: [], fits: new Float64Array(40), envs: [], genomes: [],
@@ -272,17 +336,20 @@
         else S.training.pop.push(TF.nn.initGenome(1234 + i * 17, TF.nn.ARCHS[robot][0], TF.nn.ARCHS[robot][3]));
       }
       newBatch();
-      buildGhosts(robot);
-      worlds[S.robot].rig.root.visible = false;
-      TF.ui.logLine('TRAINING ' + robot.toUpperCase() + ': ' + gens + ' Generationen, Population 40, 8 Geister/Batch.', 'sys');
+      if (mj) buildMjGhosts(); else buildGhosts(robot);
+      rigRootFor(robot).visible = false;
+      TF.ui.logLine('TRAINING ' + robot.toUpperCase() + ': ' + gens + ' Generationen, Population 40, ' + (mj ? '4 MuJoCo-Geister/Batch (10 Batches)' : '8 Geister/Batch') + '.', 'sys');
       TF.ui.buildTopbar();
     };
+    function rigRootFor(robot) {
+      return robot === 'duckmj' ? (S.mjc.mjRig ? S.mjc.mjRig.root : mjFrame) : worlds[robot].rig.root;
+    }
     this.stopTraining = function () {
       if (!S.training.active) return;
       S.training.active = false;
       finishChampion('abgebrochen');
-      worlds[S.training.robot].rig.root.visible = true;
-      clearGhosts();
+      rigRootFor(S.training.robot).visible = true;
+      if (S.training.robot === 'duckmj') clearMjGhosts(); else clearGhosts();
       TF.ui.logLine('Training beendet (Generation ' + S.training.gen + ').', 'sys');
       TF.ui.buildTopbar();
       TF.ui.updateTraining(S.training);
@@ -293,12 +360,21 @@
     };
     function newBatch() {
       var T = S.training;
+      var mj = T.robot === 'duckmj';
+      var per = mj ? 4 : 8;
       T.envs = [];
       T.genomes = [];
-      var seed = T.baseSeed + T.gen;
-      for (var k = 0; k < 8; k++) {
-        T.envs.push(TF.makeEnv(T.robot, seed));
-        T.genomes.push(T.pop[T.batchIdx * 8 + k]);
+      if (mj) {
+        for (var k = 0; k < per; k++) {
+          T.envs.push(TF.mjc.makeGhost());
+          T.genomes.push(T.pop[T.batchIdx * per + k]);
+        }
+      } else {
+        var seed = T.baseSeed + T.gen;
+        for (var k2 = 0; k2 < per; k2++) {
+          T.envs.push(TF.makeEnv(T.robot, seed));
+          T.genomes.push(T.pop[T.batchIdx * per + k2]);
+        }
       }
     }
     function endGeneration() {
@@ -338,36 +414,63 @@
       TF.ui.logLine('Champion ' + T.robot.toUpperCase() + ': fit ' + fit.toFixed(1) + ' (gen ' + T.gen + ', ' + reason + ')' + (isNew ? ' — NEUER REKORD' : ''), 'sys');
     }
 
-    /* Trainings-Schritt: 3 Env-Substeps pro Frame (sichtbar im Gerät) */
+    /* Trainings-Schritt: pro Frame mehrere Env-Substeps (sichtbar im Gerät) */
     function trainStep() {
       var T = S.training;
       if (!T.active) return;
-      for (var it = 0; it < 3; it++) {
+      var mj = T.robot === 'duckmj';
+      var per = mj ? 4 : 8;
+      var batches = mj ? 10 : 5;
+      var iters = mj ? 1 : 3;
+      for (var it = 0; it < iters; it++) {
         var allDone = true;
-        for (var k = 0; k < 8; k++) {
+        for (var k = 0; k < per; k++) {
           var env = T.envs[k];
-          if (env._done) continue;
+          if (env._done || env.done) continue;
           allDone = false;
           var acts = TF.nn.forward(T.genomes[k], env.getObs(), TF.nn.ARCHS[T.robot][3]);
           var r;
-          if (T.robot === 'duck') r = env.step(acts[0], acts[1]).done;
+          if (mj) r = env.step(acts);
+          else if (T.robot === 'duck') r = env.step(acts[0], acts[1]).done;
           else if (T.robot === 'arm') r = env.step(acts[0], acts[1], acts[2], acts[3], acts[4]).done;
           else r = env.step(acts).done;
           if (r) env._done = true;
         }
         if (allDone) {
-          for (k = 0; k < 8; k++) T.fits[T.batchIdx * 8 + k] = T.envs[k].fit;
+          for (k = 0; k < per; k++) T.fits[T.batchIdx * per + k] = T.envs[k].fit;
           T.batchIdx++;
-          if (T.batchIdx >= 5) { endGeneration(); if (T.gen >= T.gens) { T.active = false; finishChampion('abgeschlossen'); worlds[T.robot].rig.root.visible = true; clearGhosts(); TF.ui.logLine('TRAINING ABGESCHLOSSEN: ' + T.gens + ' Generationen.', 'sys'); TF.ui.buildTopbar(); save(); TF.ui.updateTraining(T); return; } }
+          if (T.batchIdx >= batches) { endGeneration(); if (T.gen >= T.gens) { T.active = false; finishChampion('abgeschlossen'); rigRootFor(T.robot).visible = true; if (mj) clearMjGhosts(); else clearGhosts(); TF.ui.logLine('TRAINING ABGESCHLOSSEN: ' + T.gens + ' Generationen.', 'sys'); TF.ui.buildTopbar(); save(); TF.ui.updateTraining(T); return; } }
           newBatch();
         }
       }
-      for (k = 0; k < 8; k++) {
-        if (ghostRigs[k] && T.envs[k]) ghostRigs[k].update(T.envs[k]);
+      if (mj) {
+        for (k = 0; k < 4; k++) {
+          if (S.mjc.ghostRigs[k] && T.envs[k]) S.mjc.ghostRigs[k].update(T.envs[k].data);
+        }
+      } else {
+        for (k = 0; k < 8; k++) {
+          if (ghostRigs[k] && T.envs[k]) ghostRigs[k].update(T.envs[k]);
+        }
       }
     }
 
     /* ---------- Geister ---------- */
+    function buildMjGhosts() {
+      clearMjGhosts();
+      for (var k = 0; k < 4; k++) {
+        S.mjc.ghosts.push(TF.mjc.makeGhost());
+        var rig = TF.mjc.makeSkeletonRig(TF.render, lib, true);
+        S.mjc.mjFrame.add(rig.root);
+        S.mjc.ghostRigs.push(rig);
+      }
+    }
+    function clearMjGhosts() {
+      for (var k = 0; k < S.mjc.ghostRigs.length; k++) {
+        S.mjc.ghostRigs[k].root.parent = null;
+      }
+      S.mjc.ghostRigs = [];
+      S.mjc.ghosts = [];
+    }
     function buildGhosts(robot) {
       clearGhosts();
       var mk = robot === 'duck' ? TF.views.DuckRig : robot === 'arm' ? TF.views.ArmRig : TF.views.HumanoidRig;
@@ -398,6 +501,12 @@
     };
     this.setMode = function (m) {
       S.mode = m;
+      // Microduck-MJ: POLICY-Knopf zyklisiert die Werks-Policy-Slots
+      if (m === 'policy' && S.mjc.ready && S.robot === 'duck') {
+        this.mjcCycleSlot();
+        TF.ui.buildTopbar();
+        return;
+      }
       if (m === 'policy') {
         if (!S.champions[S.robot]) TF.ui.logLine('Noch kein Champion für ' + S.robot.toUpperCase() + ' — erst TRAINING starten oder Policy importieren.', 'warn');
         else TF.ui.logLine('POLICY-MODUS: Champion gen ' + S.champions[S.robot].gen + ', fit ' + S.champions[S.robot].fit.toFixed(1) + '.', 'sys');
@@ -430,6 +539,11 @@
     };
     this.haltHumanoid = function () { this.joystick.y = 0; };
     this.resetRobot = function () {
+      if (S.robot === 'duck' && S.mjc.ready && S.mjc.duck) {
+        S.mjc.duck.reset();
+        TF.ui.logLine('MICRODUCK·MJ zurückgesetzt (STAND-Keyframe).', 'sys');
+        return;
+      }
       envs[S.robot].reset(envs[S.robot].rngSeed || 1);
       TF.ui.logLine(S.robot.toUpperCase() + ' zurückgesetzt.', 'sys');
     };
@@ -511,7 +625,8 @@
         switch (a.op) {
           case 'train': this.startTraining(a.robot, a.gens); break;
           case 'trainStop': this.stopTraining(); break;
-          case 'robot': this.setRobot(a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
+          case 'robot': this.setRobot(a.id === 'duckmj' ? 'duck' : a.id); TF.ui.buildBtnStack(); TF.ui.buildTopbar(); break;
+          case 'mjslot': if (S.mjc.ready) { S.mjc.slot = a.slot; TF.ui.logLine('MuJoCo-Policy-Slot: ' + a.slot.toUpperCase(), 'sys'); } else TF.ui.logLine('MuJoCo nicht aktiv — Slot nicht gesetzt.', 'warn'); break;
           case 'mode': this.setMode(a.mode); break;
           case 'tod': this.setTod(a.tod); TF.ui.buildTopbar(); break;
           case 'save': this.saveChampionNamed(a.name); break;
@@ -530,7 +645,7 @@
       var T = S.training;
       var lines = [
         'STATUS — Roboter: ' + S.robot.toUpperCase() + ' | Modus: ' + S.mode.toUpperCase() + ' | TOD: ' + S.tod.toUpperCase(),
-        'Champions: ' + ['duck', 'arm', 'humanoid'].map(function (r) {
+        'Champions: ' + ['duck', 'duckmj', 'arm', 'humanoid'].map(function (r) {
           var c = S.champions[r];
           return r + (c ? '(gen ' + c.gen + ', fit ' + c.fit.toFixed(1) + ', ' + c.src + ')' : '(—)');
         }).join('  '),
@@ -626,6 +741,7 @@
         if (e.message !== lastErrMsg || now - lastErrT > 1000) {
           lastErrMsg = e.message; lastErrT = now;
           TF.ui.logLine('LOOP-FEHLER: ' + e.message, 'warn');
+          try { global.document.cookie = 'tf07mjerr=' + encodeURIComponent('LOOP: ' + e.message).slice(0, 180) + ';path=/'; } catch (_) {}
           try { console.error('TF07 loop error:', e); } catch (_) {}
         }
       }
@@ -651,7 +767,10 @@
       }
 
       var alpha = 0;
-      if (!S.training.active) {
+      if (S.mjc.ready && S.robot === 'duck' && !S.training.active) {
+        // Echtes MuJoCo: 50-Hz-Policy-Regelung, Joystick = Velocity-Command
+        mjDrive(dt);
+      } else if (!S.training.active) {
         acc += dt;
         var n = 0;
         while (acc >= TF.DT && n < 4) { stepMain(TF.DT); acc -= TF.DT; n++; }
@@ -665,6 +784,28 @@
       var env = envs[S.robot], w = worlds[S.robot];
       // Szenengraph-Transforme aktualisieren (vor dem Zeichnen!)
       w.arena.updateWorld(null);
+      if (S.mjc.ready && S.robot === 'duck' && !S.training.active) {
+        // Microduck-MJ: Skelett-Rig aus qpos, alter Rig + Zielmarker aus
+        var d2 = S.mjc.duck;
+        mjFrame.visible = true;
+        if (S.mjc.mjRig) S.mjc.mjRig.update(d2.data);
+        worlds.duck.rig.root.visible = false;
+        w.target.root.visible = false;
+        var qx = d2.data.qpos[0], qy = d2.data.qpos[1];
+        var focusMj = [qx, 0.35, -qy];
+        var cxM = focusMj[0] + 1.6 * Math.cos(cam.pitch) * Math.sin(cam.yaw);
+        var cyM = focusMj[1] + 1.6 * Math.sin(cam.pitch);
+        var czM = focusMj[2] + 1.6 * Math.cos(cam.pitch) * Math.cos(cam.yaw);
+        renderer.camDist = 1.6;
+        renderer.setCamera([cxM, cyM, czM], focusMj, [0, 1, 0]);
+        renderer.begin();
+        renderer.drawNode(w.arena, 1);
+        TF.ui.status('MICRODUCK·MJ · ' + S.mjc.slot.toUpperCase() + (d2.fallen ? ' · AUFSTEHEN…' : '') +
+          ' · REND ' + S.fps + ' FPS · 50 HZ · x=' + qx.toFixed(2) + ' m');
+        requestAnimationFrame(frame);
+        return; // eigener Pfad fertig gezeichnet
+      }
+      mjFrame.visible = false;
       // Rig-Updates — interpolierte Anzeige-Pose (kein Physik-Zustand!)
       var vis = visFor(S.robot, env, S.training.active ? 1 : alpha);
       if (S.robot === 'duck') {
@@ -741,7 +882,8 @@
         TF.ui.logLine('Willkommen in der Werkstatt. „hilfe" zeigt alle Befehle (Deutsch + JSON).', 'sys');
         if (global.AndroidBridge) TF.ui.logLine('Android-Bridge erkannt: Export/Import in Dokumente möglich.', 'sys');
       });
-      requestAnimationFrame(frame);
+      mjcBoot();
+      if (!/mjonly/.test(global.location.search)) requestAnimationFrame(frame);
     };
   }
 

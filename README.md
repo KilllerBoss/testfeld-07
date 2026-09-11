@@ -175,13 +175,42 @@ policies/                versionierte Champion-Policies (Datum/Generation im Nam
 .github/workflows/       build-apk.yml (APK-Artifact bei jedem Push)
 ```
 
-## 9. Phase 2 (geplant, nicht gebaut): MuJoCo via NDK/JNI
+## 9. MuJoCo-Kern (GEBAUT): echter Microduck mit Original-Policies
 
-Ablösung der JS-Approximationen durch echte Dynamik:
-1. MuJoCo 3.x mit NDK cross-kompilieren (`mujoco/build` → `libmujoco.so`).
-2. JNI-Brücke (`MjStep.step(mjcf, qpos, ctrl)`), MJCF-Modelle für die 3 Roboter
-   (`assets/mjcf/*.xml`), RL-Obs aus `qpos/qvel` wie beim microduck-Space
-   (61D-Obs-Muster).
-3. Schrittweise Ablösung pro Roboter: erst Duck (Roller trivial), dann Arm
-   (Kontakte am Greifer), dann Humanoid (echte Fußkontakte). Die
-   Neuroevolution/Policy-Struktur bleibt unverändert — nur `step()` tauscht.
+Der Duck-Teil läuft jetzt — wie der HF-Space pollen-robotics/microduck-simulator —
+auf **echtem MuJoCo als WASM** (@mujoco/mujoco 3.11.0) mit den **Original-Assets
+des Space**:
+
+- **MJCF**: `robot_allcollisions.xml` des Space (onshape-to-robot-Export des
+  echten Microduck), Visual-Geoms gestrippt, Boden/4 Wände/Ball/STAND-Keyframe
+  injiziert (identisch zu `buildPhysicsXml` in game.js) → `assets/mjc/duck_legs.xml`.
+  Timestep 5 ms, Regelung 50 Hz (Decimation 4) — exakt wie im Original.
+- **Werks-Policies**: 9 ONNX-Modelle des Space (`BEST_alpha_walking`,
+  `BEST_roller` = Skating, `BEST_alpha_sitstand`, `BEST_alpha_stand` =
+  Auto-Aufstehen bei Sturz, u. a.) via onnxruntime-web (WASM-EP).
+- **Obs/Akt-Verdrahtung** (61 → 14): gyro(3) + projizierte Gravitation(3) +
+  (qpos−DEFAULT_POSE)(14) + qvel(14) + lastAction(14) + cmd(13);
+  `ctrl = DEFAULT_POSE + act × 1.0` — 1:1 aus game.js übernommen.
+- **Steuerung**: Joystick = Velocity-Command (vx/wz, Limits wie der Runtime:
+  Laufen 0.25/−0.2/1.0, Roller 0.6/−0.5/0.3). „POLICY"-Knopf zyklisiert
+  LAUFEN → ROLLER → SIT·STAND; `{"cmd":"mjslot","slot":"drive"}` in der
+  Konsole; Anzeige `MICRODUCK·MJ · … · 50 HZ`.
+- **Neuroevolution auf MuJoCo**: `trainiere den microduck N generationen`
+  trainiert ein MLP(61→32→32→14) als Gelenk-Offset-Policy auf der echten
+  Dynamik (4 Geister/Batch, Fitness = Vorwärtsfortschritt, Sturz = Ende).
+  Champions-Format unverändert (`robot:"duckmj"`, arch `[61,32,32,14]`).
+- **Fallback**: Schlägt WASM/Init fehl (z. B. Ein-Datei-Desktop-Preview über
+  file://), läuft die Werkstatt-Sandbox mit dem eigenen deterministischen
+  Kern weiter — die App ist damit immer benutzbar.
+- **Danksagung**: Modelle + Policies + Verdrahtungsmuster stammen aus dem
+  Space von pollen-robotics (MIT/© Microsoft für ORT; MuJoCo Apache-2.0).
+  Die Kaggle-Kernels (§5) spiegeln bislang noch die Werkstatt-Envs —
+  Migration auf `pip mujoco` mit demselben MJCF ist vorbereitet.
+
+## 10. Phase 3 (geplant): MuJoCo für Arm/Humanoid
+
+MJCF für ARMBOT/HUMANOID (z. B. aus MuJoCo Menagerie), gleiche
+WASM-Integration wie §9; danach Ablösung des NDK-Pfads (ehem. Phase 2):
+1. MuJoCo 3.x mit NDK cross-kompilieren (`libmujoco.so`), JNI-Brücke.
+2. ML-Spiegel der 3 Roboter auf `pip mujoco` (Determinismus JS≙WASM≙Python).
+3. Schrittweise Ablösung pro Roboter — Neuroevolution/Policy-Struktur bleibt.
