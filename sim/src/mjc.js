@@ -38,15 +38,31 @@
   };
   var EAGER = ['walk', 'drive', 'sitstand', 'stand'];
 
-  /* ---------- Asset-Lader: AndroidBridge (file://) oder fetch (http) ---------- */
+  /* ---------- Asset-Lader: AndroidBridge (file://) oder fetch (http) ----------
+   * WICHTIG (v1.1-Fix): Die Java-Bridge (MainActivity) öffnet getAssets().open(
+   * "mjc/" + pfad). JS darf daher NUR den relativen Pfad OHNE "mjc/"-Präfix
+   * übergeben — vorher wurde doppelt präfixiert ("mjc/mjc/…") → Bridge lieferte
+   * null → atob("null") erzeugte Müll-Bytes → WASM-Boot scheiterte still →
+   * unsichtbarer Werkstatt-Fallback (sah aus wie die alte Version!). */
   function b64ToBytes(b64) {
+    if (!b64) throw new Error('Bridge: leere Base64-Antwort (Asset fehlt?)');
     var bin = global.atob(b64), n = bin.length, out = new Uint8Array(n);
     for (var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
     return out;
   }
+  function bridgePath(rel) {
+    var p = String(rel == null ? '' : rel);
+    while (p.charAt(0) === '/') p = p.slice(1);
+    if (p.slice(0, 4) === 'mjc/') p = p.slice(4); // Java-Brücke Präfixiert selbst
+    return p;
+  }
   function readAsset(rel) {
     if (global.AndroidBridge && global.AndroidBridge.readAssetBase64) {
-      return Promise.resolve(b64ToBytes(global.AndroidBridge.readAssetBase64(MJC_DIR + rel)));
+      var b64;
+      try { b64 = global.AndroidBridge.readAssetBase64(bridgePath(rel)); }
+      catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+      if (!b64) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+      return Promise.resolve(b64ToBytes(b64));
     }
     return global.fetch(MJC_DIR + rel).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status + ' für ' + rel);
@@ -55,7 +71,11 @@
   }
   function readAssetText(rel) {
     if (global.AndroidBridge && global.AndroidBridge.readAssetText) {
-      return Promise.resolve(global.AndroidBridge.readAssetText(MJC_DIR + rel));
+      var t;
+      try { t = global.AndroidBridge.readAssetText(bridgePath(rel)); }
+      catch (e) { return Promise.reject(new Error('Bridge-Fehler bei mjc/' + rel + ': ' + e)); }
+      if (t == null) return Promise.reject(new Error('Bridge: Asset fehlt (mjc/' + rel + ')'));
+      return Promise.resolve(t);
     }
     return global.fetch(MJC_DIR + rel).then(function (r) { return r.text(); });
   }
@@ -976,8 +996,14 @@
     // Nur für Tests: Kern von außen setzen (Node-Smoke ohne Browser)
     __setCore: function (c) { mjc = c; },
     __setRobot: function (name, r) { robots[name] = r; },
+    bridgePath: bridgePath,
+    _readAsset: readAsset,
+    _readAssetText: readAssetText,
     __readAsset: readAsset,
     __readAssetText: readAssetText,
+    policiesLoaded: function () {
+      return Object.keys(sessions);
+    },
     info: function () {
       if (!mjc) return null;
       return { nq: mjc.model.nq, nv: mjc.model.nv, nu: mjc.model.nu, nsensor: mjc.model.nsensor };

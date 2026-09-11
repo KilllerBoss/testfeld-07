@@ -1,0 +1,36 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.testfeld07.app-release-4:/values_values.arsc.flat",
+            "map": [
+                {
+                    "source": "/home/z/my-project/testfeld-07/app/src/main/res/values/strings.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "48",
+                        "endOffsets": "99"
+                    },
+                    "to": {
+                        "startLines": "3",
+                        "startColumns": "4",
+                        "startOffsets": "95",
+                        "endColumns": "48",
+                        "endOffsets": "139"
+                    }
+                },
+                {
+                    "source": "/home/z/my-project/testfeld-07/app/src/main/res/values/colors.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "39",
+                        "endOffsets": "90"
+                    }
+                }
+            ]
+        }
+    ]
+}

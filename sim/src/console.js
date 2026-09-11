@@ -67,6 +67,12 @@
     }
     if (/^quack$/.test(t) || /quatsch/.test(t)) { A({ op: 'quack' }); replies.push('QUACK! 🦆'); return { actions: actions, replies: replies }; }
 
+    // Engine/Version („welche Version ist das?") — sichtbare Kennung der APK
+    if (/^(engine|engine\??|version|version\??|build|buildinfo|info)\b/.test(t) || /welche version/.test(t)) {
+      A({ op: 'engine' }); replies.push('Engine-Info wird ausgegeben …');
+      return { actions: actions, replies: replies };
+    }
+
     // Training
     if (/\b(stop|stopp|pause|halt)\b/.test(t) && !/speicher/.test(t)) {
       A({ op: 'trainStop' }); replies.push('Training angehalten.');
@@ -198,6 +204,7 @@
         break;
       case 'reset': actions.push({ op: 'reset' }); replies.push('JSON: Reset.'); break;
       case 'status': actions.push({ op: 'status' }); replies.push('JSON: Status folgt.'); break;
+      case 'engine': actions.push({ op: 'engine' }); replies.push('JSON: Engine-Info folgt.'); break;
       case 'target': actions.push({ op: 'target' }); replies.push('JSON: Neues Ziel.'); break;
       case 'export': actions.push({ op: 'export' }); replies.push('JSON: Export läuft.'); break;
       case 'import':

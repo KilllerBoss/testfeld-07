@@ -264,6 +264,19 @@
 
   function status(text) { el('statusLine').textContent = text; }
 
+  /* ---------- Engine-Badge (auf einen Blick: MUJOCO vs FALLBACK) ---------- */
+  function setEngineBadge(st) {
+    var b = el('engineBadge');
+    if (!b) return;
+    var build = (global.TF07 && global.TF07.BUILD) || {};
+    var tag = build.version ? 'v' + build.version : '';
+    if (build.id) tag += (tag ? '·' : '') + build.id;
+    b.classList.remove('ok', 'load', 'fail');
+    if (st === 'ok') { b.textContent = 'MUJOCO ' + tag; b.classList.add('ok'); }
+    else if (st === 'fail') { b.textContent = 'FALLBACK ' + tag; b.classList.add('fail'); }
+    else { b.textContent = 'MJ … ' + tag; b.classList.add('load'); }
+  }
+
   TF.ui = {
     init: init,
     logLine: logLine,
@@ -272,6 +285,7 @@
     updateTraining: updateTraining,
     openImport: openImport,
     bootSequence: bootSequence,
-    status: status
+    status: status,
+    setEngineBadge: setEngineBadge
   };
 })(typeof window !== 'undefined' ? window : globalThis);

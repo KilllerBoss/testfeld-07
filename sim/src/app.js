@@ -270,7 +270,8 @@
 
     /* ---------- MuJoCo: Boot, Fahrlogik, Training ---------- */
     function mjcBoot() {
-      if (!TF.mjc || !TF.mjc.init) return;
+      if (!TF.mjc || !TF.mjc.init) { TF.ui.setEngineBadge('fail'); return; }
+      TF.ui.setEngineBadge('load');
       var mjOnly = /mjonly/.test(global.location.search); // Headless-Testmodus: kein Rendering
       TF.mjc.init(function (stg) { TF.ui.logLine('MJ › ' + stg, 'sys'); })
         .then(function () {
@@ -279,6 +280,7 @@
           S.mjc.mjRig = TF.mjc.makeSkeletonRig(TF.render, lib, false);
           mjFrame.add(S.mjc.mjRig.root);
           var info = TF.mjc.info();
+          TF.ui.setEngineBadge('ok');
           TF.ui.logLine('ECHTES MUJOCO AKTIV — Microduck (nq ' + info.nq + ', nu ' + info.nu + ') mit Original-Policies des HF-Space.', 'sys');
           TF.ui.logLine('Joystick = Lauf-Command · "POLICY"-Knopf wechselt LAUFEN → ROLLER → SIT·STAND · Trainieren: "trainiere den microduck 100 generationen"', 'sys');
           TF.ui.buildTopbar();
@@ -295,7 +297,9 @@
         })
         .catch(function (e) {
           S.mjc.err = (e && e.message) || String(e);
+          TF.ui.setEngineBadge('fail');
           TF.ui.logLine('MuJoCo nicht verfügbar (' + S.mjc.err + ') — Werkstatt-Kern bleibt aktiv.', 'warn');
+          TF.ui.logLine('Konsole: „version“ zeigt den Engine-Report.', 'warn');
         });
     }
     function mjDrive(dt) {
@@ -768,6 +772,7 @@
           case 'target': this.newTarget(); break;
           case 'export': this.exportChampion(); break;
           case 'status': this.reportStatus(); break;
+          case 'engine': this.reportEngine(); break;
           case 'importPolicy': this.importPolicyObj(a.policy); break;
           case 'quack': this.quack(); break;
           case 'fileImport': TF.ui.openImport(); break;
@@ -786,6 +791,24 @@
         'Env: ' + S.robot + ' fit=' + envs[S.robot].fit.toFixed(1) + ' steps=' + (envs[S.robot].steps || 0)
       ];
       for (var i = 0; i < lines.length; i++) TF.ui.logLine(lines[i], 'sys');
+    };
+    /* Engine-/Versions-Report — sichtbare Kennung, damit man die richtige APK
+     * sofort erkennt (Nutzer-Frage: „Ist das das neuste APK?"), Antwort über
+     * Konsole: „version" oder Badge im Topbar. */
+    this.reportEngine = function () {
+      var B = (global.TF07 && global.TF07.BUILD) || {};
+      TF.ui.logLine('ENGINE-REPORT — BUILD v' + (B.version || '?') + ' · ' + (B.id || '?'), 'sys');
+      if (S.mjc.ready && TF.mjc && TF.mjc.isReady()) {
+        var i = TF.mjc.info();
+        var robots = ['duck', 'arm', 'hum'].filter(function (k) { return TF.mjc.hasRobot(k); });
+        TF.ui.logLine('ENGINE: ECHTES MUJOCO (WASM) AKTIV — duck nq ' + i.nq + '/nu ' + i.nu +
+          ' · MJ-Roboter geladen: ' + (robots.join(', ') || 'duck (Basis)') +
+          ' · ONNX-Policies: ' + TF.mjc.policiesLoaded().join(', '), 'sys');
+        TF.ui.logLine('Physik: MJCF timestep 5 ms, Regelung 50 Hz (Decimation 4) — Policies vom HF-Space pollen-robotics/microduck-simulator.', 'sys');
+      } else {
+        TF.ui.logLine('ENGINE: WERKSTATT-FALLBACK (Eigenbau-Kern) — MuJoCo NICHT aktiv.', 'warn');
+        TF.ui.logLine('MJ-Fehler: ' + (S.mjc.err || 'lädt noch … (Badge im Topbar zeigt den Status)'), 'warn');
+      }
     };
 
     /* ---------- Gemini-Brücke ---------- */
@@ -1049,7 +1072,8 @@
       var lsOk = true;
       try { global.localStorage.setItem('tf07.test', '1'); global.localStorage.removeItem('tf07.test'); } catch (e) { lsOk = false; }
       TF.ui.bootSequence([
-        'TESTFELD·07 BIOS v2.0.0 — (c) Werkstatt',
+        'TESTFELD·07 BIOS v2.1.0 — (c) Werkstatt',
+        'BUILD: ' + ((global.TF07 && global.TF07.BUILD) ? 'v' + global.TF07.BUILD.version + ' · ' + global.TF07.BUILD.id : 'unbekannt') + ' — MJCF + ONNX',
         'CPU: WEBVIEW-ARM64 ................ OK',
         'GRAFIK: ' + gpu.slice(0, 34) + (softGL ? ' [SOFTWARE]' : '') + ' ... OK',
         'PHYSIK: MUJOCO 3.11 (WASM) + TF07 ... OK',

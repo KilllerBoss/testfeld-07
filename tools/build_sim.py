@@ -3,11 +3,30 @@
 (komplette Sim in einer Datei, offline-fähig — Vorgabe AGENT.md).
 Erzeugt zusätzlich download/testfeld07-preview.html für den Desktop-Test."""
 import pathlib
+import re
+import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "sim" / "src"
 ASSETS = ROOT / "app" / "src" / "main" / "assets"
 DOWNLOAD = ROOT.parent / "download"
+
+
+def build_id() -> str:
+    """Git-Kurz-Hash als sichtbare Build-Kennung (Badge/BIOS/Konsole)."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except Exception:
+        return "dev"
+
+
+def app_version() -> str:
+    """versionName aus app/build.gradle (eine Quelle der Wahrheit)."""
+    gradle = (ROOT / "app" / "build.gradle").read_text(encoding="utf-8")
+    m = re.search(r'versionName\s+"([^"]+)"', gradle)
+    return m.group(1) if m else "0.0.0"
 
 JS_ORDER = ["rng.js", "nn.js", "envs.js", "console.js", "render.js", "views.js", "ui.js", "mjc.js", "app.js"]
 
@@ -76,6 +95,12 @@ def main():
                 print(f"WARN: builtin-Policy {f.name} übersprungen: {e}")
     js += ("\n\n/* ======== eingebaute Champions ======== */\n"
            + "TF07.BUILTIN_POLICIES = " + repr(builtin).replace("'", '"') + ";\n")
+    # Sichtbare Build-Kennung: Badge im Topbar (MUJOCO v1.1.0·abc1234),
+    # BIOS-Zeile und Konsole („version") lesen TF07.BUILD.
+    ver, gid = app_version(), build_id()
+    js += (f"\n\n/* ======== Build-Kennung ======== */\n"
+           f"TF07.BUILD = {{ version: '{ver}', id: '{gid}' }};\n")
+    print(f"  build: v{ver} · {gid}")
     if builtin:
         for r, p in builtin.items():
             print(f"  eingebaut: {r} (gen {p.get('gen')}, fit {round(p.get('fit',0),1)}, src {p.get('src')})")

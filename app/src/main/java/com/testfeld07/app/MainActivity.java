@@ -120,11 +120,20 @@ public class MainActivity extends Activity {
     /** JS-Brücke — die Konsole der App ruft diese Methoden. */
     private class Bridge {
 
+        /** v1.1-Fix: JS übergibt teils "mjc/…", teils relativ — normalisieren,
+         * damit NIE doppelt präfixiert wird ("mjc/mjc/…" → Asset-Load still tot). */
+        private String relAsset(String path) {
+            String p = path == null ? "" : path;
+            while (p.startsWith("/")) p = p.substring(1);
+            if (p.startsWith("mjc/")) p = p.substring(4);
+            return p;
+        }
+
         @JavascriptInterface
         public String readAssetBase64(String path) {
             // MuJoCo/ORT-WASM + MJCF-Meshes aus assets/ (offline, kein fetch auf file://)
             try {
-                InputStream in = getAssets().open("mjc/" + path);
+                InputStream in = getAssets().open("mjc/" + relAsset(path));
                 java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                 byte[] buf = new byte[65536];
                 int n;
@@ -139,7 +148,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String readAssetText(String path) {
             try {
-                InputStream in = getAssets().open("mjc/" + path);
+                InputStream in = getAssets().open("mjc/" + relAsset(path));
                 BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
                 StringBuilder sb = new StringBuilder();
                 String line;
