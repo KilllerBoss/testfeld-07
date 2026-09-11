@@ -22,7 +22,15 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Sim bauen (assets/index.html)
+      - name: Node 22 (Tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Tests (Dist-Integrität, Bridge-Vertrag, Verkabelung, Identität)
+        run: node tests/test_official_bundle.mjs
+
+      - name: Sim-Assets verifizieren (offizieller microduck-simulator-Dist)
         run: python3 tools/build_sim.py
 
       - name: APK bauen (Release, debug-signiert)
@@ -31,6 +39,6 @@ jobs:
       - name: APK als Artifact hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: testfeld07-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          name: trainrobot-apk
+          path: app/build/outputs/apk/release/Trainrobot.apk
           if-no-files-found: error

@@ -1,7 +1,0 @@
-com.testfeld07.app-pngs-0 /home/z/my-project/testfeld-07/app/build/generated/res/pngs/release
-com.testfeld07.app-resValues-1 /home/z/my-project/testfeld-07/app/build/generated/res/resValues/release
-com.testfeld07.app-packageReleaseResources-2 /home/z/my-project/testfeld-07/app/build/intermediates/incremental/release/packageReleaseResources/merged.dir
-com.testfeld07.app-packageReleaseResources-3 /home/z/my-project/testfeld-07/app/build/intermediates/incremental/release/packageReleaseResources/stripped.dir
-com.testfeld07.app-release-4 /home/z/my-project/testfeld-07/app/build/intermediates/merged_res/release/mergeReleaseResources
-com.testfeld07.app-main-5 /home/z/my-project/testfeld-07/app/src/main/res
-com.testfeld07.app-release-6 /home/z/my-project/testfeld-07/app/src/release/res

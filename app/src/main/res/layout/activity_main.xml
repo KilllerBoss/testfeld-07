@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="#0B0B10">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp"
+        android:gravity="center_horizontal">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/title"
+            android:textColor="#EDEDF2"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/subtitle"
+            android:textColor="#9CA3AF"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnSim"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:backgroundTint="#22C55E"
+            android:textColor="#04140A"
+            android:textStyle="bold"
+            android:padding="16dp"
+            android:text="@string/sim_open" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/sim_desc"
+            android:textColor="#6B7280"
+            android:textSize="12sp" />
+
+        <CheckBox
+            android:id="@+id/geminiToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="#EDEDF2"
+            android:text="@string/gemini_toggle" />
+
+        <EditText
+            android:id="@+id/geminiKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/gemini_key_hint"
+            android:inputType="textPassword"
+            android:textColor="#EDEDF2"
+            android:textColorHint="#4B5563" />
+
+        <EditText
+            android:id="@+id/mission"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/mission_hint"
+            android:inputType="text"
+            android:textColor="#EDEDF2"
+            android:textColorHint="#4B5563" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:textColor="#9CA3AF"
+            android:text="Bereit." />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:fontFamily="monospace"
+            android:textSize="11sp"
+            android:textColor="#4B5563"
+            android:text="Trainrobot v2.0.0 · offizieller microduck-simulator (MuJoCo-WASM + onnxruntime-web) · appassets.androidplatform.net" />
+
+    </LinearLayout>
+</ScrollView>

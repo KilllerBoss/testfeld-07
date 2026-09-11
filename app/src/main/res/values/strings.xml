@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Testfeld·07</string>
+    <string name="app_name">Trainrobot</string>
+    <string name="title">Trainrobot — RL-Trainingssimulator</string>
+    <string name="subtitle">Offizieller microduck-simulator-Kern: MuJoCo-WASM-Physik, trainierte Policy @ 50 Hz, komplett offline auf dem Gerät.</string>
+    <string name="sim_open">3D-Simulation starten</string>
+    <string name="sim_desc">Touch-Stick steuert direkt · Laufen, Rollen, Sitzen, Stehen, Ball-Kicks. Kein Fallback — die App startet direkt in die echte Physiksimulation.</string>
+    <string name="gemini_toggle">Gemini-High-Level aktiv (Subgoals 1–2 Hz, Benachrichtigungen)</string>
+    <string name="gemini_key_hint">Gemini API-Key (optional, bleibt auf dem Gerät)</string>
+    <string name="mission_hint">Mission für Gemini (z. B. Laufe 10 s geradeaus, dann drehe 180°)</string>
+    <string name="autopilot_start">Autopilot: AUS</string>
+    <string name="autopilot_stop">Autopilot: AN</string>
+    <string name="sim_reset">Reset</string>
+    <string name="sim_back">Zurück</string>
+    <string name="sim_ready">3D-Sim &amp; Bridge bereit. Autopilot (Gemini) startbar.</string>
+    <string name="sim_notify_hint">Benachrichtigungen erscheinen hier + im Notification-Bereich.</string>
+    <string name="no_key_toast">Kein Gemini-Key eingegeben — Autopilot ohne Gemini nicht möglich</string>
+    <string name="boot_failed">Sim-Boot fehlgeschlagen (window.rl fehlt). Activity neu starten.</string>
+    <string name="bridge_missing">Fehler: md_bridge.js fehlt in den Assets.</string>
 </resources>

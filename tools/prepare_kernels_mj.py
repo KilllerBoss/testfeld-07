@@ -16,7 +16,7 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 KAGGLE = ROOT / "kaggle"
-MJC = ROOT / "app" / "src" / "main" / "assets" / "mjc"
+MJC = ROOT / "kaggle" / "mjc"
 USER = "rudolfbewer"
 
 MESH_URLS = {

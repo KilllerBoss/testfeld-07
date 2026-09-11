@@ -3,31 +3,41 @@ plugins {
 }
 
 android {
-    namespace 'com.testfeld07.app'
+    namespace 'com.trainrobot.app'
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.testfeld07.app"
-        minSdk 26
+        applicationId "com.trainrobot.app"
+        // minSdk 30 wie die Referenz-App (MicroDuck): moderner WebView/WebGL-Stapel
+        minSdk 30
         targetSdk 35
-        versionCode 3           // v1.2: 50Hz-Wanduhr-Takt (UI-Freeze/Sturz-Fix), Policy-Hintergrund-Boot, Chunk-Bridge
-        versionName "1.2.0"
+        versionCode 4          // v2.0: offizieller Simulator-Kern, kein Fallback mehr
+        versionName "2.0.0"
     }
 
-    // Vorgabe AGENT.md: Release-APK debug-signiert → direkt installierbar.
+    // Release-APK debug-signiert -> direkt installierbar (Projekt-Vorgabe).
     buildTypes {
         release {
             minifyEnabled false
             signingConfig signingConfigs.debug
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    // APK-Name: Trainrobot.apk
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            outputFileName = "Trainrobot.apk"
+        }
+    }
 }
 
-// Bewusst null Abhängigkeiten — die komplette Sim liegt in assets/index.html.
 dependencies {
+    // WebViewAssetLoader: serviert assets/sim/ ueber https://appassets.androidplatform.net
+    // (exakt wie die Referenz-App) — relative fetches, ES-Module und WASM funktionieren
+    // damit offline; file:// wird NICHT mehr benutzt.
+    implementation("androidx.webkit:webkit:1.11.0")
 }

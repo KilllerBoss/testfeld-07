@@ -4,3 +4,7 @@ kaggle/kernel_mj_*/assets/
 kaggle/kernel_*/robofield_*.py
 kaggle/kernel_*/train_*.py
 !kaggle/kernel_duck/kernel-metadata.json
+.gradle/
+app/build/
+build/
+*.apk.idsig

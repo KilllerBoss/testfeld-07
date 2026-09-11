@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0B0B10">
+
+    <WebView
+        android:id="@+id/simWebView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Obere Kontrollleiste (halbtransparent, stoert die Szene minimal) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="6dp"
+        android:background="#B3000000"
+        android:gravity="center_vertical">
+
+        <Button
+            android:id="@+id/btnAutopilot"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:minHeight="40dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/autopilot_start" />
+
+        <Button
+            android:id="@+id/btnSimReset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:minHeight="40dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/sim_reset" />
+
+        <Button
+            android:id="@+id/btnSimBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:minHeight="40dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/sim_back" />
+    </LinearLayout>
+
+    <!-- Statuszeile unten -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:background="#99000000">
+
+        <TextView
+            android:id="@+id/simNotify"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFD166"
+            android:textSize="13sp"
+            android:text="@string/sim_notify_hint" />
+
+        <TextView
+            android:id="@+id/simStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textColor="#EDEDF2"
+            android:textSize="11sp"
+            android:text="Boote 3D-Simulation (MuJoCo-WASM + Policy) …" />
+    </LinearLayout>
+</FrameLayout>

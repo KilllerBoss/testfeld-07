@@ -1,4 +1,4 @@
-# MISSION: Testfeld·07 — Robotik-Sandbox als Android-APK
+# MISSION: Trainrobot (Testfeld·07) — RL-Simulator als Android-APK
 
 > Hinweis: Diese Datei ist die redigierte Projektversion. Der echte
 > Kaggle-Key liegt NUR in `~/.kaggle/kaggle.json` (niemals im Repo).
@@ -10,44 +10,49 @@ und Internet. Du arbeitest für den Nutzer persönlich und lieferst fertige,
 laufende Ergebnisse — keine Platzhalter. Wenn etwas unklar ist, treffe die
 vernünftigste Entscheidung und dokumentiere sie.
 
-## PROJEKT
+## PROJEKT (seit v2.0.0)
 
-Installierbare Android-APK „Testfeld·07" (WebView-Sim in `assets/index.html`,
-offline), 3 Roboter (MICRODUCK-Roller, ARMBOT-Greifarm, HUMANOID-Balance-Läufer),
-On-Device-Neuroevolution (Pop 40, MLP 2×32 tanh, 8 Geister/Batch), Training auf
-Kaggle (NumPy-Spiegel, deterministisch: gleicher Seed → gleicher Reward,
-bewiesen < 1e-6), Policy-Format `robofield-policy-v1`, Werkstatt-Konsole
-(Deutsch + JSON-Protokoll, Fernsteuer-Schnittstelle für Gemini).
+Installierbare Android-APK **„Trainrobot.apk"** (`com.trainrobot.app`, Code 4,
+versionName 2.0.0). Der Sim-Kern ist der OFFIZIELLE
+`pollen-robotics/microduck-simulator` (Vite/React + MuJoCo-WASM +
+onnxruntime-web), gebaut und gebundelt exakt wie die Referenz-App
+`KilllerBoss/microduck` (deren `sim/PATCHES.md`):
 
-## KAGGLE (Zugang siehe ~/.kaggle/kaggle.json — Key NIEMALS in Git/Logs/Artefakte)
+- Patch 1: walk-Skill = eigene Kaggle-Policy `microduck_rough_v2.onnx`
+- Patch 2: `?noghosts` (kein WebRTC-Multiplayer offline)
+- Flags: `?boot=1&touch=1&noghosts` beim Laden in SimActivity
 
-1. `train_<robot>.py` (self-contained, wird von tools/prepare_kernels.py gebacken)
-2. `kaggle kernels push -p kaggle/kernel_<robot>`
-3. `kaggle kernels status rudolfbewer/testfeld07-<robot>` (~60 s pollen)
-4. `kaggle kernels output rudolfbewer/testfeld07-<robot> -p out/` → `policy.json`
-5. Validieren (arch + Gewichts-Längen), dann einbetten + versionieren.
+**Verbindlich:**
 
-## ARBEITSWEISE
+- **KEIN Fallback** — die alte Eigenbau-Engine (sim/src, Werkstatt-Kern,
+  3-Roboter-MJ-Pfad) ist seit v2.0.0 entfernt. Boot-Fehler = klare
+  Fehlermeldung, nie ein Schein-Roboter.
+- **KEIN file://** — Assets laufen über `WebViewAssetLoader`
+  (`https://appassets.androidplatform.net`), Zwei-Handler-Verkabelung
+  (`/assets/sim/` + `/` für Vite-Absolute-Pfade, siehe SimAssetHandler.java).
+- **Keine Schlüssel im Repo** — Gemini-Key wird nur in der App eingegeben
+  (Intent-Extra, bleibt auf dem Gerät), Kaggle-Key nur in `~/.kaggle/`,
+  GitHub-Tokens nur transient in der Push-URL.
 
-Erst 3–5 Zeilen Plan, dann vollständig ausführen. Alles Prüfende lokal testen
-(Node-Tests, Determinismus-Check, Gradle/CI). Policies mit Datum/Generation im
-Dateinamen versionieren. Fitnesskurve (gen → best/avg) nach jedem Training berichten.
+## VERIFIZIERUNG (vor jedem Delivery)
 
-## DEFINITION OF DONE (Stand 2026-09-11: alles erfüllt außer Phase 2)
+1. `node tests/test_official_bundle.mjs` (37 Checks, CI-läuft auch)
+2. `node tests/browser_official_boot.js` (Playwright: window.rl, Duck aufrecht)
+3. `python3 tools/build_sim.py` (Dist-Verifier)
+4. APK-Marker: `Trainrobot.apk`, versionCode 4, dex enthält
+   `appassets.androidplatform.net` + `boot=1&touch=1&noghosts` +
+   `/assets/sim/`, 174 sim-Assets, md_bridge.js.
 
-- [x] Android-Projekt baut (CI-Workflow `build-apk.yml`), APK debug-signiert
-- [x] 3 Roboter manuell UND per Policy steuerbar
-- [x] On-Device-Training + Kaggle-Training
-- [x] Kaggle-`policy.json` validiert und als Werks-Champion eingebettet
-- [x] Konsolenbefehle (deutsch + JSON) inkl. Tests
-- [x] README: Installation, Training, Gemini-Anbindung, neue Roboter
-- [ ] Phase 2: natives MuJoCo (NDK + JNI) — geplant, nicht gebaut
+## TRAINING (Kaggle)
 
-## BEISPIEL-AUFTRÄGE
+- `kaggle/` — PPO/Neuroevolutions-Kernels; MJ-Kernels nutzen
+  `kaggle/mjc/` (Menagerie-MJCFs) via `tools/prepare_kernels_mj.py`.
+- `policies/` — Trainingsartefakte (robofield-policy-v1 Historie).
 
-| Nutzer sagt | Agent tut |
-|---|---|
-| „Baue die APK" | CI läuft bei jedem Push; Artifact `testfeld07-release-apk`. |
-| „Trainiere den microduck 200 Generationen auf Kaggle" | Kernel pushen, pollen, `policy.json` ziehen, Kurve berichten, einbetten. |
-| „Füge einen vierten Roboter hinzu" | Muster in README §7 (Env + Rig + Buttons + Spiegel + Determinismus-Beweis). |
-| „Mach die Physik richtig mit MuJoCo" | Phase 2: NDK-Build, JNI-Brücke, MJCF-Modelle, schrittweise Ablösung. |
+## DELIVERY
+
+- APK nach `/home/z/my-project/download/Trainrobot.apk` kopieren,
+  sha256 nennen, worklog.md aktualisieren.
+- Push nach `KilllerBoss/testfeld-07` (main) nur mit transientem Token;
+  CI (`build-apk`) muss grün sein: Tests → Verifier → Gradle →
+  Artifact `trainrobot-apk`.

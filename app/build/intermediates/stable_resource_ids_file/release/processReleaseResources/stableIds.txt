@@ -1,4 +1,0 @@
-com.testfeld07.app:string/app_name = 0x7f040000
-com.testfeld07.app:mipmap/ic_launcher = 0x7f030000
-com.testfeld07.app:drawable/ic_fg = 0x7f020000
-com.testfeld07.app:color/ic_bg = 0x7f010000
