@@ -9,6 +9,15 @@
 
 import { clamp } from './math.js';
 
+// Motion-Tracking-Belohnung: von der KI (KI-Trainer) live anpassbar.
+// pose: Posen-Ähnlichkeit (RMS über Gelenke, Skala poseScale), height:
+// Basis-Höhe (Skala hScale), up: Aufrecht, base: Grundbetrag, energy:
+// Aktionsaufwand; upMin/hMin/hMax: Abbruchkriterien.
+export const MOTION_R = {
+  pose: 0.72, height: 0.2, up: 0.08, base: 0.03, energy: 0.00005,
+  poseScale: 0.35, hScale: 0.09, upMin: 0.5, hMin: 0.55, hMax: 1.4,
+};
+
 export function makeMotionTask(cfg, clip, sim) {
   const nu = cfg.nu;
   const span = cfg.actSpan;
@@ -110,15 +119,15 @@ export function makeMotionTask(cfg, clip, sim) {
       const upz = 1 - 2 * (x * x + y * y);
       this.sampleRef(this.phase, this._ref, this._href || (this._href = [0.8]));
       let sq = 0;
-      for (let i = 0; i < nu; i++) { const d = (this._q[i] - this._ref[i]) / 0.35; sq += d * d; }
+      for (let i = 0; i < nu; i++) { const d = (this._q[i] - this._ref[i]) / MOTION_R.poseScale; sq += d * d; }
       const eQ = Math.exp(-Math.sqrt(sq / nu));
       sim.basePos(this._p || (this._p = new Float64Array(3)));
       const h = this._p[2];
-      const eH = Math.exp(-Math.pow((h - this._href[0]) / 0.09, 2));
+      const eH = Math.exp(-Math.pow((h - this._href[0]) / MOTION_R.hScale, 2));
       let e = 0;
       for (let i = 0; i < nu; i++) e += this.lastAct[i] * this.lastAct[i];
-      const r = 0.72 * eQ + 0.2 * eH + 0.08 * clamp(upz, 0, 1) + 0.03 - 0.00005 * e;
-      const done = upz < 0.5 || h < 0.55 * this._href[0] || h > 1.4;
+      const r = MOTION_R.pose * eQ + MOTION_R.height * eH + MOTION_R.up * clamp(upz, 0, 1) + MOTION_R.base - MOTION_R.energy * e;
+      const done = upz < MOTION_R.upMin || h < MOTION_R.hMin * this._href[0] || h > MOTION_R.hMax;
       return { r, done };
     },
 

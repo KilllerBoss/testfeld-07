@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.trainrobot.app">
 
+    <!-- Nur der KI-Trainer (Gemini) braucht Netz — Rest der App bleibt offline -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="Trainrobot"
         android:icon="@mipmap/ic_launcher"
@@ -13,6 +16,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:screenOrientation="fullSensor">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

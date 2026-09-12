@@ -118,6 +118,9 @@ public class MainActivity extends Activity {
         // Export-Brücke: Policy/GLB-Metadaten in den Download-Ordner schreiben
         // (blob:<a download> ist in WebViews unzuverlässig)
         webView.addJavascriptInterface(new FileBridge(), "TrainrobotBridge");
+        // KI-Trainer-Brücke: HTTPS zu generativelanguage.googleapis.com
+        // (deterministisch, ohne WebView-CORS-Unwägbarkeiten)
+        webView.addJavascriptInterface(new AIBridge(), "TrainrobotAI");
 
         if (savedInstanceState == null) {
             webView.loadUrl("https://appassets.androidplatform.net/assets/www/index.html");
@@ -168,6 +171,61 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 return false;
             }
+        }
+    }
+
+    /**
+     * JS-Brücke für den KI-Trainer: kleine HTTPS-Anfragen an die
+     * Gemini-API, Ergebnis per evaluateJavascript zurück in die WebView.
+     * Kein Header-Mapping nötig — der Schlüssel liegt im Query-String.
+     */
+    private class AIBridge {
+        @JavascriptInterface
+        public boolean available() { return true; }
+
+        @JavascriptInterface
+        public void request(final String url, final String method, final String body, final String callbackId) {
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    int code = 0; String resp = ""; String err = null;
+                    try {
+                        javax.net.ssl.HttpsURLConnection c =
+                            (javax.net.ssl.HttpsURLConnection) new java.net.URL(url).openConnection();
+                        c.setRequestMethod("GET".equals(method) ? "GET" : "POST");
+                        c.setConnectTimeout(15000);
+                        c.setReadTimeout(55000);
+                        if (body != null && !body.isEmpty() && !"GET".equals(method)) {
+                            c.setDoOutput(true);
+                            c.setFixedLengthStreamingMode(body.getBytes("UTF-8").length);
+                            java.io.OutputStream os = c.getOutputStream();
+                            os.write(body.getBytes("UTF-8"));
+                            os.flush(); os.close();
+                        }
+                        code = c.getResponseCode();
+                        java.io.InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        if (is != null) {
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                            is.close();
+                        }
+                        resp = bos.toString("UTF-8");
+                    } catch (Exception e) {
+                        err = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    }
+                    final int fCode = code; final String fResp = resp; final String fErr = err;
+                    final String js = "window.__aiReply && window.__aiReply(" +
+                            org.json.JSONObject.quote(callbackId) + "," + fCode + "," +
+                            org.json.JSONObject.quote(fResp) + "," +
+                            (fErr != null ? org.json.JSONObject.quote(fErr) : "null") + ");";
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            webView.evaluateJavascript(js, null);
+                        }
+                    });
+                }
+            }).start();
         }
     }
 

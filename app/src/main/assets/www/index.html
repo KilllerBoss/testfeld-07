@@ -39,6 +39,9 @@
       <button id="btnTrainTop" class="iconbtn" aria-label="Training" title="Training">
         <svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
+      <button id="btnAI" class="iconbtn" aria-label="KI-Trainer" title="KI-Trainer (Gemini)">
+        <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7zM18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9zM5.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" fill="currentColor"/></svg>
+      </button>
       <button id="btnFull" class="iconbtn" aria-label="Vollbild" title="Vollbild">
         <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -152,6 +155,35 @@
       <div id="glbStatus" class="train-note">Retargeting: Quaternion-Weltdelta → G1-Achsen, Fuß-Boden-Anpassung, Übergänge per Blend.</div>
     </div>
     <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
+  </section>
+
+  <!-- KI-Trainer (Gemini) -->
+  <section id="aiSheet" class="sheet hidden">
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <span class="sheet-title">KI-TRAINER</span>
+      <span id="aiModel" class="sheet-sub">Gemini wird erkannt …</span>
+      <button id="aiClose" class="iconbtn" aria-label="Schließen">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="aiLog" class="ai-log"></div>
+    <div class="ai-suggest">
+      <button class="ai-sug" data-q="Mein Roboter soll schneller laufen lernen">Schneller laufen</button>
+      <button class="ai-sug" data-q="Die Bewegung soll ruhiger und sparsamer sein">Ruhiger laufen</button>
+      <button class="ai-sug" data-q="Was kann ich am Training gerade verbessern?">Tipps</button>
+    </div>
+    <div class="ai-inputrow">
+      <input id="aiInput" type="text" placeholder="Was soll dein Roboter lernen?" autocomplete="off" enterkeyhint="send">
+      <button id="aiSend" class="btn btn-solid ai-send" aria-label="Senden">GO</button>
+    </div>
+    <div class="ai-foot">
+      <div class="speed-group ai-modelgroup" role="group" aria-label="KI-Modell">
+        <button class="speed-chip aimode active" data-aimode="fast">SCHNELL</button>
+        <button class="speed-chip aimode" data-aimode="smart">SMART</button>
+      </div>
+      <span class="ai-note">Gemini · zum Anwenden Taste je Antwort</span>
+    </div>
   </section>
 
   <!-- Konsole -->

@@ -1,14 +1,24 @@
 // ═══════════════════════════════════════════════════════════
 // glb.js — GLB/glTF-Animation-Import (binär, ohne Abhängigkeiten).
-// Liest Knoten-Hierarchie + Rotationskanäle und liefert pro Frame
+// Universell: Mixamo (mit/ohne Präfix), Cartwheel (forge fbx_to_glb),
+// Unity/Unreal/VRM-Exports — über Namens-Normalisierung statt exaktem
+// Matching. Liest ALLE Animationen (wahlweise), CUBICSPLINE- und
+// Interleaved-bufferView-Sampler inklusive. Liefert pro Frame
 // WELT-Quaternionen je Knochen (für das Retargeting auf G1).
 // ═══════════════════════════════════════════════════════════
+
+// Name normalisieren: klein, nur [a-z0-9] — 'mixamorig:LeftUpLeg',
+// 'Upper_Leg_L.001' und 'left up leg' landen auf vergleichbaren Keys.
+export function normName(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 export class GlbClip {
   /**
    * @param {ArrayBuffer} buffer  GLB-Datei
+   * @param {number} animIndex    Index der Animation (default 0)
    */
-  constructor(buffer) {
+  constructor(buffer, animIndex = 0) {
     const head = new DataView(buffer);
     if (head.getUint32(0, true) !== 0x46546c67) throw new Error('Keine GLB-Datei (Magie fehlt)');
     const version = head.getUint32(4, true);
@@ -29,64 +39,121 @@ export class GlbClip {
     this.gltf = json;
     this.bin = bin;
 
-    // Hierarchie: name → node, parent-Map
+    // Hierarchie: normalisierter Name → [Knoten], parent-Map
     this.nodes = json.nodes || [];
-    this.byName = {};
+    this.byName = {};       // erster Treffer (Kompatibilität)
+    this.byNameAll = {};    // alle Treffer (Resolver wählt animierten)
     this.parentOf = new Map();
     this.nodes.forEach((n, i) => {
-      const key = (n.name || ('node_' + i)).toLowerCase();
-      this.byName[key] = i;
+      const key = normName(n.name || ('node' + i));
+      if (!key) return;
+      if (this.byName[key] === undefined) this.byName[key] = i;
+      (this.byNameAll[key] || (this.byNameAll[key] = [])).push(i);
       (n.children || []).forEach(c => this.parentOf.set(c, i));
     });
 
-    // Erste Animation nehmen
+    // Animationen: Liste + Auswahl
     if (!json.animations || !json.animations.length) throw new Error('GLB ohne Animationen');
-    this.anim = json.animations[0];
-    this.name = (json.animations[0].name || 'clip');
-
-    // Sampler dekodieren: je Kanal (node, path) → Zeitreihe
-    this.rotationTracks = new Map();  // nodeIdx → {times: Float32Array, quats: Float32Array (n*4)}
+    this.animations = json.animations.map((a, i) => ({
+      index: i,
+      name: a.name || ('Animation ' + (i + 1)),
+      duration: _animDuration(json, a),
+    }));
+    this.rotationTracks = new Map();  // nodeIdx → {times, quats (n*4)}
     this.translationTracks = new Map();
-    for (const ch of this.anim.channels) {
-      const target = ch.target || {};
-      if (target.path !== 'rotation' && target.path !== 'translation') continue;
-      const sampler = this.anim.samplers[ch.sampler];
-      const times = this._accessorFloat(sampler.input);
-      const values = this._accessorFloat(sampler.output);
-      const map = target.path === 'rotation' ? this.rotationTracks : this.translationTracks;
-      map.set(target.node, { times, values, interp: sampler.interpolation || 'LINEAR' });
+    this._decoded = new Map();        // animIndex → {rotationTracks, translationTracks}
+    this.useAnimation(animIndex);
+  }
+
+  //-andere Animation desselben Clips aktivieren (Kanäle neu dekodieren)
+  useAnimation(animIndex = 0) {
+    if (animIndex < 0 || animIndex >= this.animations.length) throw new Error('Animation ' + animIndex + ' existiert nicht (' + this.animations.length + ' vorhanden)');
+    this.animIndex = animIndex;
+    this.anim = this.gltf.animations[animIndex];
+    this.name = this.animations[animIndex].name;
+    if (this._decoded.has(animIndex)) {
+      const d = this._decoded.get(animIndex);
+      this.rotationTracks = d.rotationTracks;
+      this.translationTracks = d.translationTracks;
+    } else {
+      const rot = new Map(), tra = new Map();
+      for (const ch of this.anim.channels) {
+        const target = ch.target || {};
+        if (target.path !== 'rotation' && target.path !== 'translation') continue;
+        if (target.node === undefined || target.node === null) continue;
+        const sampler = this.anim.samplers[ch.sampler];
+        const interp = sampler.interpolation || 'LINEAR';
+        const times = this._accessorFloat(sampler.input);
+        const values = this._accessorFloat(sampler.output);
+        // CUBICSPLINE: je Keyframe [inTangens, Wert, outTangens] → Wert extrahieren
+        let vals = values, ts = times;
+        if (interp === 'CUBICSPLINE') {
+          const nComp = target.path === 'rotation' ? 4 : 3;
+          const K = times.length;
+          const mid = new Float32Array(K * nComp);
+          for (let k = 0; k < K; k++) {
+            for (let c = 0; c < nComp; c++) mid[k * nComp + c] = values[(3 * k + 1) * nComp + c];
+          }
+          vals = mid;
+        }
+        const map = target.path === 'rotation' ? rot : tra;
+        map.set(target.node, { times: ts, values: vals, interp });
+      }
+      this._decoded.set(animIndex, { rotationTracks: rot, translationTracks: tra });
+      this.rotationTracks = rot;
+      this.translationTracks = tra;
     }
-    if (!this.rotationTracks.size) throw new Error('Animation ohne Rotationskanäle');
+    if (!this.rotationTracks.size) throw new Error('Animation "' + this.name + '" ohne Rotationskanäle');
 
     // Dauer
     let dur = 0;
     for (const t of this.rotationTracks.values()) dur = Math.max(dur, t.times[t.times.length - 1] || 0);
     this.duration = dur || 1;
-    this.fpsHint = this.duration > 0 ? Math.min(60, Math.max(15, Math.round(this.rotationTracks.values().next().value.times.length / this.duration))) : 30;
+    const first = this.rotationTracks.values().next().value;
+    this.fpsHint = this.duration > 0 ? Math.min(60, Math.max(15, Math.round(first.times.length / this.duration))) : 30;
+    return this;
   }
 
   _accessorFloat(accIdx) {
     const acc = this.gltf.accessors[accIdx];
     const bv = this.gltf.bufferViews[acc.bufferView];
     const compSize = { 5126: 4, 5125: 4, 5123: 2, 5121: 1 }[acc.componentType];
-    const nComp = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[acc.type];
-    const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const nComp = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 }[acc.type];
+    const stride = bv.byteStride && bv.byteStride > 0 ? bv.byteStride : nComp * compSize;
+    const base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
     const count = acc.count;
     const out = new Float32Array(count * nComp);
-    const dv = new DataView(this.bin.buffer, this.bin.byteOffset + start, count * nComp * compSize);
-    for (let i = 0; i < count * nComp; i++) {
-      out[i] = acc.componentType === 5126 ? dv.getFloat32(i * 4, true)
-        : acc.componentType === 5121 ? dv.getUint8(i)
-        : acc.componentType === 5123 ? dv.getUint16(i * 2, true)
-        : dv.getUint32(i * 4, true);
+    // dv startet bei bin+base → Element-Positionen RELATIV: i*stride + c*compSize
+    const dv = new DataView(this.bin.buffer, this.bin.byteOffset + base, this.bin.byteLength - base);
+    for (let i = 0; i < count; i++) {
+      const el = i * stride;
+      for (let c = 0; c < nComp; c++) {
+        const p = el + c * compSize;
+        out[i * nComp + c] = acc.componentType === 5126 ? dv.getFloat32(p, true)
+          : acc.componentType === 5121 ? dv.getUint8(p)
+          : acc.componentType === 5123 ? dv.getUint16(p, true)
+          : acc.componentType === 5125 ? dv.getUint32(p, true)
+          : dv.getFloat32(p, true);
+        if (acc.normalized && acc.componentType !== 5126) out[i * nComp + c] = out[i * nComp + c] / (acc.componentType === 5121 ? 255 : 65535) * 2 - 1;
+      }
     }
     return out;
   }
 
-  hasNode(name) { return this.byName[name.toLowerCase()] !== undefined; }
-  nodeId(name) { return this.byName[name.toLowerCase()]; }
+  hasNode(name) { return this.byName[normName(name)] !== undefined; }
+  nodeId(name) { return this.byName[normName(name)]; }
 
-  // Lokale Rotation eines Knotens zur Zeit t (Quaternion [x,y,z,w] wie glTF → wir nutzen [x,y,z,w] durchgängig hier)
+  // Alle Knoten-Indices zu einem (normalisierten) Namen; animierte bevorzugt.
+  nodesFor(name) { return this.byNameAll[normName(name)] || []; }
+  // Besten Kandidaten wählen: bevorzugt Knoten mit Rotations-Track.
+  bestNodeFor(name) {
+    const cands = this.nodesFor(name);
+    if (!cands.length) return undefined;
+    for (const c of cands) if (this.rotationTracks.has(c)) return c;
+    return cands[0];
+  }
+
+  // Lokale Rotation eines Knotens zur Zeit t (Quaternion [x,y,z,w])
   _localQuat(nodeIdx, t, out) {
     const node = this.nodes[nodeIdx];
     const track = this.rotationTracks.get(nodeIdx);
@@ -140,13 +207,13 @@ export class GlbClip {
 
   // Welt-Quaternionen aller relevanten Knoten zur Zeit t berechnen.
   // glTF: q = [x,y,z,w]; world = parentWorld ⊙ local. Iterativ je Kette —
-  // keine geteilten Temperäre (Rekursions-Clobbering-Falle).
+  // keine geteilten Temporäre (Rekursions-Clobbering-Falle).
   sampleWorld(t, wantedNames, outWorld) {
     outWorld.clear(); // Ausgabe-Map ist AUSSCHLIESSLICH Output (kein Frame-Cache!)
     // Alle benötigten Knoten (Ziele + Vorfahren) sammeln
     const needed = new Set();
     for (const name of wantedNames) {
-      let idx = this.byName[name.toLowerCase()];
+      let idx = this.byName[normName(name)];
       if (idx === undefined) continue;
       while (idx !== undefined && !needed.has(idx)) { needed.add(idx); idx = this.parentOf.get(idx); }
     }
@@ -174,15 +241,24 @@ export class GlbClip {
 
   // Hüft-Höhe (Translation) zur Zeit t
   sampleHipsHeight(t, hipsName) {
-    const idx = this.byName[hipsName.toLowerCase()];
+    const idx = this.byName[normName(hipsName)];
     if (idx === undefined) return 0.8;
     const p = [0, 0, 0];
     this._localTrans(idx, t, p);
-    return p[1]; // Mixamo: Y-up, Hüft-Höhe in cm oder m — Retargeting skaliert
+    return p[1]; // Y-up: Hüft-Höhe in cm oder m — Retargeting skaliert
   }
 }
 
-// Quaternion-Multikation [x,y,z,w]
+function _animDuration(json, anim) {
+  let dur = 0;
+  for (const s of anim.samplers || []) {
+    const acc = json.accessors[s.input];
+    if (acc && acc.max && acc.max[0] > dur) dur = acc.max[0];
+  }
+  return dur || 1;
+}
+
+// Quaternion-Multiplikation [x,y,z,w]
 export function quatMul(a, b, out) {
   const ax = a[0], ay = a[1], az = a[2], aw = a[3];
   const bx = b[0], by = b[1], bz = b[2], bw = b[3];
@@ -193,7 +269,7 @@ export function quatMul(a, b, out) {
   return out;
 }
 
-// Quaternion konjugiert anwenden: v' = q* ⊙ (0,v) ⊙ q  → rotiere v mit q⁻¹
+// Rotiere v mit q⁻¹
 export function quatRotInv(q, v, out) {
   const x = -q[0], y = -q[1], z = -q[2], w = q[3];
   const vx = v[0], vy = v[1], vz = v[2];

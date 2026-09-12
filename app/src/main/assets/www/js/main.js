@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════
 
 import { initEngine, fetchModelIntoFS, removeModelFromFS, RobotSim, setModelProgress, mj } from './engine.js';
-import { ROBOT_ORDER, getRobot } from './robots.js';
+import { ROBOT_ORDER, getRobot, HOVER_R } from './robots.js';
 import { Renderer3D } from './render3d.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -13,10 +13,11 @@ import { PPO, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
 import { retargetToG1 } from './retarget.js';
-import { makeMotionTask } from './motiontask.js';
+import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
+import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory } from './ai.js';
 
-const VERSION = '2.2.1';
+const VERSION = '2.3.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -44,7 +45,13 @@ const S = {
   switching: false,
   obsBuf: null,
   actBuf: null,
+  aiMode: 'fast',    // KI-Trainer: 'fast' (Flash-Lite) | 'smart' (Flash)
+  aiHistory: [],     // Chat-Verlauf für die KI
+  aiBusy: false,
 };
+
+// PPO-Überschreibungen aus dem KI-Trainer (T wirkt beim nächsten Start)
+const PPO_OVERRIDES = {};
 
 // ── Konsolen-Ausgabe ────────────────────────────────────────
 const log = (m, c) => ui.log(m, c);
@@ -89,6 +96,8 @@ async function loadRobot(id, first = false) {
     S.obsBuf = new Float32Array(S.task.obsDim);
     S.actBuf = new Float32Array(S.task.actDim);
     ui.$('glbSection').classList.toggle('hidden', id !== 'g1');
+    // KI-Anpassungen für diese Aufgabe wieder aufschalten (Belohnungen etc.)
+    applySavedAICfg(id);
 
     // Gespeicherte Policy für DIESE Aufgabenart laden (falls vorhanden)
     S.trainer = null;
@@ -152,11 +161,252 @@ function savePolicy(id) {
   }
 }
 
+// ── KI-Trainer (Gemini) ─────────────────────────────────────
+// Nutzer sagt in natürlicher Sprache, was der Roboter lernen soll;
+// die KI liefert einen validierten Patch auf die Trainingskonfiguration.
+const DEFAULT_PPO = { T: 1024, gamma: 0.99, lam: 0.95, clip: 0.2, epochs: 4, mb: 256, lr: 3e-4, cV: 0.5, cE: 0.005, maxGrad: 0.5 };
+
+function aiTaskKind() {
+  if (S.task && S.task.kind === 'motion') return 'motion';
+  if (S.sim && S.sim.cfg && S.sim.cfg.drone) return 'hover';
+  return 'speed';
+}
+
+function aiCtx() {
+  const cfg = S.sim ? S.sim.cfg : null;
+  const kind = aiTaskKind();
+  const cur = {};
+  if (kind === 'speed' && cfg) {
+    cur.rW = cfg.rW; cur.cmd = cfg.cmd; cur.done = cfg.done;
+    cur.actSpan = cfg.actSpan; cur.speedMax = cfg.speedMax;
+  } else if (kind === 'motion') {
+    cur.motionR = MOTION_R;
+  } else if (kind === 'hover' && cfg) {
+    cur.hoverR = HOVER_R; cur.cmd = cfg.cmd;
+  }
+  cur.ppo = S.trainer
+    ? (({ lr, gamma, lam, clip, epochs, mb, T, cV, cE, maxGrad }) => ({ lr, gamma, lam, clip, epochs, mb, T, cV, cE, maxGrad }))(S.trainer.h)
+    : Object.assign({}, DEFAULT_PPO, PPO_OVERRIDES);
+  return {
+    robot: S.robotId,
+    robotName: cfg ? cfg.longName : '—',
+    taskKind: kind,
+    current: cur,
+    history: S.aiHistory,
+  };
+}
+
+function _aiPPOApply(ppo, touched) {
+  for (const [k, v] of Object.entries(ppo)) {
+    PPO_OVERRIDES[k] = v;
+    if (S.trainer && k !== 'T') S.trainer.h[k] = v;
+    touched.push('ppo.' + k);
+  }
+}
+
+// Patch auf die laufende Konfiguration anwenden (cfg-Objekte werden von
+// den Aufgaben live gelesen → Wirkung ohne Neustart).
+function applyAIPatch(patch, opts = {}) {
+  if (!patch || !Object.keys(patch).length) return false;
+  const cfg = S.sim ? S.sim.cfg : null;
+  const kind = aiTaskKind();
+  const touched = [];
+  if (cfg) {
+    if (kind === 'speed') {
+      if (patch.rW) for (const [k, v] of Object.entries(patch.rW)) { cfg.rW[k] = v; touched.push('rW.' + k); }
+      if (patch.cmd) {
+        if (patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx=' + patch.cmd.vx.map(x => x.toFixed(2)).join('..')); }
+        if (patch.cmd.yaw) { cfg.cmd.yaw = patch.cmd.yaw.slice(); touched.push('cmd.yaw'); }
+      }
+      if (patch.done) for (const [k, v] of Object.entries(patch.done)) { cfg.done[k] = v; touched.push('done.' + k); }
+      if (patch.actSpan !== undefined) { cfg.actSpan = patch.actSpan; touched.push('actSpan'); }
+    } else if (kind === 'hover') {
+      if (patch.hoverR) for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
+      if (patch.cmd && patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx'); }
+    }
+  }
+  if (patch.motionR) for (const [k, v] of Object.entries(patch.motionR)) { MOTION_R[k] = v; touched.push('motionR.' + k); }
+  if (patch.hoverR && kind !== 'hover') for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
+  if (patch.ppo) _aiPPOApply(patch.ppo, touched);
+  saveAICfg();
+  log('KI-Anpassung übernommen: ' + touched.join(', '), 'ok');
+  ui.toast('KI-Anpassung übernommen' + (opts.resetTraining ? ' — Training zurückgesetzt' : ''));
+  if (opts.resetTraining) {
+    stopTraining(true);
+    S.trainer = null;
+    ui.resetRewards();
+    S.episodes = 0;
+    if (S.sim) S.sim.reset();
+    ui.$('tStart').textContent = 'Training starten';
+    ui.$('tStart').classList.remove('btn-stop');
+    ui.trainStats({ reward: '–', episodes: 0, steps: 0, rate: 0 });
+    ui.drawChart();
+    log('Training zurückgesetzt (KI-Anpassung war groß — Netz lernt neu)', 'warn');
+  }
+  return true;
+}
+
+function saveAICfg() {
+  try {
+    const cfg = S.sim ? S.sim.cfg : null;
+    const kind = aiTaskKind();
+    if (cfg && kind === 'speed') {
+      localStorage.setItem('tr_ai_speed_' + S.robotId, JSON.stringify({ rW: cfg.rW, cmd: cfg.cmd, done: cfg.done, actSpan: cfg.actSpan }));
+    }
+    localStorage.setItem('tr_ai_motion', JSON.stringify(MOTION_R));
+    localStorage.setItem('tr_ai_hover', JSON.stringify(HOVER_R));
+    localStorage.setItem('tr_ai_ppo', JSON.stringify(PPO_OVERRIDES));
+  } catch (e) { /* Speicher voll — Anpassung bleibt für diese Session */ }
+}
+
+function loadGlobalAICfg() {
+  try {
+    const m = JSON.parse(localStorage.getItem('tr_ai_motion') || 'null');
+    if (m) { const v = validatePatch({ motionR: m }); Object.assign(MOTION_R, v.motionR || {}); }
+    const h = JSON.parse(localStorage.getItem('tr_ai_hover') || 'null');
+    if (h) { const v = validatePatch({ hoverR: h }); Object.assign(HOVER_R, v.hoverR || {}); }
+    const p = JSON.parse(localStorage.getItem('tr_ai_ppo') || 'null');
+    if (p) { const v = validatePatch({ ppo: p }); Object.assign(PPO_OVERRIDES, v.ppo || {}); }
+  } catch (e) { /* defekt → Standardwerte */ }
+}
+
+// In loadRobot: KI-Tuning je Roboter wieder aufschalten
+function applySavedAICfg(id) {
+  const cfg = getRobot(id);
+  if (!cfg || cfg.drone) return;
+  try {
+    const raw = JSON.parse(localStorage.getItem('tr_ai_speed_' + id) || 'null');
+    if (!raw) return;
+    const v = validatePatch({ rW: raw.rW, cmd: raw.cmd, done: raw.done, actSpan: raw.actSpan });
+    if (v.rW) Object.assign(cfg.rW, v.rW);
+    if (v.cmd) { if (v.cmd.vx) cfg.cmd.vx = v.cmd.vx; if (v.cmd.yaw) cfg.cmd.yaw = v.cmd.yaw; }
+    if (v.done) Object.assign(cfg.done, v.done);
+    if (v.actSpan !== undefined) cfg.actSpan = v.actSpan;
+  } catch (e) { /* defekt → Standardwerte */ }
+}
+
+// ── KI-Chat-UI ──────────────────────────────────────────────
+function aiPush(cls, text) {
+  const logEl = document.getElementById('aiLog');
+  const div = document.createElement('div');
+  div.className = 'ai-msg ' + cls;
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+  return div;
+}
+
+function _fmtVal(v) {
+  if (Array.isArray(v)) return '[' + v.map(x => (+x).toFixed(2).replace('.', ',')).join(', ') + ']';
+  if (typeof v === 'number') return Math.abs(v) < 0.001 ? v.toExponential(1) : (+v).toFixed(v < 0.1 ? 4 : 2).replace('.', ',');
+  return String(v);
+}
+
+function renderAIAnswer(res, oldCur) {
+  const logEl = document.getElementById('aiLog');
+  const div = document.createElement('div');
+  div.className = 'ai-msg bot';
+  div.textContent = res.antwort;
+
+  const patch = res.patch || {};
+  const groups = Object.keys(patch);
+  if (groups.length) {
+    const box = document.createElement('div');
+    box.className = 'ai-changes';
+    const line = (k, o, n) => {
+      const row = document.createElement('div');
+      const b = document.createElement('b'); b.textContent = k + ': ';
+      const old = document.createElement('span'); old.className = 'old'; old.textContent = _fmtVal(o);
+      row.appendChild(b); row.appendChild(old);
+      row.appendChild(document.createTextNode('  →  ' + _fmtVal(n)));
+      box.appendChild(row);
+    };
+    const kind = aiTaskKind();
+    for (const g of groups) {
+      for (const [k, v] of Object.entries(patch[g])) {
+        if (g === 'cmd') {
+          if (k === 'vx' && oldCur.cmd) line('cmd.vx', oldCur.cmd.vx, v);
+          if (k === 'yaw' && oldCur.cmd) line('cmd.yaw', oldCur.cmd.yaw, v);
+          if (k === 'alt' && oldCur.cmd) line('cmd.alt', oldCur.cmd.alt, v);
+        } else if (g === 'ppo') {
+          line('ppo.' + k, (S.trainer ? S.trainer.h[k] : Object.assign({}, DEFAULT_PPO, PPO_OVERRIDES)[k]), v);
+        } else {
+          const oldObj = g === 'rW' ? oldCur.rW : g === 'done' ? oldCur.done : g === 'motionR' ? MOTION_R : g === 'hoverR' ? HOVER_R : oldCur;
+          line(g + '.' + k, oldObj ? oldObj[k] : '?', v);
+        }
+      }
+    }
+    const btn = document.createElement('button');
+    btn.className = 'ai-apply';
+    btn.textContent = 'ÄNDERUNGEN ÜBERNEHMEN';
+    btn.addEventListener('click', () => {
+      controls.buzz();
+      const ok = applyAIPatch(patch, { resetTraining: res.resetTraining });
+      if (ok) { btn.textContent = 'ÜBERNOMMEN ✓'; btn.classList.add('done'); btn.disabled = true; }
+    });
+    div.appendChild(box);
+    div.appendChild(btn);
+  }
+  const st = document.createElement('span');
+  st.className = 'ai-status';
+  st.textContent = res.model + (res.resetTraining ? ' · Training wird empfohlen neu zu starten' : '');
+  div.appendChild(st);
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function updateAIModelLabel() {
+  const el = document.getElementById('aiModel');
+  try {
+    const models = await ensureModels();
+    const cur = S.aiMode === 'smart' ? models.smart : models.fast;
+    el.textContent = (S.sim ? S.sim.cfg.longName : '—') + ' · ' + cur + (models.src === 'default' ? ' (Standardkette)' : '');
+  } catch (e) {
+    el.textContent = 'Gemini nicht erreichbar';
+  }
+}
+
+async function sendAIMessage(text) {
+  if (S.aiBusy || !text || !text.trim()) return;
+  if (!S.sim) { ui.toast('Roboter lädt noch', true); return; }
+  S.aiBusy = true;
+  const sendBtn = document.getElementById('aiSend');
+  sendBtn.disabled = true;
+  aiPush('user', text.trim());
+  const wait = aiPush('bot', 'Denkt nach …');
+  try {
+    const ctx = aiCtx();
+    const res = await askAI({ text: text.trim(), mode: S.aiMode, ctx });
+    wait.remove();
+    renderAIAnswer(res, ctx.current);
+    S.aiHistory.push({ role: 'user', text: text.trim() }, { role: 'model', text: res.antwort });
+    if (S.aiHistory.length > 40) S.aiHistory = S.aiHistory.slice(-40);
+    saveHistory(S.aiHistory);
+    updateAIModelLabel();
+  } catch (err) {
+    wait.remove();
+    aiPush('err', err.message);
+    log('KI-Fehler: ' + err.message, 'err');
+  } finally {
+    S.aiBusy = false;
+    sendBtn.disabled = false;
+  }
+}
+
+async function aiOnOpen() {
+  // Verlauf anzeigen (ohne Apply-Buttons)
+  const logEl = document.getElementById('aiLog');
+  logEl.innerHTML = '';
+  for (const m of S.aiHistory.slice(-10)) aiPush(m.role === 'model' ? 'bot' : 'user', m.text);
+  if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. (z. B. „schneller laufen, aber stabil bleiben")');
+  await updateAIModelLabel();
+}
+
 // ── Training ────────────────────────────────────────────────
 function startTraining() {
   if (!S.sim || !S.task) return;
   if (!S.trainer) {
-    S.trainer = new PPO(S.task.obsDim, S.task.actDim, {}, 1337 + ROBOT_ORDER.indexOf(S.robotId));
+    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
     log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
   }
   S.task.reset(S.trainer.rng, S.sim);
@@ -274,6 +524,10 @@ async function boot() {
   try {
     log(`TRAINROBOT v${VERSION} · Testfeld·07 · ${new Date().toLocaleString('de-DE')}`);
     log('BIOS: Offline-Betrieb, kein Netzwerk nötig');
+    log('KI-Trainer: Gemini (nur auf Anfrage online)');
+    initAITransport();
+    loadGlobalAICfg();
+    S.aiHistory = loadHistory();
     ui.splash('Prüfe WebAssembly …', 0.08);
     ui.splash('Lade MuJoCo-Kern (WASM) …', 0.18);
     await initEngine(log);
@@ -407,6 +661,31 @@ function lastEma() {
 function wireUI() {
   document.getElementById('btnConsole').addEventListener('click', () => { ui.toggleConsole(); controls.buzz(); });
   document.getElementById('consoleClose').addEventListener('click', () => ui.toggleConsole());
+  // ── KI-Trainer ─────────────────────────────────────────
+  document.getElementById('btnAI').addEventListener('click', async () => {
+    controls.buzz();
+    ui.toggleAI();
+    if (!document.getElementById('aiSheet').classList.contains('hidden')) await aiOnOpen();
+  });
+  document.getElementById('aiClose').addEventListener('click', () => ui.toggleAI(false));
+  for (const b of document.querySelectorAll('.aimode')) {
+    b.addEventListener('click', () => {
+      S.aiMode = b.dataset.aimode;
+      for (const x of document.querySelectorAll('.aimode')) x.classList.toggle('active', x === b);
+      controls.buzz();
+      updateAIModelLabel();
+    });
+  }
+  const _aiSubmit = () => {
+    const inp = document.getElementById('aiInput');
+    const v = inp.value.trim();
+    if (v) { inp.value = ''; sendAIMessage(v); }
+  };
+  document.getElementById('aiSend').addEventListener('click', () => { controls.buzz(); _aiSubmit(); });
+  document.getElementById('aiInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); _aiSubmit(); } });
+  for (const b of document.querySelectorAll('.ai-sug')) {
+    b.addEventListener('click', () => { controls.buzz(); sendAIMessage(b.dataset.q); });
+  }
   document.getElementById('btnFull').addEventListener('click', async () => {
     controls.buzz();
     try {
@@ -534,30 +813,49 @@ function wireUI() {
 }
 
 // ── GLB: Import, Liste, Aktivierung, BC ────────────────────
+// Universell: GLB von beliebiger Quelle (Mixamo, Cartwheel, Unity,
+// Unreal, VRM …) — das Retargeting erkennt das Skelett automatisch
+// (Alias-Tabelle + Heuristik). Import aus JEDEM Roboter-View möglich:
+// nötigenfalls wechselt die App zum G1 (humanoides Ziel). ALLE
+// Animationen einer Datei werden importiert (Hart-Limit 8).
 async function onGlbFiles(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   if (!files.length) return;
-  if (S.robotId !== 'g1' || !S.sim) { ui.toast('GLB nur mit dem G1', true); return; }
+  if (S.robotId !== 'g1' || !S.sim) {
+    ui.toast('Wechsle zum G1 — humanoides Retargeting', false, 2600);
+    log('GLB-Import: automatischer Wechsel zum G1 (humanoides Ziel)', 'warn');
+    await loadRobot('g1');
+    if (S.robotId !== 'g1' || !S.sim) { ui.toast('G1 konnte nicht geladen werden', true); return; }
+  }
   for (const f of files) {
     ui.$('glbStatus').textContent = 'Importiere ' + f.name + ' …';
     try {
       const buf = await f.arrayBuffer();
-      const parsed = new GlbClip(buf);
-      log('GLB „' + f.name + '": ' + parsed.duration.toFixed(1) + 's, ' + parsed.rotationTracks.size + ' Rotationskanäle');
-      const motion = retargetToG1(parsed, S.sim, (m) => log('  ' + m));
-      const rec = {
-        id: 'glb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
-        name: f.name.replace(/\.glb$/i, ''),
-        size: buf.byteLength,
-        glb: buf,
-        motion: packMotion(motion),
-      };
-      await putClip(rec);
+      const clip = new GlbClip(buf);
+      const anims = clip.animations;
+      log('GLB „' + f.name + '": ' + anims.length + ' Animation(en) — ' + anims.map(a => a.name + ' (' + a.duration.toFixed(1) + 's)').join(', '));
+      const list = anims.slice(0, 8);
+      let last = null;
+      for (const an of list) {
+        if (an.index > 0) clip.useAnimation(an.index);
+        const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+        const rec = {
+          id: 'glb_' + Date.now() + '_' + an.index + '_' + Math.floor(Math.random() * 1e4),
+          name: f.name.replace(/\.glb$/i, '') + (anims.length > 1 ? ' · ' + an.name : ''),
+          size: buf.byteLength,
+          glb: an.index === 0 ? buf : null,
+          animIndex: an.index,
+          motion: packMotion(motion),
+        };
+        await putClip(rec);
+        log('Retargeting „' + rec.name + '": ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke, ' + motion.duration.toFixed(1) + 's — Boden angepasst', 'ok');
+        last = rec;
+        await new Promise(r => setTimeout(r, 0)); // UI-Frame
+      }
       await refreshClipList();
-      log('Retargeting fertig: ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke, ' + motion.duration.toFixed(1) + 's — Boden angepasst', 'ok');
-      ui.$('glbStatus').textContent = rec.name + ': ' + motion.duration.toFixed(1) + 's @ ' + motion.fps + ' fps bereit';
-      ui.toast('GLB importiert: ' + rec.name);
+      ui.$('glbStatus').textContent = (list.length > 1 ? list.length + ' Animationen importiert — letzte: ' : '') + (last ? last.name + ': ' + last.motion.duration.toFixed(1) + 's @ ' + last.motion.fps + ' fps bereit' : 'bereit');
+      ui.toast('GLB importiert: ' + (last ? last.name : f.name));
     } catch (err) {
       console.error(err);
       log('GLB-Fehler: ' + err.message, 'err');
@@ -579,7 +877,7 @@ async function runBC() {
     const ds = task.buildBCDataset(S.sim);
     log('BC-Datensatz: ' + ds.n + ' Frames (Geist + Rauschen) — Etikett = nächste Referenzpose');
     if (!S.trainer) {
-      S.trainer = new PPO(task.obsDim, task.actDim, {}, 1337 + ROBOT_ORDER.indexOf(S.robotId));
+      S.trainer = new PPO(task.obsDim, task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
     }
     const trainer = S.trainer;
     for (let f = 0; f < ds.n; f++) {
@@ -687,6 +985,12 @@ Object.defineProperty(window, '__trainrobot', {
     get task() { return S.task; },
     get motionClip() { return S.motionClip; },
     get renderer() { return r3d; },
+    get cfg() { return S.sim ? S.sim.cfg : null; },
+    get motionR() { return MOTION_R; },
+    get hoverR() { return HOVER_R; },
+    get ppoOverrides() { return PPO_OVERRIDES; },
+    get aiBusy() { return S.aiBusy; },
+    applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
     ui,
   }),
 });

@@ -14,28 +14,75 @@
 
 import { GlbClip, quatMul, quatRotInv } from './glb.js';
 
-// Knochen-Synonyme (Mixamo, VRM-ähnliche, generisch)
+// Universeller Knochen-Resolver:
+//   1) Alias-Tabelle (normalisiert, ohne Sonderzeichen) — Mixamo mit/ohne
+//      Präfix, Cartwheel (forge fbx_to_glb), Unity, Unreal, VRM.
+//   2) Heuristik-Pass über alle Knotennamen mit Seitenerkennung
+//      (left/right bzw. l/r-Suffix) und Rollen-Priorität — erkennt auch
+//      exotische Namen wie 'UpperLeg_L.001' oder 'thigh proxy L'.
+// Verglichen wird IMMER über normName (nur [a-z0-9]).
 const BONE_ALIASES = {
-  hips: ['mixamorig:hips', 'hips', 'hip', 'pelvis', 'j_bip_c_hips'],
-  spine: ['mixamorig:spine', 'spine', 'j_bip_c_spine'],
-  leftUpLeg: ['mixamorig:leftupleg', 'leftupleg', 'upper_leg_l', 'thigh_l', 'leftthigh', 'j_bip_l_hip'],
-  leftLeg: ['mixamorig:leftleg', 'leftleg', 'lower_leg_l', 'shin_l', 'leftshin', 'calf_l', 'j_bip_l_knee'],
-  leftFoot: ['mixamorig:leftfoot', 'leftfoot', 'foot_l', 'leftankle', 'ankle_l', 'j_bip_l_ankle'],
-  rightUpLeg: ['mixamorig:rightupleg', 'rightupleg', 'upper_leg_r', 'thigh_r', 'rightthigh', 'j_bip_r_hip'],
-  rightLeg: ['mixamorig:rightleg', 'rightleg', 'lower_leg_r', 'shin_r', 'rightshin', 'calf_r', 'j_bip_r_knee'],
-  rightFoot: ['mixamorig:rightfoot', 'rightfoot', 'foot_r', 'rightankle', 'ankle_r', 'j_bip_r_ankle'],
-  leftArm: ['mixamorig:leftarm', 'leftarm', 'upper_arm_l', 'leftshoulder', 'j_bip_l_shoulder'],
-  leftForeArm: ['mixamorig:leftforearm', 'leftforearm', 'lower_arm_l', 'leftelbow', 'j_bip_l_elbow'],
-  rightArm: ['mixamorig:rightarm', 'rightarm', 'upper_arm_r', 'rightshoulder', 'j_bip_r_shoulder'],
-  rightForeArm: ['mixamorig:rightforearm', 'rightforearm', 'lower_arm_r', 'rightelbow', 'j_bip_r_elbow'],
+  hips: ['mixamorig:hips', 'hips', 'hip', 'pelvis', 'j_bip_c_hips', 'root', 'bip01_pelvis'],
+  spine: ['mixamorig:spine', 'spine', 'j_bip_c_spine', 'chest_lower'],
+  leftUpLeg: ['mixamorig:leftupleg', 'leftupleg', 'upper_leg_l', 'upperleg_l', 'thigh_l', 'leftthigh', 'left_upleg', 'j_bip_l_hip', 'bip01_l_thigh', 'upperleg_l1'],
+  leftLeg: ['mixamorig:leftleg', 'leftleg', 'lower_leg_l', 'lowerleg_l', 'shin_l', 'leftshin', 'calf_l', 'left_calf', 'j_bip_l_knee', 'bip01_l_calf'],
+  leftFoot: ['mixamorig:leftfoot', 'leftfoot', 'foot_l', 'leftankle', 'left_ankle', 'ankle_l', 'j_bip_l_ankle', 'bip01_l_foot'],
+  rightUpLeg: ['mixamorig:rightupleg', 'rightupleg', 'upper_leg_r', 'upperleg_r', 'thigh_r', 'rightthigh', 'right_upleg', 'j_bip_r_hip', 'bip01_r_thigh'],
+  rightLeg: ['mixamorig:rightleg', 'rightleg', 'lower_leg_r', 'lowerleg_r', 'shin_r', 'rightshin', 'calf_r', 'right_calf', 'j_bip_r_knee', 'bip01_r_calf'],
+  rightFoot: ['mixamorig:rightfoot', 'rightfoot', 'foot_r', 'rightankle', 'right_ankle', 'ankle_r', 'j_bip_r_ankle', 'bip01_r_foot'],
+  leftArm: ['mixamorig:leftarm', 'leftarm', 'upper_arm_l', 'upperarm_l', 'leftshoulder', 'left_shoulder', 'j_bip_l_shoulder', 'bip01_l_upperarm', 'clavicle_l'],
+  leftForeArm: ['mixamorig:leftforearm', 'leftforearm', 'lower_arm_l', 'lowerarm_l', 'leftelbow', 'left_elbow', 'j_bip_l_elbow', 'bip01_l_forearm'],
+  rightArm: ['mixamorig:rightarm', 'rightarm', 'upper_arm_r', 'upperarm_r', 'rightshoulder', 'right_shoulder', 'j_bip_r_shoulder', 'bip01_r_upperarm', 'clavicle_r'],
+  rightForeArm: ['mixamorig:rightforearm', 'rightforearm', 'lower_arm_r', 'lowerarm_r', 'rightelbow', 'right_elbow', 'j_bip_r_elbow', 'bip01_r_forearm'],
 };
+const ROLE_ORDER = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+
+// Heuristik: Rollen-Muster (Prioritätsreihenfolge! längere Spezifität zuerst)
+// Je Eintrag: [Rolle, Regex über den ROH-Namen (lowercase), Seite]
+const SIDE_L = /(left|\bl([._\- ]|$|\d)|_l([._\- ]|$)|\.l$| l$)/;
+const SIDE_R = /(right|\br([._\- ]|$|\d)|_r([._\- ]|$)|\.r$| r$)/;
+const HEURISTICS = [
+  ['leftForeArm', /(forearm|lowerarm|elbow|frontarm)/, SIDE_L],
+  ['rightForeArm', /(forearm|lowerarm|elbow|frontarm)/, SIDE_R],
+  ['leftArm', /(arm|shoulder|upperarm|clavicle|collar)/, SIDE_L],
+  ['rightArm', /(arm|shoulder|upperarm|clavicle|collar)/, SIDE_R],
+  ['leftFoot', /(foot|ankle)/, SIDE_L],
+  ['rightFoot', /(foot|ankle)/, SIDE_R],
+  ['leftLeg', /(knee|shin|calf|lowerleg)/, SIDE_L],
+  ['rightLeg', /(knee|shin|calf|lowerleg)/, SIDE_R],
+  ['leftUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_L],
+  ['rightUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_R],
+  ['spine', /(spine|chest|torso|upperbody)/, null],
+  ['hips', /(hips|pelvis|root)/, null],
+];
 
 export function resolveBones(clip) {
   const found = {};
-  for (const [role, aliases] of Object.entries(BONE_ALIASES)) {
-    for (const a of aliases) {
-      if (clip.hasNode(a)) { found[role] = clip.nodeId(a); break; }
+  // 1) Alias-Tabelle
+  for (const role of ROLE_ORDER) {
+    for (const a of BONE_ALIASES[role]) {
+      const idx = clip.bestNodeFor(a);
+      if (idx !== undefined) { found[role] = idx; break; }
     }
+  }
+  // 2) Heuristik für noch Fehlende — animierte Knoten bevorzugen
+  const used = new Set(Object.values(found));
+  for (const [role, re, sideRe] of HEURISTICS) {
+    if (found[role] !== undefined) continue;
+    let best = undefined, bestScore = -1;
+    for (let i = 0; i < clip.nodes.length; i++) {
+      const n = clip.nodes[i];
+      if (!n.name) continue;
+      const low = n.name.toLowerCase();
+      if (!re.test(low)) continue;
+      if (sideRe && !sideRe.test(low)) continue;
+      if (used.has(i)) continue;
+      // 'forearm' darf nicht 'arm' klauen — HEURISTICS-Reihenfolge regelt das
+      const animated = clip.rotationTracks.has(i) ? 1 : 0;
+      const score = animated * 2 + (n.name.length < 24 ? 1 : 0);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    if (best !== undefined) { found[role] = best; used.add(best); }
   }
   return found;
 }
@@ -97,9 +144,17 @@ function jointWorldAxis(sim, jid, out) {
  */
 export function retargetToG1(clip, sim, log = () => {}) {
   const bones = resolveBones(clip);
-  const missing = ['hips', 'leftUpLeg', 'leftLeg', 'rightUpLeg', 'rightLeg'].filter(k => bones[k] === undefined);
-  if (missing.length) throw new Error('Knochen nicht gefunden: ' + missing.join(', ') + ' — kein Mixamo-ähnliches Skelett?');
-  log(`Knochen erkannt: ${Object.keys(bones).length}/12`);
+  const need = ['hips', 'leftUpLeg', 'leftLeg', 'rightUpLeg', 'rightLeg'];
+  const missing = need.filter(k => bones[k] === undefined);
+  if (missing.length) {
+    const names = clip.nodes.map(n => n.name).filter(Boolean).slice(0, 12).join(', ');
+    throw new Error('Skelett nicht erkannt (' + missing.join(', ') + ' fehlt). Gefundene Knoten: ' + names + ' …');
+  }
+  const roleNames = ROLE_ORDER.filter(r => bones[r] !== undefined);
+  log(`Knochen erkannt: ${roleNames.length}/${ROLE_ORDER.length} (${roleNames.map(r => clip.nodes[bones[r]].name).join(', ')})`);
+
+  // Namen der gelösten Knochen für sampleWorld (normalisiert kompatibel)
+  const wanted = roleNames.map(r => clip.nodes[bones[r]].name);
 
   const nu = sim.nu;
   const A = sim.actByName;
@@ -122,8 +177,6 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const ALIGN_INV = [-0.5, -0.5, -0.5, 0.5];
 
   // Ruhewelt-Quaternionen der Quell-Knochen (ohne Animation)
-  const roleNames = Object.keys(bones);
-  const wanted = roleNames.map(r => [...BONE_ALIASES[r]]).flat();
   // Rest-Welt-Rotationen: lokale Rest-Rotationen verketten
   const restQ = new Map();
   const computeRest = (idx) => {

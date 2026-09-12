@@ -6,6 +6,12 @@
 
 import { clamp } from './math.js';
 
+// Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
+export const HOVER_R = {
+  alt: 0.3, vel: 0.2, tilt: 0.1, vz: 0.3, base: 0.02, energy: 0.0001,
+  zMin: 0.1, upMin: 0.4, xyMax: 12,
+};
+
 // ── Gemeinsame Gait-Baugruppen ──────────────────────────────
 
 // Trott-Gang für Vierbeiner (A1 & Spot): Ellipsen-CPG — Oberschenkel sin,
@@ -261,14 +267,14 @@ function makeHoverTask(cfg) {
       const c = Math.cos(yaw), s = Math.sin(yaw);
       const vFwd = c * this._v[0] + s * this._v[1];
       let r = 0;
-      r += -0.3 * Math.abs(this._p[2] - this.cmd.alt);
-      r += -0.2 * Math.abs(vFwd - this.cmd.vx);
-      r += -0.1 * (Math.abs(pitch) + Math.abs(roll));
-      r += -0.3 * Math.abs(this._v[2]);
-      r += 0.02;
+      r += -HOVER_R.alt * Math.abs(this._p[2] - this.cmd.alt);
+      r += -HOVER_R.vel * Math.abs(vFwd - this.cmd.vx);
+      r += -HOVER_R.tilt * (Math.abs(pitch) + Math.abs(roll));
+      r += -HOVER_R.vz * Math.abs(this._v[2]);
+      r += HOVER_R.base;
       let e = 0; for (let i = 0; i < 4; i++) e += this.lastAct[i] * this.lastAct[i];
-      r += -0.0001 * e;
-      const done = this._p[2] < 0.1 || upz < 0.4 || Math.abs(this._p[0]) > 12 || Math.abs(this._p[1]) > 12;
+      r += -HOVER_R.energy * e;
+      const done = this._p[2] < HOVER_R.zMin || upz < HOVER_R.upMin || Math.abs(this._p[0]) > HOVER_R.xyMax || Math.abs(this._p[1]) > HOVER_R.xyMax;
       return { r, done };
     },
     actionToCtrl(sim, act) {

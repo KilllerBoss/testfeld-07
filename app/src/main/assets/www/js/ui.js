@@ -117,6 +117,15 @@ export class UI {
     this.$('btnTrainTop').classList.toggle('lit', show);
   }
 
+  // ── KI-Trainer ──────────────────────────────────────────
+  toggleAI(force) {
+    const sheet = this.$('aiSheet');
+    const show = force !== undefined ? force : sheet.classList.contains('hidden');
+    sheet.classList.toggle('hidden', !show);
+    this.$('btnAI').classList.toggle('lit', show);
+    if (show) this.toggleTrain(false);
+  }
+
   trainStats(stats) {
     this.$('tReward').textContent = stats.reward;
     this.$('tEpisodes').textContent = String(stats.episodes);
