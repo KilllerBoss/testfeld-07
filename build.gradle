@@ -1,0 +1,4 @@
+// Trainrobot · Testfeld·07 — Root-Build
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

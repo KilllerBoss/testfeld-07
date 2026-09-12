@@ -1,0 +1,16 @@
+{
+ "model_xml": "a1.xml",
+ "scene_xml": "testfeld.xml",
+ "files": [
+  "LICENSE",
+  "a1.xml",
+  "assets/calf.obj",
+  "assets/hip.obj",
+  "assets/thigh.obj",
+  "assets/thigh_mirror.obj",
+  "assets/trunk.obj",
+  "assets/trunk_A1.png",
+  "scene.xml",
+  "testfeld.xml"
+ ]
+}

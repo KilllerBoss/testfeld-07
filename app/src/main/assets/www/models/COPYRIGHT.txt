@@ -1,0 +1,6 @@
+Roboter-Modelle: Google DeepMind MuJoCo Menagerie
+https://github.com/google-deepmind/mujoco_menagerie
+- unitree_g1 / unitree_a1: Copyright (c) Unitree Robotics, CC-BY 4.0
+- boston_dynamics_spot: Copyright (c) Boston Dynamics, CC-BY 4.0
+- skydio_x2: Copyright (c) Skydio, CC-BY 4.0
+Lizenzen siehe LICENSE je Modellordner.
