@@ -1,0 +1,44 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.trainrobot.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.trainrobot.app"
+        minSdk 30
+        targetSdk 34
+        versionCode 5
+        versionName "2.1.0"
+    }
+
+    signingConfigs {
+        release {
+            // Sideload-Build: selbstsigniert, Schlüssel wird bei Bedarf vom CI erzeugt
+            def ks = System.getenv("TR_KEYSTORE") ?: "trainrobot.keystore"
+            storeFile rootProject.file(ks)
+            storePassword System.getenv("TR_KEYSTORE_PASS") ?: "trainrobot"
+            keyAlias "trainrobot"
+            keyPassword System.getenv("TR_KEYSTORE_PASS") ?: "trainrobot"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/*.kotlin_module']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

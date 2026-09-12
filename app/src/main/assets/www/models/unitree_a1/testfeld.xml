@@ -1,0 +1,60 @@
+<mujoco model="testfeld">
+  <include file="a1.xml"/>
+  <worldbody>
+    <geom name="tf_floor" type="plane" size="0 0 0.05" rgba="0.07 0.08 0.11 1" condim="3" friction="1.0 0.005 0.0001"/>
+    <body name="tf_ramp_a" pos="3.4 -1.4 0.055" euler="0 -0.21 0">
+      <geom name="tf_ramp_a_g" type="box" size="1.30 0.40 0.030" rgba="0.10 0.115 0.145 1" condim="3" friction="0.9"/>
+    </body>
+    <body name="tf_plat" pos="6.0 1.6 0.070">
+      <geom name="tf_plat_g" type="box" size="0.90 0.90 0.070" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_plat_ramp" pos="4.55 1.6 0.035" euler="0 -0.19 0">
+      <geom name="tf_plat_ramp_g" type="box" size="0.95 0.35 0.018" rgba="0.10 0.115 0.145 1" condim="3" friction="0.9"/>
+    </body>
+    <body name="tf_step0" pos="0 4.2 0.025">
+      <geom name="tf_step0_g" type="box" size="0.85 0.28 0.025" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_step1" pos="0 4.75 0.050">
+      <geom name="tf_step1_g" type="box" size="0.85 0.28 0.050" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_step2" pos="0 5.300000000000001 0.075">
+      <geom name="tf_step2_g" type="box" size="0.85 0.28 0.075" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_wall_l" pos="-4.5 -1.1 0.175">
+      <geom name="tf_wall_l_g" type="box" size="1.6 0.09 0.175" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_wall_r" pos="-4.5 1.1 0.175">
+      <geom name="tf_wall_r_g" type="box" size="1.6 0.09 0.175" rgba="0.10 0.115 0.145 1" condim="3"/>
+    </body>
+    <body name="tf_gate_l" pos="-7 -2.8 0.250">
+      <geom name="tf_gate_l_g" type="cylinder" size="0.050 0.250" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_gate_l_top" type="cylinder" size="0.052 0.010" pos="0 0 0.250" rgba="0.95 0.52 0.10 1" condim="3"/>
+    </body>
+    <body name="tf_gate_r" pos="-7 -1.2 0.250">
+      <geom name="tf_gate_r_g" type="cylinder" size="0.050 0.250" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_gate_r_top" type="cylinder" size="0.052 0.010" pos="0 0 0.250" rgba="0.95 0.52 0.10 1" condim="3"/>
+    </body>
+    <body name="tf_gate_top" pos="-7 -2 0.530">
+      <geom name="tf_gate_top_g" type="box" size="0.08 0.9 0.020" rgba="0.95 0.52 0.10 1" condim="3"/>
+    </body>
+    <body name="tf_pil0" pos="2.5 2.5 0.275">
+      <geom name="tf_pil0_g" type="cylinder" size="0.070 0.275" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_pil0_top" type="cylinder" size="0.072 0.007" pos="0 0 0.275" rgba="0.22 0.62 0.66 1" condim="3"/>
+    </body>
+    <body name="tf_pil1" pos="-2.5 3.0 0.275">
+      <geom name="tf_pil1_g" type="cylinder" size="0.070 0.275" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_pil1_top" type="cylinder" size="0.072 0.007" pos="0 0 0.275" rgba="0.22 0.62 0.66 1" condim="3"/>
+    </body>
+    <body name="tf_pil2" pos="-2.0 -3.0 0.275">
+      <geom name="tf_pil2_g" type="cylinder" size="0.070 0.275" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_pil2_top" type="cylinder" size="0.072 0.007" pos="0 0 0.275" rgba="0.22 0.62 0.66 1" condim="3"/>
+    </body>
+    <body name="tf_pil3" pos="5.5 -3.0 0.275">
+      <geom name="tf_pil3_g" type="cylinder" size="0.070 0.275" rgba="0.10 0.115 0.145 1" condim="3"/>
+      <geom name="tf_pil3_top" type="cylinder" size="0.072 0.007" pos="0 0 0.275" rgba="0.22 0.62 0.66 1" condim="3"/>
+    </body>
+    <body name="tf_edge" pos="7.4 -0.5 0.045" euler="0.35 0 0.4">
+      <geom name="tf_edge_g" type="box" size="0.90 0.90 0.025" rgba="0.10 0.115 0.145 1" condim="3" friction="0.9"/>
+    </body>
+  </worldbody>
+</mujoco>

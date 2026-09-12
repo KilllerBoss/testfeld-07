@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e14">
+<title>Trainrobot · Testfeld·07</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 3D-Welt: Vollbild -->
+  <canvas id="gl"></canvas>
+
+  <!-- Ladesplash -->
+  <div id="splash">
+    <div class="splash-mark">TESTFELD·07</div>
+    <div class="splash-title">TRAINROBOT</div>
+    <div class="splash-sub">MuJoCo-Sandbox mit Policy-Training · CPU · ohne CUDA</div>
+    <div id="splashStatus" class="splash-status">Starte System …</div>
+    <div class="splash-bar"><div id="splashBar"></div></div>
+  </div>
+
+  <!-- Fehler-Anzeige (KEIN Fallback: bei Defekt wird abgebrochen) -->
+  <div id="failScreen" class="hidden">
+    <div class="fail-box">
+      <div class="fail-head">SYSTEMFEHLER</div>
+      <div id="failMsg" class="fail-msg"></div>
+      <button id="failReload" class="btn btn-solid">Neustart</button>
+    </div>
+  </div>
+
+  <!-- Obere Leiste -->
+  <header id="topbar" class="ui hidden">
+    <div class="brand">
+      <span class="brand-mark">TESTFELD·07</span>
+      <span id="robotTitle" class="brand-robot">—</span>
+    </div>
+    <div class="top-actions">
+      <button id="btnTrainTop" class="iconbtn" aria-label="Training" title="Training">
+        <svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+      <button id="btnFull" class="iconbtn" aria-label="Vollbild" title="Vollbild">
+        <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="btnConsole" class="iconbtn" aria-label="Konsole" title="Konsole">
+        <svg viewBox="0 0 24 24"><path d="M5 7l5 5-5 5M12 17h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Roboter-Auswahl: alle frei, ungebunden -->
+  <nav id="robotBar" class="ui hidden" aria-label="Roboter">
+    <button class="robot-chip" data-robot="a1">
+      <span class="rc-dot rc-a1"></span><span class="rc-name">A1</span><span class="rc-sub">Unitree</span>
+    </button>
+    <button class="robot-chip" data-robot="spot">
+      <span class="rc-dot rc-spot"></span><span class="rc-name">SPOT</span><span class="rc-sub">Boston Dynamics</span>
+    </button>
+    <button class="robot-chip" data-robot="g1">
+      <span class="rc-dot rc-g1"></span><span class="rc-name">G1</span><span class="rc-sub">Unitree</span>
+    </button>
+    <button class="robot-chip" data-robot="x2">
+      <span class="rc-dot rc-x2"></span><span class="rc-name">X2</span><span class="rc-sub">Skydio</span>
+    </button>
+  </nav>
+
+  <!-- Modus-Umschalter -->
+  <nav id="modeBar" class="ui hidden" aria-label="Modus">
+    <button id="modeManuell" class="mode-chip active">MANUELL</button>
+    <button id="modePolicy" class="mode-chip">POLICY</button>
+    <span id="policyHint" class="policy-hint hidden">keine Policy gespeichert</span>
+  </nav>
+
+  <!-- Statuszeile -->
+  <div id="statusLine" class="ui hidden">
+    <span id="stSpeed">0,00 m/s</span>
+    <span class="sep">·</span>
+    <span id="stAlt">0,00 m</span>
+    <span class="sep">·</span>
+    <span id="stHz">60 Hz</span>
+    <span class="sep">·</span>
+    <span id="stMode">MANUELL</span>
+  </div>
+
+  <!-- Steuerung -->
+  <div id="controls" class="ui hidden">
+    <div id="joyZone"><div id="joyBase"><div id="joyStick"></div></div></div>
+    <div id="actionCol">
+      <button id="btnUp" class="padbtn drone-only hidden" aria-label="Steigen">
+        <svg viewBox="0 0 24 24"><path d="M12 5l7 8h-4v6h-6v-6H5z" fill="currentColor"/></svg>
+      </button>
+      <button id="btnDown" class="padbtn drone-only hidden" aria-label="Sinken">
+        <svg viewBox="0 0 24 24"><path d="M12 19l-7-8h4V5h6v6h4z" fill="currentColor"/></svg>
+      </button>
+      <button id="btnReset" class="padbtn" aria-label="Zurücksetzen">
+        <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.34 5.66M4 12V7m0 5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Trainings-Panel -->
+  <section id="trainSheet" class="sheet hidden">
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <span class="sheet-title">POLICY-TRAINING</span>
+      <span id="trainRobotName" class="sheet-sub">—</span>
+      <button id="trainClose" class="iconbtn" aria-label="Schließen">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="train-grid">
+      <div class="stat"><span class="stat-k">Belohnung</span><span id="tReward" class="stat-v">–</span></div>
+      <div class="stat"><span class="stat-k">Episoden</span><span id="tEpisodes" class="stat-v">0</span></div>
+      <div class="stat"><span class="stat-k">Schritte</span><span id="tSteps" class="stat-v">0</span></div>
+      <div class="stat"><span class="stat-k">Tempo</span><span id="tRate" class="stat-v">0 /s</span></div>
+    </div>
+
+    <canvas id="rewardChart" width="640" height="200"></canvas>
+
+    <div class="train-actions">
+      <button id="tStart" class="btn btn-solid">Training starten</button>
+      <button id="tReset" class="btn">Zurücksetzen</button>
+    </div>
+    <div class="train-actions">
+      <div class="speed-group" role="group" aria-label="Tempo">
+        <button class="speed-chip" data-speed="1">1×</button>
+        <button class="speed-chip" data-speed="4">4×</button>
+        <button class="speed-chip" data-speed="16">16×</button>
+        <button class="speed-chip active" data-speed="max">MAX</button>
+      </div>
+    </div>
+    <div class="train-actions">
+      <button id="tSave" class="btn small">Speichern</button>
+      <button id="tLoad" class="btn small">Laden</button>
+      <button id="tExport" class="btn small">Export</button>
+      <button id="tImport" class="btn small">Import</button>
+      <input type="file" id="importFile" accept=".json,application/json" class="hidden">
+    </div>
+
+    <div id="glbSection" class="glb-section hidden">
+      <div class="glb-head">
+        <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · HUMANOID (G1)</span>
+        <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Geist zeigen</label>
+      </div>
+      <div class="glb-row">
+        <button id="glbImportBtn" class="btn small">.glb importieren</button>
+        <input type="file" id="glbFile" accept=".glb,model/gltf-binary" class="hidden" multiple>
+        <button id="bcBtn" class="btn small">BC vortrainieren</button>
+      </div>
+      <div id="glbList" class="glb-list"></div>
+      <div id="glbStatus" class="train-note">Retargeting: Quaternion-Weltdelta → G1-Achsen, Fuß-Boden-Anpassung, Übergänge per Blend.</div>
+    </div>
+    <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
+  </section>
+
+  <!-- Konsole -->
+  <section id="consolePanel" class="console hidden">
+    <div class="console-head">
+      <span>KONSOLE</span>
+      <button id="consoleClose" class="iconbtn" aria-label="Konsole schließen">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="consoleLog"></div>
+  </section>
+
+  <div id="toast" role="status"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

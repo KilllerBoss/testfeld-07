@@ -1,0 +1,12 @@
+{
+ "model_xml": "x2.xml",
+ "scene_xml": "testfeld.xml",
+ "files": [
+  "LICENSE",
+  "assets/X2_lowpoly.obj",
+  "assets/X2_lowpoly_texture_SpinningProps_1024.png",
+  "scene.xml",
+  "testfeld.xml",
+  "x2.xml"
+ ]
+}

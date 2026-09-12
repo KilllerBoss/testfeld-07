@@ -1,0 +1,74 @@
+name: build-apk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Hart-Prüfungen (kein Fallback)
+        run: |
+          set -e
+          # 1. WASM-Magie
+          head -c 4 app/src/main/assets/www/vendor/mujoco.wasm | od -A n -t x1 | tr -d ' \n' | grep -q '^0061736d$'
+          echo "WASM-Magie OK (0061736d)"
+          # 2. Keine Alt-Elemente / kein Pre-Order
+          ! grep -ri "pre-order\|predator\|MicroDuck\|Armbot\|Original (ONNX)" app/src/main/assets/www/js app/src/main/assets/www/index.html
+          echo "Keine Alt-Elemente OK"
+          # 3. Vier Roboter vorhanden
+          for r in unitree_g1 unitree_a1 boston_dynamics_spot skydio_x2; do
+            test -f "app/src/main/assets/www/models/$r/manifest.json"
+          done
+          echo "4 Menagerie-Modelle OK"
+          # 4. GLB-Pipeline vorhanden
+          test -f app/src/main/assets/www/js/retarget.js
+          test -f app/src/main/assets/www/js/glb.js
+          echo "GLB-Pipeline OK"
+
+      - name: Release-Keystore erzeugen (self-signed, nur CI)
+        run: |
+          keytool -genkeypair -keystore ci.keystore -alias trainrobot \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass trainrobot -keypass trainrobot \
+            -dname "CN=Trainrobot, OU=Testfeld07, O=Trainrobot, L=Berlin, C=DE"
+
+      - name: Build (Trainrobot.apk)
+        env:
+          TR_KEYSTORE: ${{ github.workspace }}/ci.keystore
+        run: |
+          cd app 2>/dev/null || cd .
+          cd ..
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Umbenennen + Prüfsumme
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk Trainrobot.apk
+          sha256sum Trainrobot.apk
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Trainrobot.apk
+          path: Trainrobot.apk
+
+      - name: Release bei Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Trainrobot.apk
+          generate_release_notes: true
