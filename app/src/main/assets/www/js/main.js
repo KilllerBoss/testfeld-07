@@ -15,9 +15,10 @@ import { GlbClip } from './glb.js';
 import { retargetToG1 } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
-import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory } from './ai.js';
+import { buildGlbScene } from './glbscene.js';
+import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 
-const VERSION = '2.3.0';
+const VERSION = '2.3.1';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -28,6 +29,7 @@ let r3d = null;
 const S = {
   robotId: null,
   motionClip: null,   // aktive GLB-Referenz (nur G1)
+  srcScene: null,     // Original-3D-Modell des Lehrer-Ghosts (In-Memory)
   clips: [],          // gespeicherte Clips (IndexedDB)
   ghostOn: true,
   sim: null,
@@ -146,7 +148,11 @@ function loadPolicy(id) {
   try {
     const raw = localStorage.getItem(policyKey(id));
     if (!raw) return null;
-    return PPO.fromJSON(JSON.parse(raw));
+    const p = PPO.fromJSON(JSON.parse(raw));
+    // Format-Wache: Policy muss zur AKTUELLEN Aufgabe passen (Motion hat
+    // seit Root-Folgen einen anderen Beobachtungsraum als Speed)
+    if (S.task && (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim)) return null;
+    return p;
   } catch (e) { return null; }
 }
 function savePolicy(id) {
@@ -399,7 +405,43 @@ async function aiOnOpen() {
   logEl.innerHTML = '';
   for (const m of S.aiHistory.slice(-10)) aiPush(m.role === 'model' ? 'bot' : 'user', m.text);
   if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. (z. B. „schneller laufen, aber stabil bleiben")');
+  updateAIKeyStatus();
   await updateAIModelLabel();
+}
+
+// ── API-Schlüssel wechseln ──────────────────────────────────
+function updateAIKeyStatus() {
+  const st = document.getElementById('aiKeyStatus');
+  if (!st) return;
+  const custom = isCustomKey();
+  const k = getApiKey();
+  const mask = k.length > 10 ? k.slice(0, 5) + '…' + k.slice(-4) : '***';
+  st.textContent = custom ? 'Eigener Schlüssel aktiv (' + mask + ') — „Standard" stellt den eingebauten wieder her.'
+    : 'Eingebauter Schlüssel aktiv (' + mask + ').';
+}
+
+function wireAIKey() {
+  const inp = document.getElementById('aiKeyInput');
+  const save = document.getElementById('aiKeySave');
+  const reset = document.getElementById('aiKeyReset');
+  if (!inp || !save || !reset) return;
+  save.addEventListener('click', () => {
+    const v = inp.value.trim();
+    if (!v) { ui.toast('Erst einen Schlüssel einfügen', true); return; }
+    const used = setApiKey(v);
+    inp.value = '';
+    updateAIKeyStatus();
+    ui.toast('KI-Schlüssel gesetzt (' + used.slice(0, 5) + '…)' );
+    log('KI: eigener API-Schlüssel aktiv — Modell-Erkennung neu', 'ok');
+    updateAIModelLabel().catch(() => {});
+  });
+  reset.addEventListener('click', () => {
+    setApiKey('');
+    updateAIKeyStatus();
+    ui.toast('Eingebauter Schlüssel aktiv');
+    log('KI: eingebauter API-Schlüssel wieder aktiv', 'ok');
+    updateAIModelLabel().catch(() => {});
+  });
 }
 
 // ── Training ────────────────────────────────────────────────
@@ -491,6 +533,7 @@ function policyCtrlStep() {
 function resetRobot() {
   if (!S.sim) return;
   S.sim.reset();
+  if (S.task && S.task.kind === 'motion') S.task.reset(new RNG(4242), S.sim); // zurück auf den Bahn-Anfang
   if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
   S.epReward = 0;
   log('Roboter zurückgesetzt auf Keyframe „' + S.sim.cfg.keyName + '"');
@@ -613,20 +656,33 @@ function loop(now) {
       S.acc -= cdt;
       guard++;
       if (S.mode === 'policy' && S.trainer) policyCtrlStep();
-      else applyGait(cdt);
+      else {
+        applyGait(cdt);
+        // Lehrer läuft auch im MANUELL-Modus weiter (Vorschau der Referenz)
+        if (S.task && S.task.kind === 'motion') S.task.advance(cdt);
+      }
       checkFall();
     }
     S.stepsPerSec = Math.max(1, Math.round(CTRL_DT)) * 0 + fps * Math.max(1, Math.round(CTRL_DT / S.sim.timestep));
   }
 
   r3d.updateFrame(S.sim, dt);
-  // Geist: Referenzpose mitlaufen lassen
-  if (S.ghostOn && S.task && S.task.kind === 'motion' && r3d.ghostGroups) {
+  // Geist: Referenzpose mitlaufen lassen — Lehrer (Original) + G1-Geist
+  // folgen BEIDE der Root-Bahn (der Lehrer läuft wirklich durchs Feld,
+  // der Roboter lernt, ihm zu folgen — nicht „auf der Stelle" zu gehen)
+  if (S.ghostOn && S.task && S.task.kind === 'motion' && (r3d.ghostGroups || r3d.sourceGhost)) {
     const clip = S.task.clip;
     const fr = Math.floor(S.task.phase * clip.n) % clip.n;
-    const gh = S.sim.makeGhostData();
-    S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr]);
-    r3d.updateGhost(gh);
+    if (r3d.sourceGhost) r3d.updateSourceGhost(fr);
+    if (r3d.ghostGroups) {
+      const gh = S.sim.makeGhostData();
+      if (clip.root && clip.yaw) {
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr]);
+      } else {
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr]);
+      }
+      r3d.updateGhost(gh);
+    }
   }
   r3d.render();
 
@@ -683,6 +739,7 @@ function wireUI() {
   };
   document.getElementById('aiSend').addEventListener('click', () => { controls.buzz(); _aiSubmit(); });
   document.getElementById('aiInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); _aiSubmit(); } });
+  wireAIKey();
   for (const b of document.querySelectorAll('.ai-sug')) {
     b.addEventListener('click', () => { controls.buzz(); sendAIMessage(b.dataset.q); });
   }
@@ -805,8 +862,11 @@ function wireUI() {
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
   document.getElementById('ghostToggle').addEventListener('change', (e) => {
     S.ghostOn = e.target.checked;
-    if (!S.ghostOn) r3d.removeGhost();
-    else if (S.task && S.task.kind === 'motion' && S.sim) r3d.buildGhost(S.sim);
+    if (!S.ghostOn) { r3d.removeGhost(); r3d.removeSourceGhost(); }
+    else if (S.task && S.task.kind === 'motion' && S.motionClip) {
+      if (S.sim) r3d.buildGhost(S.sim);
+      r3d.buildSourceGhost(S.motionClip, S.srcScene || null);
+    }
   });
 
   refreshClipList().catch(() => { /* IDB evtl. gesperrt */ });
@@ -944,14 +1004,33 @@ function activateClip(rec) {
   stopTraining(true);
   S.motionClip = unpackMotion(rec.motion);
   S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
-  S.task.reset(new RNG(4242), S.sim);
+  S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
   S.obsBuf = new Float32Array(S.task.obsDim);
   S.actBuf = new Float32Array(S.task.actDim);
   S.trainer = loadPolicy(S.robotId);
   ui.policyAvailable(!!S.trainer);
   ui.$('stMode').textContent = 'GLB';
-  if (S.ghostOn) r3d.buildGhost(S.sim);
-  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife) — Aufgabe: Motion-Tracking', 'ok');
+  // Lehrer-Ghost: Skelett-Figur sofort, Original-Mesh sobald gebaut
+  S.srcScene = null;
+  if (S.ghostOn) {
+    r3d.buildGhost(S.sim);
+    r3d.buildSourceGhost(S.motionClip, null);
+  }
+  if (rec.glb) {
+    try {
+      const c2 = new GlbClip(rec.glb);
+      c2.useAnimation(rec.animIndex || 0);
+      const pkg = buildGlbScene(c2);
+      if (pkg) {
+        S.srcScene = pkg;
+        if (S.ghostOn) r3d.buildSourceGhost(S.motionClip, pkg);
+        log('Lehrer: Original-Modell (' + pkg.meshCount + ' Meshes, ' + pkg.bones + ' Knochen) zeigt die Animation');
+      }
+    } catch (e) { log('Original-Modell nicht darstellbar — Skelett-Lehrer aktiv (' + e.message + ')'); }
+  }
+  const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Roboter folgt dem wandernden Lehrer)' : '';
+  const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
+  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ' — Aufgabe: Motion-Tracking', 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);
   refreshClipList().catch(() => {});
 }
@@ -959,7 +1038,9 @@ function activateClip(rec) {
 function deactivateClip() {
   stopTraining(true);
   S.motionClip = null;
+  S.srcScene = null;
   r3d.removeGhost();
+  r3d.removeSourceGhost();
   if (S.sim) {
     const cfg = S.sim.cfg;
     S.task = cfg.task(cfg);

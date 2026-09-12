@@ -144,7 +144,7 @@
     <div id="glbSection" class="glb-section hidden">
       <div class="glb-head">
         <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · HUMANOID (G1)</span>
-        <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Geist zeigen</label>
+        <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Lehrer &amp; Geist zeigen</label>
       </div>
       <div class="glb-row">
         <button id="glbImportBtn" class="btn small">.glb importieren</button>
@@ -152,7 +152,7 @@
         <button id="bcBtn" class="btn small">BC vortrainieren</button>
       </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">Retargeting: Quaternion-Weltdelta → G1-Achsen, Fuß-Boden-Anpassung, Übergänge per Blend.</div>
+      <div id="glbStatus" class="train-note">Lehrer-Ghost spielt die ORIGINAL-Animation (mit Root-Bewegung durchs Feld) — auch Mixamo-, Cartwheel- &amp; assimp-Dateien. Der G1 lernt, der Bahn zu folgen.</div>
     </div>
     <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
   </section>
@@ -177,6 +177,12 @@
       <input id="aiInput" type="text" placeholder="Was soll dein Roboter lernen?" autocomplete="off" enterkeyhint="send">
       <button id="aiSend" class="btn btn-solid ai-send" aria-label="Senden">GO</button>
     </div>
+    <div class="ai-keyrow">
+      <input id="aiKeyInput" type="password" placeholder="Anderer Gemini-API-Schlüssel (optional)" autocomplete="off">
+      <button id="aiKeySave" class="btn small">Setzen</button>
+      <button id="aiKeyReset" class="btn small">Standard</button>
+    </div>
+    <div id="aiKeyStatus" class="ai-note">Eingebauter Schlüssel aktiv.</div>
     <div class="ai-foot">
       <div class="speed-group ai-modelgroup" role="group" aria-label="KI-Modell">
         <button class="speed-chip aimode active" data-aimode="fast">SCHNELL</button>

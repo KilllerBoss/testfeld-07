@@ -3,13 +3,37 @@
 // Sprache, was sein Roboter lernen soll; die KI passt die
 // Trainingskonfiguration an (Belohnungen, Zieltempo, PPO-
 // Hyperparameter, Motion-/Hover-Task) oder erklärt sie.
-// Transport: native Brücke (TrainrobotAI, APK) sonst fetch
-// (Browser). Schlüssel fest eingebettet — Nutzer-Wunsch
-// „Benutze immer". Keine physics-Fallbacks: Fehler klar melden.
+// Transport: native Brücke (TrainrobotAI, APK, Content-Type: JSON)
+// sonst fetch (Browser). Eingebetteter Schlüssel als Standard, in der
+// KI-Tafel jederzeit ersetzbar. Keine Fallbacks: Fehler klar melden.
 // ═══════════════════════════════════════════════════════════
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const API_KEY = 'AQ.Ab8RN6Lu6QU8a1X9fk201_fhWku_ZOobtSO4aHM8X1xhGLWwNw';
+const EMBEDDED_KEY = 'AQ.Ab8RN6Lu6QU8a1X9fk201_fhWku_ZOobtSO4aHM8X1xhGLWwNw';
+const LS_KEY = 'tr_ai_key_v1';
+
+// Nutzer-eigener Schlüssel möglich: Standard = eingebetteter Schlüssel;
+// über die KI-Tafel (Schlüssel-Feld) jederzeit ersetzbar.
+export function getApiKey() {
+  try {
+    const k = (localStorage.getItem(LS_KEY) || '').trim();
+    if (k) return k;
+  } catch (e) { /* kein Storage */ }
+  return EMBEDDED_KEY;
+}
+export function setApiKey(k) {
+  const v = (k || '').trim();
+  try {
+    if (v) localStorage.setItem(LS_KEY, v);
+    else localStorage.removeItem(LS_KEY);
+  } catch (e) { /* egal */ }
+  _models = null; // Modell-Erkennung mit neuem Schlüssel neu starten
+  try { localStorage.removeItem(LS_MODELS); } catch (e) { /* egal */ }
+  return getApiKey();
+}
+export function isCustomKey() {
+  try { return !!(localStorage.getItem(LS_KEY) || '').trim(); } catch (e) { return false; }
+}
 
 const LS_MODELS = 'tr_ai_models_v1';
 const LS_CHAT = 'tr_ai_chat_v1';
@@ -84,7 +108,7 @@ export async function ensureModels(force = false) {
     } catch (e) { /* neu entdecken */ }
   }
   try {
-    const url = `${API_BASE}/models?pageSize=200&key=${encodeURIComponent(API_KEY)}`;
+    const url = `${API_BASE}/models?pageSize=200&key=${encodeURIComponent(getApiKey())}`;
     const { code, body } = await _http(url, 'GET', '');
     if (code !== 200) throw new Error(_errText(code, body));
     const list = (JSON.parse(body).models || [])
@@ -130,7 +154,7 @@ BEDEUTUNG DER FELDER
 - cmd.vx: geforderte Zielgeschwindigkeiten [min,max] in m/s (schneller laufen = max erhöhen). cmd.yaw: geforderte Drehraten [min,max] in rad/s. Bei der Drohne: cmd.alt = geforderte Höhen [min,max] in m.
 - actSpan: Aktionsamplitude um die Ruhepose (Bewegungsumfang der Policy).
 - done: Abbruchkriterien (upMin = Aufrecht-Grenze, zMin/zMax = Körperhöhe min/max in m).
-- motionR (G1 + GLB-Animation): pose = Posen-Treue zur Referenz, height = Höhen-Treue, up = Aufrecht, base = Grundbetrag, energy = Aktionsaufwand, poseScale/hScale = Toleranzskalen, upMin/hMin/hMax = Abbruch.
+- motionR (G1 + GLB-Animation): pose = Posen-Treue zur Referenz, height = Höhen-Treue, root = Bahn-Folgen (Abstand zur wandernden Referenz-Wurzel), yaw = Blick-Treue zur Bahn, up = Aufrecht, base = Grundbetrag, energy = Aktionsaufwand, poseScale/hScale/rootScale/yawScale = Toleranzskalen, upMin/hMin/hMax = Abbruch, rootDone = Abbruch-Abstand zur Bahn.
 - hoverR (Drohne): alt = Höhenfehler, vel = Vorwärtsfehler, tilt = Neigung, vz = Sinkflug, base, energy, zMin/upMin/xyMax = Abbruch.
 - ppo: lr = Lernrate, gamma = Diskontfaktor, lam = GAE, clip = Clip-Ratio, epochs = Epochen pro Update, mb = Minibatch-Größe, T = Rollout-Länge (wirkt beim nächsten Trainingsstart), cV = Wert-Fehlergewicht, cE = Entropie-Bonus (höher = mehr Erkundung), maxGrad = Gradient-Clip.
 
@@ -143,7 +167,7 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
     "cmd": {"vx":[-0.6,1.0],"yaw":[-1.2,1.2],"alt":[0.4,2.2]},
     "done": {"upMin":0.45,"zMin":0.12,"zMax":1.5},
     "actSpan": 0.55,
-    "motionR": {"pose":0.72,"height":0.2,"up":0.08,"base":0.03,"energy":0.00005,"poseScale":0.35,"hScale":0.09,"upMin":0.5,"hMin":0.55,"hMax":1.4},
+    "motionR": {"pose":0.72,"height":0.2,"root":0.22,"yaw":0.06,"up":0.08,"base":0.03,"energy":0.00005,"poseScale":0.35,"hScale":0.09,"rootScale":0.35,"yawScale":0.8,"upMin":0.5,"hMin":0.55,"hMax":1.4,"rootDone":1.6},
     "hoverR": {"alt":0.3,"vel":0.2,"tilt":0.1,"vz":0.3,"base":0.02,"energy":0.0001,"zMin":0.1,"upMin":0.4,"xyMax":12},
     "ppo": {"lr":0.0003,"gamma":0.99,"lam":0.95,"clip":0.2,"epochs":4,"mb":256,"T":1024,"cV":0.5,"cE":0.005,"maxGrad":0.5}
   }
@@ -193,7 +217,7 @@ export function validatePatch(raw) {
   }
   if (raw.done) { out.done = {}; _clampObj(raw.done, { upMin: [0.1, 0.9], zMin: [0, 1], zMax: [0.5, 3] }, out.done); }
   if (raw.actSpan !== undefined) out.actSpan = _num(raw.actSpan, 0.05, 1.2, 0.5);
-  if (raw.motionR) { out.motionR = {}; _clampObj(raw.motionR, { pose: [0, 2], height: [0, 2], up: [0, 2], base: [0, 0.2], energy: [0, 0.001], poseScale: [0.1, 1], hScale: [0.02, 0.3], upMin: [0.1, 0.95], hMin: [0.2, 1.2], hMax: [0.8, 2] }, out.motionR); }
+  if (raw.motionR) { out.motionR = {}; _clampObj(raw.motionR, { pose: [0, 2], height: [0, 2], root: [0, 2], yaw: [0, 2], up: [0, 2], base: [0, 0.2], energy: [0, 0.001], poseScale: [0.1, 1], hScale: [0.02, 0.3], rootScale: [0.1, 1.5], yawScale: [0.2, 2], upMin: [0.1, 0.95], hMin: [0.2, 1.2], hMax: [0.8, 2], rootDone: [0.4, 5] }, out.motionR); }
   if (raw.hoverR) { out.hoverR = {}; _clampObj(raw.hoverR, { alt: [0, 2], vel: [0, 2], tilt: [0, 2], vz: [0, 2], base: [0, 0.2], energy: [0, 0.005], zMin: [0.02, 0.5], upMin: [0.1, 0.9], xyMax: [3, 50] }, out.hoverR); }
   if (raw.ppo) {
     out.ppo = {};
@@ -228,7 +252,7 @@ export async function askAI({ text, mode = 'fast', ctx }) {
   for (const m of (ctx.history || []).slice(-8)) contents.push({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: m.text }] });
   contents.push({ role: 'user', parts: [{ text }] });
 
-  const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(API_KEY)}`;
+  const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(getApiKey())}`;
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: sys }] },
     contents,

@@ -249,10 +249,10 @@ export class RobotSim {
   }
 
   /**
-   * Setzt die Geister-Pose: Gelenke aus q[off..off+nu], Basis auf (0,0,höhe), Blick +X.
-   * Danach mj_forward (nur Kinematik). Rückgabe: das Geister-MjData.
+   * Setzt die Geister-Pose: Gelenke aus q[off..off+nu], Basis auf (x, y, höhe)
+   * mit Blickrichtung yaw (um +Z). Danach mj_forward (nur Kinematik).
    */
-  setGhostPose(ghost, qArr, off, height) {
+  setGhostPose(ghost, qArr, off, height, x = 0, y = 0, yaw = 0) {
     const gq = ghost.qpos;
     for (let a = 0; a < this.nu; a++) gq[this.actQposAdr[a]] = qArr[off + a];
     // Freier Basis-Gelenkanfang (7 Werte: pos + quat)
@@ -260,9 +260,26 @@ export class RobotSim {
       const m = this.model;
       return m.jnt_qposadr[m.body_jntadr[this.baseBody]];
     })());
-    gq[adr] = 0; gq[adr + 1] = 0; gq[adr + 2] = height;
-    gq[adr + 3] = 1; gq[adr + 4] = 0; gq[adr + 5] = 0; gq[adr + 6] = 0;
+    gq[adr] = x; gq[adr + 1] = y; gq[adr + 2] = height;
+    const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
+    gq[adr + 3] = cy; gq[adr + 4] = 0; gq[adr + 5] = 0; gq[adr + 6] = sy;
     this._mjApi.mj_forward(this.model, ghost);
     return ghost;
+  }
+
+  /**
+   * Setzt die echte Basis (nach reset) horizontal auf (x, y) mit Blick yaw —
+   * Höhe/Blick des Keyframes bleiben sonst erhalten. Der Roboter startet
+   * damit AUF der Referenz-Bahn statt im Ursprung.
+   */
+  placeBase(x, y, yaw = 0) {
+    const adr = this._baseQposAdr || (this._baseQposAdr = (() => {
+      const m = this.model;
+      return m.jnt_qposadr[m.body_jntadr[this.baseBody]];
+    })());
+    this._qpos[adr] = x; this._qpos[adr + 1] = y;
+    const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
+    this._qpos[adr + 3] = cy; this._qpos[adr + 4] = 0; this._qpos[adr + 5] = 0; this._qpos[adr + 6] = sy;
+    this._mjApi.mj_forward(this.model, this.data);
   }
 }

@@ -54,6 +54,8 @@ export class GlbClip {
 
     // Animationen: Liste + Auswahl
     if (!json.animations || !json.animations.length) throw new Error('GLB ohne Animationen');
+    this.mergedFrom = 0;
+    this._maybeMergeFragments(); // assimp-FBX-Exporte: 1 Mini-Animation je Knochen → 1 Clip
     this.animations = json.animations.map((a, i) => ({
       index: i,
       name: a.name || ('Animation ' + (i + 1)),
@@ -112,6 +114,72 @@ export class GlbClip {
     const first = this.rotationTracks.values().next().value;
     this.fpsHint = this.duration > 0 ? Math.min(60, Math.max(15, Math.round(first.times.length / this.duration))) : 30;
     return this;
+  }
+
+  // Assimp-FBX-Konvertierungen (Mixamo & Co.) zerlegen einen Take in
+  // VIELE Mini-Animationen (je Knochen eine, alle gleiche Dauer, ≤4 Kanäle).
+  // Ohne Merge würde nur Fragment 0 gespielt (oft nur der Kopf) — die
+  // Figur bliebe praktisch in der Ruhepose. Wir führen alle Fragmente zu
+  // EINEM Clip zusammen (Index 0); die Originale bleiben erreichbar.
+  _maybeMergeFragments() {
+    const anims = this.gltf.animations || [];
+    if (anims.length < 3) return false;
+    const durs = anims.map(a => _animDuration(this.gltf, a));
+    const d0 = durs[0], tol = Math.max(0.05, 0.02 * d0);
+    for (const d of durs) if (Math.abs(d - d0) > tol) return false; // echte Multi-Take-Datei
+    for (const a of anims) {
+      const cn = (a.channels || []).length;
+      if (cn === 0 || cn > 4) return false; // echte Clips haben viele Kanäle
+    }
+    const samplers = [], channels = [];
+    for (const a of anims) {
+      const base = samplers.length;
+      for (const s of a.samplers || []) samplers.push(s);
+      for (const ch of a.channels || []) {
+        channels.push({ sampler: base + ch.sampler, target: ch.target });
+      }
+    }
+    const merged = { name: 'Vollständig (' + anims.length + ' Fragmente zusammengeführt)', samplers, channels };
+    // Fragmente KOMPLETT ersetzen — sie sind Einzelknochen-Trümmer, die
+    // als „Animationen" nur Müll-Clips erzeugen würden.
+    this.gltf.animations = [merged];
+    this.mergedFrom = anims.length;
+    return true;
+  }
+
+  // Vollständige Vorwärtskinematik: WELT-Position UND WELT-Quaternion je
+  // Knoten (inkl. aller animierter Zwischenknoten wie assimp-$-Fragmente).
+  // outQ/outP: Map nodeIdx → [x,y,z,w] bzw. [x,y,z] — reine Ausgaben.
+  sampleWorldFull(t, wantedNames, outQ, outP) {
+    outQ.clear(); outP.clear();
+    const needed = new Set();
+    for (const name of wantedNames) {
+      let idx = this.byName[normName(name)];
+      if (idx === undefined) continue;
+      while (idx !== undefined && !needed.has(idx)) { needed.add(idx); idx = this.parentOf.get(idx); }
+    }
+    for (const idx of needed) {
+      if (outQ.has(idx)) continue;
+      const chain = [];
+      let cur = idx;
+      while (cur !== undefined && !outQ.has(cur)) { chain.push(cur); cur = this.parentOf.get(cur); }
+      chain.reverse();
+      for (const node of chain) {
+        const parent = this.parentOf.get(node);
+        const q = this._localQuat(node, t, [0, 0, 0, 1]);
+        const p = this._localTrans(node, t, [0, 0, 0]);
+        if (parent === undefined || !outQ.has(parent)) {
+          outQ.set(node, q); outP.set(node, p);
+        } else {
+          const pp = outP.get(parent), pq = outQ.get(parent);
+          const wp = quatRot(pq, p, [0, 0, 0]);
+          wp[0] += pp[0]; wp[1] += pp[1]; wp[2] += pp[2];
+          outP.set(node, wp);
+          outQ.set(node, quatMul(pq, q, [0, 0, 0, 1]));
+        }
+      }
+    }
+    return { q: outQ, p: outP };
   }
 
   _accessorFloat(accIdx) {

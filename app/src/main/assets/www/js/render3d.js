@@ -255,6 +255,98 @@ export class Renderer3D {
     this.ghostGroups = null;
   }
 
+  // ── Lehrer-Ghost: ORIGINAL-Animation auf Original-Figur ──
+  // a) Original-3D-Modell (skinned Mesh aus der GLB) wenn vorhanden,
+  // b) immer: Skelett-Figur aus srcPos (funktioniert für JEDE Datei,
+  //    auch ohne Meshes — z. B. assimp-Konvertierungen).
+  // Der Lehrer läuft MIT Root-Motion wirklich durchs Feld.
+  buildSourceGhost(motion, scenePkg) {
+    this.removeSourceGhost();
+    if (!motion || !motion.srcPos || !motion.srcJoints) return;
+    this.sourceGhost = new THREE.Group();
+    this.sourceGhost.name = 'Lehrer';
+    this.world.add(this.sourceGhost);
+    this._srcMotion = motion;
+    this._srcScene = scenePkg || null;
+    if (scenePkg && scenePkg.group) {
+      scenePkg.group.traverse((o) => {
+        if (o.material) {
+          o.material.transparent = true;
+          o.material.opacity = Math.min(o.material.opacity === undefined ? 1 : o.material.opacity, 0.92);
+          o.material.depthWrite = true;
+        }
+      });
+      this.sourceGhost.add(scenePkg.group);
+    }
+    // Skelett-Figur: Gelenk-Kugeln + Glieder-Zylinder (unit-hoch, skaliert)
+    const J = motion.srcJoints;
+    this._srcIdx = {}; for (let i = 0; i < J.length; i++) this._srcIdx[J[i]] = i;
+    this._srcJointMeshes = [];
+    const jointMat = new THREE.MeshStandardMaterial({ color: 0x59e0a8, roughness: 0.5, transparent: true, opacity: 0.85 });
+    for (const role of J) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 10), jointMat);
+      this.sourceGhost.add(m);
+      this._srcJointMeshes.push({ role, mesh: m });
+    }
+    const PAIRS = [
+      ['hips', 'spine'], ['spine', 'head'],
+      ['hips', 'leftUpLeg'], ['leftUpLeg', 'leftLeg'], ['leftLeg', 'leftFoot'],
+      ['hips', 'rightUpLeg'], ['rightUpLeg', 'rightLeg'], ['rightLeg', 'rightFoot'],
+      ['spine', 'leftArm'], ['leftArm', 'leftForeArm'],
+      ['spine', 'rightArm'], ['rightArm', 'rightForeArm'],
+    ];
+    const limbMat = new THREE.MeshStandardMaterial({ color: 0x3fcf92, roughness: 0.6, transparent: true, opacity: 0.7 });
+    this._srcLimbs = [];
+    for (const [a, b] of PAIRS) {
+      if (this._srcIdx[a] === undefined || this._srcIdx[b] === undefined) continue;
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 8), limbMat);
+      this.sourceGhost.add(m);
+      this._srcLimbs.push({ a, b, mesh: m });
+    }
+    this._upVec = new THREE.Vector3(0, 1, 0);
+    this._vA = new THREE.Vector3(); this._vB = new THREE.Vector3();
+    this._vD = new THREE.Vector3();
+  }
+
+  updateSourceGhost(frame) {
+    const motion = this._srcMotion;
+    if (!this.sourceGhost || !motion || !motion.srcPos) return;
+    const J = motion.srcJoints.length;
+    const P = (idx) => {
+      const o = frame * J * 3 + idx * 3;
+      return [motion.srcPos[o], motion.srcPos[o + 1], motion.srcPos[o + 2]];
+    };
+    for (const { role, mesh } of this._srcJointMeshes) {
+      const i = this._srcIdx[role];
+      const p = P(i);
+      if (Number.isFinite(p[0])) mesh.position.set(p[0], p[1], p[2]);
+      else mesh.visible = false;
+    }
+    for (const { a, b, mesh } of this._srcLimbs) {
+      const pa = P(this._srcIdx[a]), pb = P(this._srcIdx[b]);
+      if (!Number.isFinite(pa[0]) || !Number.isFinite(pb[0])) { mesh.visible = false; continue; }
+      mesh.visible = true;
+      this._vA.set(pa[0], pa[1], pa[2]);
+      this._vB.set(pb[0], pb[1], pb[2]);
+      this._vD.subVectors(this._vB, this._vA);
+      const len = this._vD.length();
+      if (len < 1e-5) { mesh.visible = false; continue; }
+      mesh.position.copy(this._vA).addScaledVector(this._vD, 0.5);
+      mesh.quaternion.setFromUnitVectors(this._upVec, this._vD.normalize());
+      mesh.scale.set(1, len, 1);
+    }
+    if (this._srcScene && this._srcScene.setTime) this._srcScene.setTime(frame / (motion.fps || 30));
+  }
+
+  removeSourceGhost() {
+    if (!this.sourceGhost) { this._srcMotion = null; this._srcScene = null; return; }
+    this.sourceGhost.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    this.world.remove(this.sourceGhost);
+    this.sourceGhost = null;
+    this._srcMotion = null;
+    this._srcScene = null;
+  }
+
   updateGhost(sim2) {
     if (!this.ghostGroups) return;
     this.ghostSim = sim2;

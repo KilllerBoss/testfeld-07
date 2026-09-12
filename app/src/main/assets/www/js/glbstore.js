@@ -50,9 +50,11 @@ export async function deleteClip(id) {
 
 /**
  * Retargetete Timeline serialisieren (Float32Array → normale Arrays).
+ * Neu in v2.3.1: root-Bahn + yaw (Root-Motion) und srcPos/srcJoints
+ * (Lehrer-Ghost = Original-Animation).
  */
 export function packMotion(motion) {
-  return {
+  const out = {
     q: Array.from(motion.q),
     h: Array.from(motion.h),
     fps: motion.fps,
@@ -61,14 +63,31 @@ export function packMotion(motion) {
     name: motion.name,
     duration: motion.duration,
     mapped: motion.mapped,
+    mergedFrom: motion.mergedFrom || 0,
   };
+  if (motion.root) out.root = Array.from(motion.root);
+  if (motion.yaw) out.yaw = Array.from(motion.yaw);
+  if (motion.srcPos) out.srcPos = Array.from(motion.srcPos);
+  if (motion.srcJoints) out.srcJoints = motion.srcJoints.slice();
+  return out;
 }
 
 export function unpackMotion(rec) {
   const q = new Float32Array(rec.q);
   const h = new Float32Array(rec.h);
-  return {
+  const m = {
     name: rec.name, fps: rec.fps, n: rec.n, nu: rec.nu,
     q, h, duration: rec.duration, mapped: rec.mapped || [],
+    mergedFrom: rec.mergedFrom || 0,
   };
+  // Alte Datensätze (vor Root-Motion) bleiben lauffähig — Felder optional
+  if (rec.root && rec.yaw && rec.root.length === 2 * rec.n && rec.yaw.length === rec.n) {
+    m.root = new Float32Array(rec.root);
+    m.yaw = new Float32Array(rec.yaw);
+  }
+  if (rec.srcPos && rec.srcJoints && rec.srcPos.length === 3 * rec.n * rec.srcJoints.length) {
+    m.srcPos = new Float32Array(rec.srcPos);
+    m.srcJoints = rec.srcJoints.slice();
+  }
+  return m;
 }

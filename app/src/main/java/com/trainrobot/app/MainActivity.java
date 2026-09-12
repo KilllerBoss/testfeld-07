@@ -194,6 +194,12 @@ public class MainActivity extends Activity {
                         c.setRequestMethod("GET".equals(method) ? "GET" : "POST");
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(55000);
+                        // KRITISCH: Ohne Content-Type interpretiert das Google-API-
+                        // Frontend den POST-Body als form-urlencoded-Felder (= Query-
+                        // Parameter) → 400 „Unknown name ... Cannot bind query
+                        // parameter". JSON muss explizit deklariert werden.
+                        c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                        c.setRequestProperty("Accept", "application/json");
                         if (body != null && !body.isEmpty() && !"GET".equals(method)) {
                             c.setDoOutput(true);
                             c.setFixedLengthStreamingMode(body.getBytes("UTF-8").length);

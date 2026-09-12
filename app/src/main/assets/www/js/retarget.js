@@ -12,7 +12,7 @@
 // Ergebnis: Referenz-Timeline q_ref (nu je Frame) + h_ref (Basis-Höhe).
 // ═══════════════════════════════════════════════════════════
 
-import { GlbClip, quatMul, quatRotInv } from './glb.js';
+import { GlbClip, quatMul, quatRot, quatRotInv } from './glb.js';
 
 // Universeller Knochen-Resolver:
 //   1) Alias-Tabelle (normalisiert, ohne Sonderzeichen) — Mixamo mit/ohne
@@ -34,8 +34,14 @@ const BONE_ALIASES = {
   leftForeArm: ['mixamorig:leftforearm', 'leftforearm', 'lower_arm_l', 'lowerarm_l', 'leftelbow', 'left_elbow', 'j_bip_l_elbow', 'bip01_l_forearm'],
   rightArm: ['mixamorig:rightarm', 'rightarm', 'upper_arm_r', 'upperarm_r', 'rightshoulder', 'right_shoulder', 'j_bip_r_shoulder', 'bip01_r_upperarm', 'clavicle_r'],
   rightForeArm: ['mixamorig:rightforearm', 'rightforearm', 'lower_arm_r', 'lowerarm_r', 'rightelbow', 'right_elbow', 'j_bip_r_elbow', 'bip01_r_forearm'],
+  head: ['mixamorig:head', 'head', 'neck', 'neck_01', 'j_bip_c_head', 'bip01_head'],
 };
-const ROLE_ORDER = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+const ROLE_ORDER = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm', 'head'];
+// Rollen für den Lehrer-Ghost (Original-Figur) — Reihenfolge = srcPos-Layout
+export const GHOST_ROLES = ['hips', 'spine', 'head', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+// Hilfsknochen-Namen, die KEIN echter Gelenk-Kandidat sind (assimp-Zerlegung,
+// Endblätter, IK-Hilfen) — in der Heuristik übersprungen.
+const BAD_NAME = /leaf|twist|roll|proxy|ik$|_ik|target|aim|effector|\$/;
 
 // Heuristik: Rollen-Muster (Prioritätsreihenfolge! längere Spezifität zuerst)
 // Je Eintrag: [Rolle, Regex über den ROH-Namen (lowercase), Seite]
@@ -53,6 +59,7 @@ const HEURISTICS = [
   ['leftUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_L],
   ['rightUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_R],
   ['spine', /(spine|chest|torso|upperbody)/, null],
+  ['head', /(head|neck|kopf)/, null],
   ['hips', /(hips|pelvis|root)/, null],
 ];
 
@@ -74,6 +81,7 @@ export function resolveBones(clip) {
       const n = clip.nodes[i];
       if (!n.name) continue;
       const low = n.name.toLowerCase();
+      if (BAD_NAME.test(low)) continue;
       if (!re.test(low)) continue;
       if (sideRe && !sideRe.test(low)) continue;
       if (used.has(i)) continue;
@@ -155,6 +163,8 @@ export function retargetToG1(clip, sim, log = () => {}) {
 
   // Namen der gelösten Knochen für sampleWorld (normalisiert kompatibel)
   const wanted = roleNames.map(r => clip.nodes[bones[r]].name);
+  // Lehrer-Ghost: Rollen in fester Reihenfolge (nur vorhandene)
+  const ghostRoles = GHOST_ROLES.filter(r => bones[r] !== undefined);
 
   const nu = sim.nu;
   const A = sim.actByName;
@@ -249,20 +259,35 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const hipJoints = (side) => [A[side + '_hip_yaw_joint'], A[side + '_hip_roll_joint'], A[side + '_hip_pitch_joint']];
 
   let hipsRestH = 0;
-  {
-    const p = [0, 0, 0];
-    // Ruhetranslation des Hips-Knotens
-    const n0 = clip.nodes[bones.hips];
-    hipsRestH = (n0.translation ? n0.translation[1] : 80);
-  }
+  // Hüft-WELTHöhe bei Frame 0 (volle FK — erfasst auch assimp-Zwischenknoten;
+  // dort sitzt die echte Höhe am animierten Sub-Knoten, die lokale
+  // Ruhetranslation des Knochens ist oft 0)
+  const hipsP0 = (() => {
+    const q0 = new Map(), p0 = new Map();
+    clip.sampleWorldFull(0, wanted, q0, p0);
+    return p0.get(bones.hips) || [0, 0, 90];
+  })();
+  hipsRestH = Math.max(0.1, hipsP0[1]);
   const scale = hipsRestH > 3 ? 0.01 : 1.0; // Mixamo cm → m
   const g1StandH = sim._xpos[3 * sim.baseBody + 2];
   const hScale = g1StandH / Math.max(0.2, hipsRestH * scale);
 
   const rawH = new Float32Array(n);
+  // Root-Motion: Bahn des Hüftpunkts (MuJoCo-Rahmen, relativ zu Frame 0)
+  // + Blickrichtung (Yaw) — der Referenz-Geist läuft damit WIRKLICH durchs Feld.
+  const root = new Float32Array(n * 2);
+  const yaw = new Float32Array(n);
+  const rawYaw = new Float32Array(n);
+  // Lehrer-Ghost: Weltpositionen aller Rollenknochen je Frame (MuJoCo-Rahmen, m)
+  const srcPos = new Float32Array(n * ghostRoles.length * 3);
+  const srcJoints = ghostRoles.slice();
+  const worldPos = new Map();
+  const FWD_GLB = [0, 0, 1]; // GLB: +Z ist Blickrichtung (Annahme wie Achsen-Mapping)
+  const fwdTmp = [0, 0, 0];
+  let sx0 = 0, sy0 = 0;
   for (let f = 0; f < n; f++) {
     const t = f / fps;
-    clip.sampleWorld(t, wanted, worldMap);
+    clip.sampleWorldFull(t, wanted, worldMap, worldPos);
     const off = f * nu;
     // Beine
     for (const side of ['left', 'right']) {
@@ -324,10 +349,53 @@ export function retargetToG1(clip, sim, log = () => {}) {
         q[off + A[el]] = clampA(el, 0.6 * project1(el, alignedQ));
       }
     }
-    // Basis-Höhe aus Hüft-Translation
-    const hp = [0, 0, 0];
-    clip._localTrans(bones.hips, t, hp);
+    // Basis-Höhe, Root-Bahn + Yaw aus der Hüft-WELTposition (volle FK)
+    const hp = worldPos.get(bones.hips) || hipsP0;
     rawH[f] = Math.min(1.15, Math.max(0.4, hp[1] * scale * hScale));
+    const wx = hp[2] * scale, wy = hp[0] * scale; // GLB(Z,X) → MuJoCo(X,Y)
+    if (f === 0) { sx0 = wx; sy0 = wy; }
+    root[2 * f] = wx - sx0;
+    root[2 * f + 1] = wy - sy0;
+    quatRot(worldMap.get(bones.hips) || restQ.get(bones.hips), FWD_GLB, fwdTmp);
+    rawYaw[f] = Math.atan2(fwdTmp[0], fwdTmp[1]); // MuJoCo: x=Z_glb, y=X_glb
+    // Lehrer-Ghost-Positionen (GLB Y-up → MuJoCo Z-up, skaliert auf m)
+    for (let gi = 0; gi < ghostRoles.length; gi++) {
+      const p = worldPos.get(bones[ghostRoles[gi]]);
+      const o3 = (f * ghostRoles.length + gi) * 3;
+      if (!p) { srcPos[o3] = srcPos[o3 + 1] = srcPos[o3 + 2] = NaN; continue; }
+      srcPos[o3] = p[2] * scale; srcPos[o3 + 1] = p[0] * scale; srcPos[o3 + 2] = p[1] * scale;
+    }
+  }
+
+  // Yaw: Bei Locomotion (Bahn bewegt sich) ist die BEWEGUNGSRICHTUNG der
+  // stabile Blick — die Hüft-Vorwärtsachse kippt beim Laufen stark mit
+  // (Beckenrotation/Neigung). Bei Stillstand (Idle) liefert die Hüft-
+  // Rotation die Blickrichtung. Danach unwrap + glätten + relativ zu Frame 0.
+  {
+    const SPEED_MIN = 0.15; // m/s — darunter gilt „keine Bewegung"
+    const dirYaw = new Float32Array(n);
+    let lastY = null;
+    for (let f = 0; f < n; f++) {
+      const p0 = Math.max(0, f - 1), p1 = Math.min(n - 1, f + 1);
+      const dx = root[2 * p1] - root[2 * p0], dy = root[2 * p1 + 1] - root[2 * p0 + 1];
+      const dt = Math.max(1e-6, (p1 - p0) / fps);
+      if (Math.hypot(dx, dy) / dt > SPEED_MIN) { lastY = Math.atan2(dy, dx); dirYaw[f] = lastY; }
+      else dirYaw[f] = lastY !== null ? lastY : rawYaw[f];
+    }
+    for (let f = 1; f < n; f++) {
+      let d = dirYaw[f] - dirYaw[f - 1];
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      dirYaw[f] = dirYaw[f - 1] + d;
+    }
+    smooth(dirYaw, 5);
+    const y0 = dirYaw[0];
+    for (let f = 0; f < n; f++) {
+      let d = dirYaw[f] - y0;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      yaw[f] = d;
+    }
   }
 
   // ── Boden-Anpassung (Fuß erden): tiefsten Fußpunkt pro Frame via Geist ──
@@ -351,6 +419,8 @@ export function retargetToG1(clip, sim, log = () => {}) {
     name: clip.name || 'clip',
     fps, n, nu,
     q, h,
+    root, yaw, srcPos, srcJoints,
+    mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,
     duration: clip.duration,
   };
