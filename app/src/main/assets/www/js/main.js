@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// main.js — TRAINROBOT · TESTFELD·07 (v2.1)
+// main.js — TRAINROBOT · TESTFELD·07 (v2.2)
 // Boot-Sequenz, Master-Loop, Modi (MANUELL / POLICY / TRAINING),
 // Roboterwechsel. Kein Fallback: Fehler werden hart angezeigt.
 // ═══════════════════════════════════════════════════════════
@@ -16,7 +16,7 @@ import { retargetToG1 } from './retarget.js';
 import { makeMotionTask } from './motiontask.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
