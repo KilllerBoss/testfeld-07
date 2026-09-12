@@ -22,17 +22,16 @@ export function quatRPY(q, out) {
 // Weltrichtung v (3) um Quaternion q (w,x,y,z) in den Körperrahmen drehen
 export function rotWorldToBody(q, vx, vy, vz, out) {
   const w = q[0], x = q[1], y = q[2], z = q[3];
-  // Konjugierte Quaternion anwenden: v' = q* ⊙ v ⊙ q
+  // v' = q* ⊙ v ⊙ q — der ZWEITE Faktor ist q (nicht die Konjugierte!).
+  // (Frühere Version multiplizierte zweimal mit q* → gespiegelte Richtungen.)
   const bx = -x, by = -y, bz = -z;
-  // t = q_conj * v  (Quaternion-Multiplikation mit reinem Vektor)
-  const tx = w * vx + by * vz - bz * vy;
-  const ty = w * vy + bz * vx - bx * vz;
-  const tz = w * vz + bx * vy - by * vx;
-  const tw = -(bx * vx + by * vy + bz * vz);
-  // Ergebnis = t * q
-  out[0] = tw * bx + tx * w + ty * bz - tz * by;
-  out[1] = tw * by + ty * w + tz * bx - tx * bz;
-  out[2] = tw * bz + tz * w + tx * by - ty * bx;
+  // t = 2·(q*_xyz × v)
+  const tx = 2 * (by * vz - bz * vy);
+  const ty = 2 * (bz * vx - bx * vz);
+  const tz = 2 * (bx * vy - by * vx);
+  out[0] = vx + w * tx + (by * tz - bz * ty);
+  out[1] = vy + w * ty + (bz * tx - bx * tz);
+  out[2] = vz + w * tz + (bx * ty - by * tx);
   return out;
 }
 

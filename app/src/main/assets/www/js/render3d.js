@@ -256,19 +256,27 @@ export class Renderer3D {
   }
 
   // ── Lehrer-Ghost: ORIGINAL-Animation auf Original-Figur ──
-  // a) Original-3D-Modell (skinned Mesh aus der GLB) wenn vorhanden,
-  // b) immer: Skelett-Figur aus srcPos (funktioniert für JEDE Datei,
-  //    auch ohne Meshes — z. B. assimp-Konvertierungen).
-  // Der Lehrer läuft MIT Root-Motion wirklich durchs Feld.
+  // a) Original-3D-Modell (skinned Mesh aus der GLB) wenn vorhanden —
+  //    im ALIGN-Wrap (GLB Y-up → MuJoCo Z-up), sonst wäre es liegend/flach
+  //    (genau der „z und y vertauscht“-Bug).
+  // b) nur OHNE Mesh: grüne Skelett-Figur aus srcPos (Debug-Optik).
+  // Der Lehrer läuft MIT Root-Motion wirklich durchs Feld — seitlich
+  // versetzt, damit er nicht im Roboter steht.
   buildSourceGhost(motion, scenePkg) {
     this.removeSourceGhost();
     if (!motion || !motion.srcPos || !motion.srcJoints) return;
+    this._srcJointMeshes = [];   // Stale-Flags des vorherigen Builds löschen
+    this._srcLimbs = [];
+    this._srcIdx = {};
     this.sourceGhost = new THREE.Group();
     this.sourceGhost.name = 'Lehrer';
+    this._srcBase = new THREE.Vector3(0, 1.1, 0); // parallele Bahn, links vom Roboter
+    this.sourceGhost.position.copy(this._srcBase);
     this.world.add(this.sourceGhost);
     this._srcMotion = motion;
     this._srcScene = scenePkg || null;
-    if (scenePkg && scenePkg.group) {
+    const hasMesh = !!(scenePkg && scenePkg.group);
+    if (hasMesh) {
       scenePkg.group.traverse((o) => {
         if (o.material) {
           o.material.transparent = true;
@@ -276,9 +284,19 @@ export class Renderer3D {
           o.material.depthWrite = true;
         }
       });
-      this.sourceGhost.add(scenePkg.group);
+      // GLB-Rahmen (Y-up, Datei-Einheiten) → MuJoCo-Welt (Z-up, m):
+      // X_glb→Y_mjc, Y_glb→Z_mjc, Z_glb→X_mjc = Rotation 120° um (1,1,1)
+      // = Quaternion [0.5,0.5,0.5,0.5] — identisch zur srcPos-Konvertierung.
+      const wrap = new THREE.Group();
+      wrap.name = 'GlbAlign';
+      wrap.quaternion.set(0.5, 0.5, 0.5, 0.5);
+      wrap.scale.setScalar(motion.srcScale || 1);
+      wrap.add(scenePkg.group);
+      this.sourceGhost.add(wrap);
     }
+    if (!hasMesh) {
     // Skelett-Figur: Gelenk-Kugeln + Glieder-Zylinder (unit-hoch, skaliert)
+    // — NUR ohne Original-Mesh, sonst wäre es Störopfer unnötiger Linien.
     const J = motion.srcJoints;
     this._srcIdx = {}; for (let i = 0; i < J.length; i++) this._srcIdx[J[i]] = i;
     this._srcJointMeshes = [];
@@ -303,14 +321,24 @@ export class Renderer3D {
       this.sourceGhost.add(m);
       this._srcLimbs.push({ a, b, mesh: m });
     }
+    }
     this._upVec = new THREE.Vector3(0, 1, 0);
     this._vA = new THREE.Vector3(); this._vB = new THREE.Vector3();
     this._vD = new THREE.Vector3();
   }
 
+  // Schleifen-Rebase: lässt den Lehrer (Skelett UND Original-Mesh) nach
+  // jedem Clip-Durchlauf WEITERLAUFEN statt zum Start zurückzuteleportieren.
+  // dx/dy = Bahnlänge seit Aktivierung (Loop-Offset des Motion-Tasks).
+  setSourceGhostLoop(dx, dy) {
+    if (!this.sourceGhost || !this._srcBase) return;
+    this.sourceGhost.position.set(this._srcBase.x + (dx || 0), this._srcBase.y + (dy || 0), this._srcBase.z);
+  }
+
   updateSourceGhost(frame) {
     const motion = this._srcMotion;
     if (!this.sourceGhost || !motion || !motion.srcPos) return;
+    if (this._srcJointMeshes && this._srcJointMeshes.length) {
     const J = motion.srcJoints.length;
     const P = (idx) => {
       const o = frame * J * 3 + idx * 3;
@@ -335,6 +363,8 @@ export class Renderer3D {
       mesh.quaternion.setFromUnitVectors(this._upVec, this._vD.normalize());
       mesh.scale.set(1, len, 1);
     }
+    }
+    // Original-Mesh antreiben (immer, auch neben Skelett-Fallback)
     if (this._srcScene && this._srcScene.setTime) this._srcScene.setTime(frame / (motion.fps || 30));
   }
 

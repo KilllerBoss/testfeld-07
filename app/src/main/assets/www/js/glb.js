@@ -221,11 +221,51 @@ export class GlbClip {
     return cands[0];
   }
 
+  // matrix-basierte Nodes (assimp: _$AssimpFbx$_-Zwischenknoten!) einmalig
+  // in TRS zerlegen — ohne das kollabiert die FK-Kette, weil _localQuat/
+  // _localTrans dann Identität/Null liefern.
+  _decompMatrix(nodeIdx) {
+    this._mxCache = this._mxCache || new Map();
+    if (this._mxCache.has(nodeIdx)) return this._mxCache.get(nodeIdx);
+    const m = this.nodes[nodeIdx].matrix; // column-major (glTF)
+    const t = [m[12], m[13], m[14]];
+    const sx = Math.hypot(m[0], m[1], m[2]) || 1;
+    const sy = Math.hypot(m[4], m[5], m[6]) || 1;
+    const sz = Math.hypot(m[8], m[9], m[10]) || 1;
+    // Normalisierte Rotationsmatrix (Spalten)
+    const m00 = m[0] / sx, m10 = m[1] / sx, m20 = m[2] / sx;
+    const m01 = m[4] / sy, m11 = m[5] / sy, m21 = m[6] / sy;
+    const m02 = m[8] / sz, m12 = m[9] / sz, m22 = m[10] / sz;
+    const tr = m00 + m11 + m22;
+    let qx = 0, qy = 0, qz = 0, qw = 1, S;
+    if (tr > 0) {
+      S = Math.sqrt(tr + 1) * 2; qw = 0.25 * S;
+      qx = (m21 - m12) / S; qy = (m02 - m20) / S; qz = (m10 - m01) / S;
+    } else if (m00 > m11 && m00 > m22) {
+      S = Math.sqrt(1 + m00 - m11 - m22) * 2; qw = (m21 - m12) / S; qx = 0.25 * S;
+      qy = (m01 + m10) / S; qz = (m02 + m20) / S;
+    } else if (m11 > m22) {
+      S = Math.sqrt(1 + m11 - m00 - m22) * 2; qw = (m02 - m20) / S; qy = 0.25 * S;
+      qx = (m01 + m10) / S; qz = (m12 + m21) / S;
+    } else {
+      S = Math.sqrt(1 + m22 - m00 - m11) * 2; qw = (m10 - m01) / S; qz = 0.25 * S;
+      qx = (m02 + m20) / S; qy = (m12 + m21) / S;
+    }
+    const n = Math.hypot(qx, qy, qz, qw) || 1;
+    const out = { t, q: [qx / n, qy / n, qz / n, qw / n], s: [sx, sy, sz] };
+    this._mxCache.set(nodeIdx, out);
+    return out;
+  }
+
   // Lokale Rotation eines Knotens zur Zeit t (Quaternion [x,y,z,w])
   _localQuat(nodeIdx, t, out) {
     const node = this.nodes[nodeIdx];
     const track = this.rotationTracks.get(nodeIdx);
-    if (!track) { const r = node.rotation || [0, 0, 0, 1]; out[0] = r[0]; out[1] = r[1]; out[2] = r[2]; out[3] = r[3]; return out; }
+    if (!track) {
+      if (node.rotation) { out[0] = node.rotation[0]; out[1] = node.rotation[1]; out[2] = node.rotation[2]; out[3] = node.rotation[3]; return out; }
+      if (node.matrix) { const d = this._decompMatrix(nodeIdx); out[0] = d.q[0]; out[1] = d.q[1]; out[2] = d.q[2]; out[3] = d.q[3]; return out; }
+      out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; return out;
+    }
     const { times, values } = track;
     // binäre Suche
     let lo = 0, hi = times.length - 1;
@@ -259,7 +299,11 @@ export class GlbClip {
   _localTrans(nodeIdx, t, out) {
     const node = this.nodes[nodeIdx];
     const track = this.translationTracks.get(nodeIdx);
-    if (!track) { const p = node.translation || [0, 0, 0]; out[0] = p[0]; out[1] = p[1]; out[2] = p[2]; return out; }
+    if (!track) {
+      if (node.translation) { out[0] = node.translation[0]; out[1] = node.translation[1]; out[2] = node.translation[2]; return out; }
+      if (node.matrix) { const d = this._decompMatrix(nodeIdx); out[0] = d.t[0]; out[1] = d.t[1]; out[2] = d.t[2]; return out; }
+      out[0] = 0; out[1] = 0; out[2] = 0; return out;
+    }
     const { times, values } = track;
     let lo = 0, hi = times.length - 1;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (times[mid] <= t) lo = mid; else hi = mid; }
@@ -337,30 +381,31 @@ export function quatMul(a, b, out) {
   return out;
 }
 
-// Rotiere v mit q⁻¹
-export function quatRotInv(q, v, out) {
-  const x = -q[0], y = -q[1], z = -q[2], w = q[3];
-  const vx = v[0], vy = v[1], vz = v[2];
-  const tx = w * vx + y * vz - z * vy;
-  const ty = w * vy + z * vx - x * vz;
-  const tz = w * vz + x * vy - y * vx;
-  const tw = -(x * vx + y * vy + z * vz);
-  out[0] = tw * x + tx * w + ty * z - tz * y;
-  out[1] = tw * y + ty * w + tz * x - tx * z;
-  out[2] = tw * z + tz * w + tx * y - ty * x;
-  return out;
-}
-
-// Rotiere v mit Quaternion q (vorwärts)
+// Rotiere v mit Quaternion q (vorwärts): v' = q ⊗ v ⊗ q*
+// (Standard-Sandwich; t = 2·cross(q_xyz, v), v' = v + w·t + q_xyz × t.
+//  WICHTIG: Der zweite Faktor ist die KONJUGIERTE — die frühere Version
+//  multiplizierte mit q selbst und spiegelte damit alle großen Rotationen!)
 export function quatRot(q, v, out) {
   const x = q[0], y = q[1], z = q[2], w = q[3];
   const vx = v[0], vy = v[1], vz = v[2];
-  const tx = w * vx + y * vz - z * vy;
-  const ty = w * vy + z * vx - x * vz;
-  const tz = w * vz + x * vy - y * vx;
-  const tw = -(x * vx + y * vy + z * vz);
-  out[0] = tw * x + tx * w + ty * z - tz * y;
-  out[1] = tw * y + ty * w + tz * x - tx * z;
-  out[2] = tw * z + tz * w + tx * y - ty * x;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  out[0] = vx + w * tx + (y * tz - z * ty);
+  out[1] = vy + w * ty + (z * tx - x * tz);
+  out[2] = vz + w * tz + (x * ty - y * tx);
+  return out;
+}
+
+// Rotiere v mit q⁻¹: v' = q* ⊗ v ⊗ q
+export function quatRotInv(q, v, out) {
+  const x = -q[0], y = -q[1], z = -q[2], w = q[3];
+  const vx = v[0], vy = v[1], vz = v[2];
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  out[0] = vx + w * tx + (y * tz - z * ty);
+  out[1] = vy + w * ty + (z * tx - x * tz);
+  out[2] = vz + w * tz + (x * ty - y * tx);
   return out;
 }

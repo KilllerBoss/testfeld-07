@@ -18,7 +18,7 @@ import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbs
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 
-const VERSION = '2.3.1';
+const VERSION = '2.3.2';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -673,10 +673,17 @@ function loop(now) {
   if (S.ghostOn && S.task && S.task.kind === 'motion' && (r3d.ghostGroups || r3d.sourceGhost)) {
     const clip = S.task.clip;
     const fr = Math.floor(S.task.phase * clip.n) % clip.n;
-    if (r3d.sourceGhost) r3d.updateSourceGhost(fr);
+    // Loop-Rebase: Referenz läuft nach jedem Durchlauf WEITER (kein Teleport)
+    const rr = clip.root && clip.yaw && S.task.refRoot ? S.task.refRoot(S.task.phase, [0, 0, 0]) : null;
+    if (r3d.sourceGhost) {
+      r3d.updateSourceGhost(fr);
+      if (rr) r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
+    }
     if (r3d.ghostGroups) {
       const gh = S.sim.makeGhostData();
-      if (clip.root && clip.yaw) {
+      if (rr) {
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2]);
+      } else if (clip.root && clip.yaw) {
         S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr]);
       } else {
         S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr]);

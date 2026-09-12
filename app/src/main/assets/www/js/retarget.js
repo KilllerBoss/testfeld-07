@@ -120,15 +120,16 @@ function quatLogAxis(q, out) {
   return ang;
 }
 function rotVecByQuat(q, v, out) {
+  // v' = q ⊗ v ⊗ q* (Standard-Sandwich, KONJUGIERTER zweiter Faktor —
+  // die alte Version multiplizierte mit q selbst → gespiegelte Achsen)
   const x = q[0], y = q[1], z = q[2], w = q[3];
   const vx = v[0], vy = v[1], vz = v[2];
-  const tx = w * vx + y * vz - z * vy;
-  const ty = w * vy + z * vx - x * vz;
-  const tz = w * vz + x * vy - y * vx;
-  const tw = -(x * vx + y * vy + z * vz);
-  out[0] = tw * x + tx * w + ty * z - tz * y;
-  out[1] = tw * y + ty * w + tz * x - tx * z;
-  out[2] = tw * z + tz * w + tx * y - ty * x;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  out[0] = vx + w * tx + (y * tz - z * ty);
+  out[1] = vy + w * ty + (z * tx - x * tz);
+  out[2] = vz + w * tz + (x * ty - y * tx);
   return out;
 }
 
@@ -187,12 +188,20 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const ALIGN_INV = [-0.5, -0.5, -0.5, 0.5];
 
   // Ruhewelt-Quaternionen der Quell-Knochen (ohne Animation)
-  // Rest-Welt-Rotationen: lokale Rest-Rotationen verketten
+  // Rest-Welt-Rotationen: lokale Rest-Rotationen verketten — WICHTIG: auch
+  // matrix-basierte Nodes (assimp _$AssimpFbx$_ PreRotation!) einbeziehen,
+  // sonst ist die Ruhelage falsch und ΔQ wird zum vollen Weltwinkel (die
+  // Hüften schlagen dann an die Gelenkgrenzen statt zu mimiken).
+  const localRestRot = (idx) => {
+    const n = clip.nodes[idx];
+    if (n.rotation) return n.rotation.slice();
+    if (n.matrix) return clip._decompMatrix(idx).q.slice();
+    return [0, 0, 0, 1];
+  };
   const restQ = new Map();
   const computeRest = (idx) => {
     if (restQ.has(idx)) return restQ.get(idx);
-    const n = clip.nodes[idx];
-    const local = n.rotation ? n.rotation.slice() : [0, 0, 0, 1];
+    const local = localRestRot(idx);
     const p = clip.parentOf.get(idx);
     const w = p === undefined ? local : quatMul2(computeRest(p), local, [0, 0, 0, 1]);
     restQ.set(idx, w);
@@ -326,10 +335,10 @@ export function retargetToG1(clip, sim, log = () => {}) {
       quatMul2(worldMap.get(bones.hips) || restQ.get(bones.hips), conjTmp, deltaQ);
       quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
       const ang = quatLogAxis(alignedQ, axisTmp);
-      // Taille: nur um die Welt-Hochachse (Yaw-Anteil), gedämpft
+      // Taille: nur um die Welt-Hochachse (Yaw-Anteil), leicht gedämpft
       const waistName = 'waist_yaw_joint';
       const a = axisOf[waistName];
-      q[off + A[waistName]] = clampA(waistName, 0.6 * ang * (axisTmp[0] * a[0] + axisTmp[1] * a[1] + axisTmp[2] * a[2]));
+      q[off + A[waistName]] = clampA(waistName, 0.85 * ang * (axisTmp[0] * a[0] + axisTmp[1] * a[1] + axisTmp[2] * a[2]));
     }
     // Arme: Schulter-Pitch + Ellbogen (Projektionen, gedämpft)
     for (const side of ['left', 'right']) {
@@ -339,14 +348,14 @@ export function retargetToG1(clip, sim, log = () => {}) {
       quatMul2(worldMap.get(armIdx) || restQ.get(armIdx), conjTmp, deltaQ);
       quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
       const sp = side + '_shoulder_pitch_joint';
-      q[off + A[sp]] = clampA(sp, 0.5 * project1(sp, alignedQ));
+      q[off + A[sp]] = clampA(sp, 0.9 * project1(sp, alignedQ));
       const el = side + '_elbow_joint';
       const foreIdx = bones[side + 'ForeArm'];
       if (foreIdx !== undefined) {
         quatConj(restQ.get(foreIdx), conjTmp);
         quatMul2(worldMap.get(foreIdx) || restQ.get(foreIdx), conjTmp, deltaQ);
         quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-        q[off + A[el]] = clampA(el, 0.6 * project1(el, alignedQ));
+        q[off + A[el]] = clampA(el, 0.9 * project1(el, alignedQ));
       }
     }
     // Basis-Höhe, Root-Bahn + Yaw aus der Hüft-WELTposition (volle FK)
@@ -420,6 +429,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     fps, n, nu,
     q, h,
     root, yaw, srcPos, srcJoints,
+    scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
     mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,
     duration: clip.duration,
