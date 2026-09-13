@@ -1,0 +1,1353 @@
+     1→     1→// ═══════════════════════════════════════════════════════════
+     2→     2→// main.js — TRAINROBOT · TESTFELD·07 (v2.2)
+     3→     3→// Boot-Sequenz, Master-Loop, Modi (MANUELL / POLICY / TRAINING),
+     4→     4→// Roboterwechsel. Kein Fallback: Fehler werden hart angezeigt.
+     5→     5→// ═══════════════════════════════════════════════════════════
+     6→     6→
+     7→     7→import { initEngine, fetchModelIntoFS, removeModelFromFS, RobotSim, setModelProgress, mj } from './engine.js';
+     8→     8→import { ROBOT_ORDER, getRobot, HOVER_R } from './robots.js';
+     9→     9→import { Renderer3D } from './render3d.js';
+    10→    10→import { Controls } from './controls.js';
+    11→    11→import { UI } from './ui.js';
+    12→    12→import { PPO, finiteArr } from './train.js';
+    13→    13→import { RNG } from './math.js';
+    14→    14→import { GlbClip } from './glb.js';
+    15→    15→import { retargetToG1 } from './retarget.js';
+    16→    16→import { makeMotionTask, MOTION_R } from './motiontask.js';
+    17→    17→import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
+    18→    18→import { buildGlbScene } from './glbscene.js';
+    19→    19→import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
+    20→    20→import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
+    21→    21→
+    22→    22→const VERSION = '2.5.0';
+    23→    23→const CTRL_DT = 0.02; // 50 Hz Regelrate
+    24→    24→
+    25→    25→const ui = new UI();
+    26→    26→ui.init();
+    27→    27→const controls = new Controls();
+    28→    28→let r3d = null;
+    29→    29→
+    30→    30→const S = {
+    31→    31→  robotId: null,
+    32→    32→  motionClip: null,   // aktive GLB-Referenz (nur G1)
+    33→    33→  srcScene: null,     // Original-3D-Modell des Lehrer-Ghosts (In-Memory)
+    34→    34→  clips: [],          // gespeicherte Clips (IndexedDB)
+    35→    35→  ghostOn: true,
+    36→    36→  sim: null,
+    37→    37→  gait: null,        // Gang-/Flugregler-Instanz
+    38→    38→  task: null,        // Trainingsaufgaben-Instanz
+    39→    39→  trainer: null,     // PPO
+    40→    40→  mode: 'manuell',   // 'manuell' | 'policy'
+    41→    41→  training: false,
+    42→    42→  speedMode: 'max',
+    43→    43→  acc: 0,            // Zeitakkumulator für Regelrate
+    44→    44→  epReward: 0,       // laufende Episode
+    45→    45→  episodes: 0,
+    46→    46→  stepsPerSec: 0,
+    47→    47→  _stepTimes: [],
+    48→    48→  switching: false,
+    49→    49→  obsBuf: null,
+    50→    50→  actBuf: null,
+    51→    51→  aiMode: 'fast',    // KI-Trainer: 'fast' (Flash-Lite) | 'smart' (Flash)
+    52→    52→  aiHistory: [],     // Chat-Verlauf für die KI
+    53→    53→  aiBusy: false,
+    54→    54→  pushStrength: 3.0, // Schubs-Stärke (Δv in m/s — v2.5.0, KI-tunbar, persistiert)
+    55→    55→  animTraining: true, // GLB-Animation im Training an/aus (aus = nur Gleichgewicht)
+    56→    56→  cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
+    57→    57→  aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
+    58→    58→};
+    59→    59→
+    60→    60→// PPO-Überschreibungen aus dem KI-Trainer (T wirkt beim nächsten Start)
+    61→    61→const PPO_OVERRIDES = {};
+    62→    62→
+    63→    63→// ── Konsolen-Ausgabe ────────────────────────────────────────
+    64→    64→const log = (m, c) => ui.log(m, c);
+    65→    65→
+    66→    66→// ── Roboter laden / wechseln ────────────────────────────────
+    67→    67→async function loadRobot(id, first = false) {
+    68→    68→  if (S.switching) return;
+    69→    69→  const cfg = getRobot(id);
+    70→    70→  if (!cfg) return;
+    71→    71→  S.switching = true;
+    72→    72→  try {
+    73→    73→    stopTraining(true);
+    74→    74→    if (!first) ui.setRobotLoading(id);
+    75→    75→    await new Promise(r => setTimeout(r, first ? 0 : 30)); // Frame zum Zeichnen
+    76→    76→
+    77→    77→    log(`Kompiliere ${cfg.dir} (${cfg.longName}) …`);
+    78→    78→    const t0 = performance.now();
+    79→    79→    await fetchModelIntoFS('models/' + cfg.dir);
+    80→    80→    const sim = new RobotSim(cfg, cfg.scene);
+    81→    81→    const ms = Math.round(performance.now() - t0);
+    82→    82→
+    83→    83→    // Alte Simulation freigeben
+    84→    84→    if (S.sim) {
+    85→    85→      const oldDir = S.sim.cfg.dir;
+    86→    86→      S.sim.dispose();
+    87→    87→      if (oldDir !== cfg.dir) removeModelFromFS(oldDir);
+    88→    88→      S.sim = null;
+    89→    89→    }
+    90→    90→    S.sim = sim;
+    91→    91→    S.robotId = id;
+    92→    92→
+    93→    93→    // Gang-/Flugregler
+    94→    94→    S.gait = cfg.gait(cfg);
+    95→    95→    if (cfg.drone && S.gait.init) { S.gait.init(sim); sim.flightCtl = S.gait; }
+    96→    96→    // Trainingsaufgabe: GLB-Motion-Tracking (nur G1 mit aktivem Clip) sonst Geschwindigkeit
+    97→    97→    if (id === 'g1' && S.motionClip) {
+    98→    98→      S.task = makeMotionTask(cfg, S.motionClip, sim);
+    99→    99→      S.task.animOn = S.animTraining;
+   100→   100→      // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0)
+   101→   101→      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+   102→   102→      if (rec && rec.ctrl === 'joy') S.task.ctrlMode = 'joy';
+   103→   103→      syncCtrlChips();
+   104→   104→    } else {
+   105→   105→      S.task = cfg.task(cfg);
+   106→   106→    }
+   107→   107→    S.task.reset(new RNG(4242), sim);
+   108→   108→    S.obsBuf = new Float32Array(S.task.obsDim);
+   109→   109→    S.actBuf = new Float32Array(S.task.actDim);
+   110→   110→    ui.$('glbSection').classList.toggle('hidden', id !== 'g1');
+   111→   111→    // KI-Anpassungen für diese Aufgabe wieder aufschalten (Belohnungen etc.)
+   112→   112→    applySavedAICfg(id);
+   113→   113→
+   114→   114→    // Gespeicherte Policy für DIESE Aufgabenart laden (falls vorhanden)
+   115→   115→    S.trainer = null;
+   116→   116→    const saved = loadPolicy(id);
+   117→   117→    if (saved) { S.trainer = saved; }
+   118→   118→
+   119→   119→    // Welt & Optik
+   120→   120→    r3d.buildFromModel(sim);
+   121→   121→    r3d.camDist = cfg.dist; controls._camDist = cfg.dist;
+   122→   122→    sim.reset();
+   123→   123→    S.epReward = 0; S.episodes = 0;
+   124→   124→
+   125→   125→    // UI
+   126→   126→    ui.setRobotActive(id);
+   127→   127→    ui.setRobotTitle(cfg);
+   128→   128→    ui.setDroneMode(!!cfg.drone);
+   129→   129→    ui.policyAvailable(!!S.trainer);
+   130→   130→    ui.setMode(S.mode);
+   131→   131→    if (S.mode === 'policy' && !S.trainer) { S.mode = 'manuell'; ui.setMode(S.mode); }
+   132→   132→
+   133→   133→    const meshes = countMeshes(sim);
+   134→   134→    log(`MJCF OK: ${sim.nu} Aktuatoren · qpos ${sim.nq} · dof ${sim.nv} · ${meshes} Mesh-Geoms · dt ${sim.timestep}s (${ms} ms)`, 'ok');
+   135→   135→    if (S.trainer) log(`Policy geladen: ${S.trainer.stepCount} Schritte trainiert`, 'ok');
+   136→   136→  } catch (err) {
+   137→   137→    console.error(err);
+   138→   138→    log('FEHLER: ' + err.message, 'err');
+   139→   139→    ui.fail(`${cfg.longName} konnte nicht geladen werden.\n\n${err.message}\n\nKein Fallback vorgesehen — bitte Neustart versuchen.`);
+   140→   140→  } finally {
+   141→   141→    S.switching = false;
+   142→   142→  }
+   143→   143→}
+   144→   144→
+   145→   145→function countMeshes(sim) {
+   146→   146→  const mod = sim.model;
+   147→   147→  let n = 0;
+   148→   148→  for (let g = 0; g < sim.ngeom; g++) if (mod.geom_type[g] === 7) n++;
+   149→   149→  return n;
+   150→   150→}
+   151→   151→
+   152→   152→// ── Policy persistieren ─────────────────────────────────────
+   153→   153→function policyKey(id) {
+   154→   154→  const kind = S.task && S.task.kind === 'motion' ? 'motion' : 'speed';
+   155→   155→  return 'tr_policy_' + id + '_' + kind;
+   156→   156→}
+   157→   157→function loadPolicy(id) {
+   158→   158→  try {
+   159→   159→    const raw = localStorage.getItem(policyKey(id));
+   160→   160→    if (!raw) return null;
+   161→   161→    const p = PPO.fromJSON(JSON.parse(raw));
+   162→   162→    // Format-Wache: Policy muss zur AKTUELLEN Aufgabe passen (Motion hat
+   163→   163→    // seit Root-Folgen einen anderen Beobachtungsraum als Speed; v2.5.0
+   164→   164→    // kam +2 Kommando-Kanäle hinzu)
+   165→   165→    if (S.task && (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim)) {
+   166→   166→      log(`Alte Policy verworfen: Beobachtungsraum ${p.obsDim} ≠ ${S.task.obsDim} (v2.5.0: +2 Steuerungs-Kanäle) — neu trainieren`, 'warn');
+   167→   167→      return null;
+   168→   168→    }
+   169→   169→    return p;
+   170→   170→  } catch (e) { return null; }
+   171→   171→}
+   172→   172→function savePolicy(id) {
+   173→   173→  if (!S.trainer) { ui.toast('Keine Policy zum Speichern', true); return; }
+   174→   174→  try {
+   175→   175→    localStorage.setItem(policyKey(id), JSON.stringify(S.trainer.toJSON()));
+   176→   176→    ui.toast('Policy gespeichert');
+   177→   177→    ui.policyAvailable(true);
+   178→   178→    log(`Policy gespeichert (${id}, ${S.trainer.stepCount} Schritte)`, 'ok');
+   179→   179→  } catch (e) {
+   180→   180→    ui.toast('Speichern fehlgeschlagen: ' + e.message, true);
+   181→   181→  }
+   182→   182→}
+   183→   183→
+   184→   184→// ── KI-Trainer (Gemini) ─────────────────────────────────────
+   185→   185→// Nutzer sagt in natürlicher Sprache, was der Roboter lernen soll;
+   186→   186→// die KI liefert einen validierten Patch auf die Trainingskonfiguration.
+   187→   187→const DEFAULT_PPO = { T: 1024, gamma: 0.99, lam: 0.95, clip: 0.2, epochs: 4, mb: 256, lr: 3e-4, cV: 0.5, cE: 0.005, maxGrad: 0.5 };
+   188→   188→
+   189→   189→function aiTaskKind() {
+   190→   190→  if (S.task && S.task.kind === 'motion') return 'motion';
+   191→   191→  if (S.sim && S.sim.cfg && S.sim.cfg.drone) return 'hover';
+   192→   192→  return 'speed';
+   193→   193→}
+   194→   194→
+   195→   195→function aiCtx() {
+   196→   196→  const cfg = S.sim ? S.sim.cfg : null;
+   197→   197→  const kind = aiTaskKind();
+   198→   198→  const cur = {};
+   199→   199→  if (kind === 'speed' && cfg) {
+   200→   200→    cur.rW = cfg.rW; cur.cmd = cfg.cmd; cur.done = cfg.done;
+   201→   201→    cur.actSpan = cfg.actSpan; cur.speedMax = cfg.speedMax;
+   202→   202→  } else if (kind === 'motion') {
+   203→   203→    cur.motionR = MOTION_R;
+   204→   204→  } else if (kind === 'hover' && cfg) {
+   205→   205→    cur.hoverR = HOVER_R; cur.cmd = cfg.cmd;
+   206→   206→  }
+   207→   207→  cur.ppo = S.trainer
+   208→   208→    ? (({ lr, gamma, lam, clip, epochs, mb, T, cV, cE, maxGrad }) => ({ lr, gamma, lam, clip, epochs, mb, T, cV, cE, maxGrad }))(S.trainer.h)
+   209→   209→    : Object.assign({}, DEFAULT_PPO, PPO_OVERRIDES);
+   210→   210→  return {
+   211→   211→    robot: S.robotId,
+   212→   212→    robotName: cfg ? cfg.longName : '—',
+   213→   213→    taskKind: kind,
+   214→   214→    current: cur,
+   215→   215→    history: S.aiHistory,
+   216→   216→  };
+   217→   217→}
+   218→   218→
+   219→   219→function _aiPPOApply(ppo, touched) {
+   220→   220→  for (const [k, v] of Object.entries(ppo)) {
+   221→   221→    PPO_OVERRIDES[k] = v;
+   222→   222→    if (S.trainer && k !== 'T') S.trainer.h[k] = v;
+   223→   223→    touched.push('ppo.' + k);
+   224→   224→  }
+   225→   225→}
+   226→   226→
+   227→   227→// Patch auf die laufende Konfiguration anwenden (cfg-Objekte werden von
+   228→   228→// den Aufgaben live gelesen → Wirkung ohne Neustart).
+   229→   229→function applyAIPatch(patch, opts = {}) {
+   230→   230→  if (!patch || !Object.keys(patch).length) return false;
+   231→   231→  const cfg = S.sim ? S.sim.cfg : null;
+   232→   232→  const kind = aiTaskKind();
+   233→   233→  const touched = [];
+   234→   234→  if (patch.push && patch.push.impulse !== undefined) {
+   235→   235→    S.pushStrength = savePushStrength(patch.push.impulse);
+   236→   236→    touched.push('push.impulse=' + S.pushStrength.toFixed(1));
+   237→   237→  }
+   238→   238→  if (cfg) {
+   239→   239→    if (kind === 'speed') {
+   240→   240→      if (patch.rW) for (const [k, v] of Object.entries(patch.rW)) { cfg.rW[k] = v; touched.push('rW.' + k); }
+   241→   241→      if (patch.cmd) {
+   242→   242→        if (patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx=' + patch.cmd.vx.map(x => x.toFixed(2)).join('..')); }
+   243→   243→        if (patch.cmd.yaw) { cfg.cmd.yaw = patch.cmd.yaw.slice(); touched.push('cmd.yaw'); }
+   244→   244→      }
+   245→   245→      if (patch.done) for (const [k, v] of Object.entries(patch.done)) { cfg.done[k] = v; touched.push('done.' + k); }
+   246→   246→      if (patch.actSpan !== undefined) { cfg.actSpan = patch.actSpan; touched.push('actSpan'); }
+   247→   247→    } else if (kind === 'hover') {
+   248→   248→      if (patch.hoverR) for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
+   249→   249→      if (patch.cmd && patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx'); }
+   250→   250→    }
+   251→   251→  }
+   252→   252→  if (patch.motionR) for (const [k, v] of Object.entries(patch.motionR)) { MOTION_R[k] = v; touched.push('motionR.' + k); }
+   253→   253→  if (patch.hoverR && kind !== 'hover') for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
+   254→   254→  if (patch.ppo) _aiPPOApply(patch.ppo, touched);
+   255→   255→  saveAICfg();
+   256→   256→  log('KI-Anpassung übernommen: ' + touched.join(', '), 'ok');
+   257→   257→  ui.toast('KI-Anpassung übernommen' + (opts.resetTraining ? ' — Training zurückgesetzt' : ''));
+   258→   258→  if (opts.resetTraining) {
+   259→   259→    stopTraining(true);
+   260→   260→    S.trainer = null;
+   261→   261→    ui.resetRewards();
+   262→   262→    S.episodes = 0;
+   263→   263→    if (S.sim) S.sim.reset();
+   264→   264→    ui.$('tStart').textContent = 'Training starten';
+   265→   265→    ui.$('tStart').classList.remove('btn-stop');
+   266→   266→    ui.trainStats({ reward: '–', episodes: 0, steps: 0, rate: 0 });
+   267→   267→    ui.drawChart();
+   268→   268→    log('Training zurückgesetzt (KI-Anpassung war groß — Netz lernt neu)', 'warn');
+   269→   269→  }
+   270→   270→  return true;
+   271→   271→}
+   272→   272→
+   273→   273→function saveAICfg() {
+   274→   274→  try {
+   275→   275→    const cfg = S.sim ? S.sim.cfg : null;
+   276→   276→    const kind = aiTaskKind();
+   277→   277→    if (cfg && kind === 'speed') {
+   278→   278→      localStorage.setItem('tr_ai_speed_' + S.robotId, JSON.stringify({ rW: cfg.rW, cmd: cfg.cmd, done: cfg.done, actSpan: cfg.actSpan }));
+   279→   279→    }
+   280→   280→    localStorage.setItem('tr_ai_motion', JSON.stringify(MOTION_R));
+   281→   281→    localStorage.setItem('tr_ai_hover', JSON.stringify(HOVER_R));
+   282→   282→    localStorage.setItem('tr_ai_ppo', JSON.stringify(PPO_OVERRIDES));
+   283→   283→  } catch (e) { /* Speicher voll — Anpassung bleibt für diese Session */ }
+   284→   284→}
+   285→   285→
+   286→   286→function loadGlobalAICfg() {
+   287→   287→  try {
+   288→   288→    const m = JSON.parse(localStorage.getItem('tr_ai_motion') || 'null');
+   289→   289→    if (m) { const v = validatePatch({ motionR: m }); Object.assign(MOTION_R, v.motionR || {}); }
+   290→   290→    const h = JSON.parse(localStorage.getItem('tr_ai_hover') || 'null');
+   291→   291→    if (h) { const v = validatePatch({ hoverR: h }); Object.assign(HOVER_R, v.hoverR || {}); }
+   292→   292→    const p = JSON.parse(localStorage.getItem('tr_ai_ppo') || 'null');
+   293→   293→    if (p) { const v = validatePatch({ ppo: p }); Object.assign(PPO_OVERRIDES, v.ppo || {}); }
+   294→   294→  } catch (e) { /* defekt → Standardwerte */ }
+   295→   295→}
+   296→   296→
+   297→   297→// In loadRobot: KI-Tuning je Roboter wieder aufschalten
+   298→   298→function applySavedAICfg(id) {
+   299→   299→  const cfg = getRobot(id);
+   300→   300→  if (!cfg || cfg.drone) return;
+   301→   301→  try {
+   302→   302→    const raw = JSON.parse(localStorage.getItem('tr_ai_speed_' + id) || 'null');
+   303→   303→    if (!raw) return;
+   304→   304→    const v = validatePatch({ rW: raw.rW, cmd: raw.cmd, done: raw.done, actSpan: raw.actSpan });
+   305→   305→    if (v.rW) Object.assign(cfg.rW, v.rW);
+   306→   306→    if (v.cmd) { if (v.cmd.vx) cfg.cmd.vx = v.cmd.vx; if (v.cmd.yaw) cfg.cmd.yaw = v.cmd.yaw; }
+   307→   307→    if (v.done) Object.assign(cfg.done, v.done);
+   308→   308→    if (v.actSpan !== undefined) cfg.actSpan = v.actSpan;
+   309→   309→  } catch (e) { /* defekt → Standardwerte */ }
+   310→   310→}
+   311→   311→
+   312→   312→// ── KI-AGENT: Werkzeuge, Buttons, Schubsen ───────────────
+   313→   313→function doPush(dir = 'auto', strength = null) {
+   314→   314→  if (!S.sim) return 'Kein Roboter geladen';
+   315→   315→  const st = strength != null ? Math.min(10, Math.max(0.5, strength)) : S.pushStrength;
+   316→   316→  S.sim.pushRandom(dir, st);
+   317→   317→  controls.buzz(30);
+   318→   318→  ui.toast('SCHUBS! (' + dir + ', Stärke ' + st.toFixed(1) + ')');
+   319→   319→  log('Schubs: dir=' + dir + ' Stärke=' + st.toFixed(1) + ' (Δv≈' + st.toFixed(1) + ' m/s)', 'warn');
+   320→   320→  return 'Schubs ausgeführt (dir=' + dir + ', strength=' + st.toFixed(1) + ')';
+   321→   321→}
+   322→   322→
+   323→   323→function observeState() {
+   324→   324→  const sim = S.sim;
+   325→   325→  let up = null;
+   326→   326→  if (sim) {
+   327→   327→    const o = 4 * sim.baseBody;
+   328→   328→    const x = sim._xquat[o + 1], y = sim._xquat[o + 2];
+   329→   329→    up = 1 - 2 * (x * x + y * y);
+   330→   330→  }
+   331→   331→  return JSON.stringify({
+   332→   332→    robot: S.robotId,
+   333→   333→    mode: S.mode,
+   334→   334→    training: S.training,
+   335→   335→    speed: sim ? +sim.baseSpeed().toFixed(2) : null,
+   336→   336→    height: sim ? +sim.baseHeight().toFixed(2) : null,
+   337→   337→    upright: up !== null ? +up.toFixed(2) : null,
+   338→   338→    episodes: S.episodes,
+   339→   339→    policySaved: !!S.trainer,
+   340→   340→    motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
+   341→   341→    activeClip: S.motionClip ? S.motionClip.name : null,
+   342→   342→    motionCtrl: S.task && S.task.kind === 'motion'
+   343→   343→      ? { ctrlMode: S.task.ctrlMode, animOn: S.task.animOn, cmd: { vx: +S.task.cmd.vx.toFixed(2), wz: +S.task.cmd.wz.toFixed(2) } }
+   344→   344→      : null,
+   345→   345→    pushStrength: S.pushStrength,
+   346→   346→    joystick: controls.joyMap,
+   347→   347→    buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
+   348→   348→  });
+   349→   349→}
+   350→   350→
+   351→   351→function executeAction(action, depth = 0) {
+   352→   352→  const act = action;
+   353→   353→  if (!act || typeof act !== 'object') return 'Ungültige Aktion';
+   354→   354→  switch (act.type) {
+   355→   355→    case 'reset':
+   356→   356→      resetRobot();
+   357→   357→      return 'Roboter zurückgesetzt';
+   358→   358→    case 'push':
+   359→   359→      return doPush(act.dir || 'auto', act.strength != null ? act.strength : null);
+   360→   360→    case 'cmd': {
+   361→   361→      if (!S.sim) return 'Kein Roboter geladen';
+   362→   362→      S.cruise = { vx: act.vx, yaw: act.yaw, until: performance.now() + act.ms };
+   363→   363→      return 'Autofahrt gestartet: vx=' + act.vx.toFixed(2) + ' m/s, yaw=' + act.yaw.toFixed(2) + ' rad/s für ' + Math.round(act.ms / 1000) + ' s (endet früher bei Stick-Bewegung)';
+   364→   364→    }
+   365→   365→    case 'mode': {
+   366→   366→      if (act.mode === 'policy' && !S.trainer) return 'Keine Policy vorhanden — erst Training starten';
+   367→   367→      S.mode = act.mode;
+   368→   368→      ui.setMode(S.mode);
+   369→   369→      if (S.sim) S.sim.reset();
+   370→   370→      return 'Modus: ' + act.mode.toUpperCase();
+   371→   371→    }
+   372→   372→    case 'clip': {
+   373→   373→      const rec = S.clips[act.index];
+   374→   374→      if (!rec) return 'Kein Clip an Index ' + act.index + ' (vorhanden: ' + S.clips.length + ')';
+   375→   375→      activateClip(rec).catch(err => log('Clip-Aktivierung fehlgeschlagen: ' + err.message, 'err'));
+   376→   376→      return 'Clip-Aktivierung gestartet: ' + (rec.name || act.index);
+   377→   377→    }
+   378→   378→    case 'macro': {
+   379→   379→      if (depth > 2) return 'Makro-Verschachtelung zu tief';
+   380→   380→      let t = 0;
+   381→   381→      const results = [];
+   382→   382→      for (const step of act.steps.slice(0, 6)) {
+   383→   383→        if (step.waitMs !== undefined) { t += step.waitMs; continue; }
+   384→   384→        const wait = t;
+   385→   385→        const sub = step;
+   386→   386→        setTimeout(() => executeAction(sub, depth + 1), wait);
+   387→   387→        results.push(sub.type + '@' + wait + 'ms');
+   388→   388→      }
+   389→   389→      return 'Makro geplant: ' + (results.join(', ') || 'nur Wartezeiten') + ' (Gesamt ' + t + ' ms)';
+   390→   390→    }
+   391→   391→    default:
+   392→   392→      return 'Unbekannter Aktionstyp: ' + (act.type || '?');
+   393→   393→  }
+   394→   394→}
+   395→   395→
+   396→   396→/** Führt einen validierten Agent-Tool-Aufruf aus → Ergebnis-Text. */
+   397→   397→function execTool(tool, args) {
+   398→   398→  try {
+   399→   399→    if (tool === 'observe') return observeState();
+   400→   400→    if (tool === 'applyConfig') {
+   401→   401→      const ok = applyAIPatch(args.patch, { resetTraining: args.resetTraining });
+   402→   402→      return ok ? 'Konfiguration angewendet: ' + JSON.stringify(args.patch) : 'Patch war leer — nichts geändert';
+   403→   403→    }
+   404→   404→    if (tool === 'addButton') {
+   405→   405→      const r = addButton({ label: args.label, action: args.action });
+   406→   406→      if (!r.ok) return 'Fehler: ' + r.reason;
+   407→   407→      S.aiButtons = r.list;
+   408→   408→      renderAIButtons();
+   409→   409→      return 'Button erstellt: id=' + r.button.id + ' label="' + r.button.label + '" action=' + JSON.stringify(r.button.action);
+   410→   410→    }
+   411→   411→    if (tool === 'removeButton') {
+   412→   412→      const r = removeButton(args.id);
+   413→   413→      if (!r.ok) return 'Fehler: ' + r.reason;
+   414→   414→      S.aiButtons = r.list;
+   415→   415→      renderAIButtons();
+   416→   416→      return 'Button entfernt: ' + args.id;
+   417→   417→    }
+   418→   418→    if (tool === 'mapJoystick') {
+   419→   419→      controls.joyMap = validateJoyMap(args);
+   420→   420→      saveJoyMap(controls.joyMap);
+   421→   421→      return 'Joystick-Map gesetzt: ' + JSON.stringify(controls.joyMap);
+   422→   422→    }
+   423→   423→    return 'Unbekanntes Werkzeug: ' + tool;
+   424→   424→  } catch (e) {
+   425→   425→    return 'Werkzeug-Fehler: ' + e.message;
+   426→   426→  }
+   427→   427→}
+   428→   428→
+   429→   429→function renderAIButtons() {
+   430→   430→  const bar = document.getElementById('aiButtons');
+   431→   431→  if (!bar) return;
+   432→   432→  bar.innerHTML = '';
+   433→   433→  bar.classList.toggle('hidden', !S.aiButtons.length);
+   434→   434→  for (const b of S.aiButtons) {
+   435→   435→    const btn = document.createElement('button');
+   436→   436→    btn.className = 'ai-btn';
+   437→   437→    btn.dataset.bid = b.id;
+   438→   438→    btn.textContent = b.label;
+   439→   439→    btn.addEventListener('click', () => {
+   440→   440→      controls.buzz();
+   441→   441→      const res = executeAction(b.action);
+   442→   442→      log('KI-Button "' + b.label + '": ' + res);
+   443→   443→    });
+   444→   444→    // Lang drücken (600 ms) = löschen
+   445→   445→    let pressT = 0;
+   446→   446→    btn.addEventListener('pointerdown', () => { pressT = setTimeout(() => {
+   447→   447→      const r = removeButton(b.id);
+   448→   448→      if (r.ok) { S.aiButtons = r.list; renderAIButtons(); ui.toast('KI-Button "' + b.label + '" entfernt'); controls.buzz(24); }
+   449→   449→    }, 600); });
+   450→   450→    const clear = () => clearTimeout(pressT);
+   451→   451→    btn.addEventListener('pointerup', clear);
+   452→   452→    btn.addEventListener('pointercancel', clear);
+   453→   453→    btn.addEventListener('pointerleave', clear);
+   454→   454→    bar.appendChild(btn);
+   455→   455→  }
+   456→   456→}
+   457→   457→
+   458→   458→// ── KI-Chat-UI ──────────────────────────────────────────────
+   459→   459→function aiPush(cls, text) {
+   460→   460→  const logEl = document.getElementById('aiLog');
+   461→   461→  const div = document.createElement('div');
+   462→   462→  div.className = 'ai-msg ' + cls;
+   463→   463→  div.textContent = text;
+   464→   464→  logEl.appendChild(div);
+   465→   465→  logEl.scrollTop = logEl.scrollHeight;
+   466→   466→  return div;
+   467→   467→}
+   468→   468→
+   469→   469→function _fmtVal(v) {
+   470→   470→  if (Array.isArray(v)) return '[' + v.map(x => (+x).toFixed(2).replace('.', ',')).join(', ') + ']';
+   471→   471→  if (typeof v === 'number') return Math.abs(v) < 0.001 ? v.toExponential(1) : (+v).toFixed(v < 0.1 ? 4 : 2).replace('.', ',');
+   472→   472→  return String(v);
+   473→   473→}
+   474→   474→
+   475→   475→function renderAIAnswer(res, oldCur) {
+   476→   476→  const logEl = document.getElementById('aiLog');
+   477→   477→  const div = document.createElement('div');
+   478→   478→  div.className = 'ai-msg bot';
+   479→   479→  div.textContent = res.antwort;
+   480→   480→
+   481→   481→  const patch = res.patch || {};
+   482→   482→  const groups = Object.keys(patch);
+   483→   483→  if (groups.length) {
+   484→   484→    const box = document.createElement('div');
+   485→   485→    box.className = 'ai-changes';
+   486→   486→    const line = (k, o, n) => {
+   487→   487→      const row = document.createElement('div');
+   488→   488→      const b = document.createElement('b'); b.textContent = k + ': ';
+   489→   489→      const old = document.createElement('span'); old.className = 'old'; old.textContent = _fmtVal(o);
+   490→   490→      row.appendChild(b); row.appendChild(old);
+   491→   491→      row.appendChild(document.createTextNode('  →  ' + _fmtVal(n)));
+   492→   492→      box.appendChild(row);
+   493→   493→    };
+   494→   494→    const kind = aiTaskKind();
+   495→   495→    for (const g of groups) {
+   496→   496→      for (const [k, v] of Object.entries(patch[g])) {
+   497→   497→        if (g === 'cmd') {
+   498→   498→          if (k === 'vx' && oldCur.cmd) line('cmd.vx', oldCur.cmd.vx, v);
+   499→   499→          if (k === 'yaw' && oldCur.cmd) line('cmd.yaw', oldCur.cmd.yaw, v);
+   500→   500→          if (k === 'alt' && oldCur.cmd) line('cmd.alt', oldCur.cmd.alt, v);
+   501→   501→        } else if (g === 'ppo') {
+   502→   502→          line('ppo.' + k, (S.trainer ? S.trainer.h[k] : Object.assign({}, DEFAULT_PPO, PPO_OVERRIDES)[k]), v);
+   503→   503→        } else {
+   504→   504→          const oldObj = g === 'rW' ? oldCur.rW : g === 'done' ? oldCur.done : g === 'motionR' ? MOTION_R : g === 'hoverR' ? HOVER_R : oldCur;
+   505→   505→          line(g + '.' + k, oldObj ? oldObj[k] : '?', v);
+   506→   506→        }
+   507→   507→      }
+   508→   508→    }
+   509→   509→    const btn = document.createElement('button');
+   510→   510→    btn.className = 'ai-apply';
+   511→   511→    btn.textContent = 'ÄNDERUNGEN ÜBERNEHMEN';
+   512→   512→    btn.addEventListener('click', () => {
+   513→   513→      controls.buzz();
+   514→   514→      const ok = applyAIPatch(patch, { resetTraining: res.resetTraining });
+   515→   515→      if (ok) { btn.textContent = 'ÜBERNOMMEN ✓'; btn.classList.add('done'); btn.disabled = true; }
+   516→   516→    });
+   517→   517→    div.appendChild(box);
+   518→   518→    div.appendChild(btn);
+   519→   519→  }
+   520→   520→  const st = document.createElement('span');
+   521→   521→  st.className = 'ai-status';
+   522→   522→  st.textContent = res.model + (res.resetTraining ? ' · Training wird empfohlen neu zu starten' : '');
+   523→   523→  div.appendChild(st);
+   524→   524→  logEl.appendChild(div);
+   525→   525→  logEl.scrollTop = logEl.scrollHeight;
+   526→   526→}
+   527→   527→
+   528→   528→async function updateAIModelLabel() {
+   529→   529→  const el = document.getElementById('aiModel');
+   530→   530→  try {
+   531→   531→    const models = await ensureModels();
+   532→   532→    const cur = S.aiMode === 'smart' ? models.smart : models.fast;
+   533→   533→    el.textContent = (S.sim ? S.sim.cfg.longName : '—') + ' · ' + cur + (models.src === 'default' ? ' (Standardkette)' : '');
+   534→   534→  } catch (e) {
+   535→   535→    el.textContent = 'Gemini nicht erreichbar';
+   536→   536→  }
+   537→   537→}
+   538→   538→
+   539→   539→async function sendAIMessage(text) {
+   540→   540→  if (S.aiBusy || !text || !text.trim()) return;
+   541→   541→  if (!S.sim) { ui.toast('Roboter lädt noch', true); return; }
+   542→   542→  S.aiBusy = true;
+   543→   543→  const sendBtn = document.getElementById('aiSend');
+   544→   544→  sendBtn.disabled = true;
+   545→   545→  aiPush('user', text.trim());
+   546→   546→  let wait = aiPush('bot', 'Denkt nach …');
+   547→   547→  try {
+   548→   548→    let toolMsg = text.trim();
+   549→   549→    let toolTurns = 0;
+   550→   550→    while (toolTurns < 5) {
+   551→   551→      const ctx = aiCtx();
+   552→   552→      const res = await askAI({ text: toolMsg, mode: S.aiMode, ctx });
+   553→   553→      wait.remove();
+   554→   554→      if (!res.tool || toolTurns >= 4) {
+   555→   555→        renderAIAnswer(res, ctx.current);
+   556→   556→        S.aiHistory.push({ role: 'user', text: text.trim() }, { role: 'model', text: res.antwort });
+   557→   557→        break;
+   558→   558→      }
+   559→   559→      // ── Werkzeug ausführen und als Ergebnis zurück an die KI ──
+   560→   560→      aiPush('tool', '⚙ ' + res.tool + ' ' + JSON.stringify(res.args).slice(0, 160));
+   561→   561→      const result = execTool(res.tool, res.args);
+   562→   562→      aiPush('toolres', String(result).slice(0, 400));
+   563→   563→      log('KI-Agent: ' + res.tool + ' → ' + String(result).slice(0, 80), 'ok');
+   564→   564→      S.aiHistory.push({ role: 'user', text: toolMsg }, { role: 'model', text: res.antwort || ('[' + res.tool + ']') });
+   565→   565→      toolMsg = 'TOOL-ERGEBNIS (' + res.tool + '): ' + result + '\nAntworte jetzt kurz auf Deutsch — oder rufe das nächste Werkzeug auf.';
+   566→   566→      toolTurns++;
+   567→   567→      wait = aiPush('bot', 'Denkt nach …');
+   568→   568→    }
+   569→   569→    if (S.aiHistory.length > 40) S.aiHistory = S.aiHistory.slice(-40);
+   570→   570→    saveHistory(S.aiHistory);
+   571→   571→    updateAIModelLabel();
+   572→   572→  } catch (err) {
+   573→   573→    wait.remove();
+   574→   574→    aiPush('err', err.message);
+   575→   575→    log('KI-Fehler: ' + err.message, 'err');
+   576→   576→  } finally {
+   577→   577→    S.aiBusy = false;
+   578→   578→    sendBtn.disabled = false;
+   579→   579→  }
+   580→   580→}
+   581→   581→
+   582→   582→async function aiOnOpen() {
+   583→   583→  // Verlauf anzeigen (ohne Apply-Buttons)
+   584→   584→  const logEl = document.getElementById('aiLog');
+   585→   585→  logEl.innerHTML = '';
+   586→   586→  for (const m of S.aiHistory.slice(-10)) aiPush(m.role === 'model' ? 'bot' : 'user', m.text);
+   587→   587→  if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. (z. B. „schneller laufen, aber stabil bleiben")');
+   588→   588→  updateAIKeyStatus();
+   589→   589→  await updateAIModelLabel();
+   590→   590→}
+   591→   591→
+   592→   592→// ── API-Schlüssel wechseln ──────────────────────────────────
+   593→   593→function updateAIKeyStatus() {
+   594→   594→  const st = document.getElementById('aiKeyStatus');
+   595→   595→  if (!st) return;
+   596→   596→  const custom = isCustomKey();
+   597→   597→  const k = getApiKey();
+   598→   598→  const mask = k.length > 10 ? k.slice(0, 5) + '…' + k.slice(-4) : '***';
+   599→   599→  st.textContent = custom ? 'Eigener Schlüssel aktiv (' + mask + ') — „Standard" stellt den eingebauten wieder her.'
+   600→   600→    : 'Eingebauter Schlüssel aktiv (' + mask + ').';
+   601→   601→}
+   602→   602→
+   603→   603→function wireAIKey() {
+   604→   604→  const inp = document.getElementById('aiKeyInput');
+   605→   605→  const save = document.getElementById('aiKeySave');
+   606→   606→  const reset = document.getElementById('aiKeyReset');
+   607→   607→  if (!inp || !save || !reset) return;
+   608→   608→  save.addEventListener('click', () => {
+   609→   609→    const v = inp.value.trim();
+   610→   610→    if (!v) { ui.toast('Erst einen Schlüssel einfügen', true); return; }
+   611→   611→    const used = setApiKey(v);
+   612→   612→    inp.value = '';
+   613→   613→    updateAIKeyStatus();
+   614→   614→    ui.toast('KI-Schlüssel gesetzt (' + used.slice(0, 5) + '…)' );
+   615→   615→    log('KI: eigener API-Schlüssel aktiv — Modell-Erkennung neu', 'ok');
+   616→   616→    updateAIModelLabel().catch(() => {});
+   617→   617→  });
+   618→   618→  reset.addEventListener('click', () => {
+   619→   619→    setApiKey('');
+   620→   620→    updateAIKeyStatus();
+   621→   621→    ui.toast('Eingebauter Schlüssel aktiv');
+   622→   622→    log('KI: eingebauter API-Schlüssel wieder aktiv', 'ok');
+   623→   623→    updateAIModelLabel().catch(() => {});
+   624→   624→  });
+   625→   625→}
+   626→   626→
+   627→   627→// ── Training ────────────────────────────────────────────────
+   628→   628→function startTraining() {
+   629→   629→  if (!S.sim || !S.task) return;
+   630→   630→  if (!S.trainer) {
+   631→   631→    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
+   632→   632→    log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
+   633→   633→  }
+   634→   634→  S.task.reset(S.trainer.rng, S.sim);
+   635→   635→  S.training = true;
+   636→   636→  S.epReward = 0;
+   637→   637→  ui.$('tStart').textContent = 'Training pausieren';
+   638→   638→  ui.$('tStart').classList.add('btn-stop');
+   639→   639→  log('Training läuft — rollout + update auf der CPU', 'ok');
+   640→   640→}
+   641→   641→
+   642→   642→function stopTraining(silent = false) {
+   643→   643→  if (!S.training) return;
+   644→   644→  S.training = false;
+   645→   645→  const b = ui.$('tStart');
+   646→   646→  b.textContent = 'Training starten';
+   647→   647→  b.classList.remove('btn-stop');
+   648→   648→  if (!silent) log('Training pausiert');
+   649→   649→}
+   650→   650→
+   651→   651→// Ein Trainingsschritt (auf Regelrate CTRL_DT)
+   652→   652→function trainCtrlStep() {
+   653→   653→  const sim = S.sim, task = S.task, trainer = S.trainer;
+   654→   654→  const substeps = Math.max(1, Math.round(CTRL_DT / sim.timestep));
+   655→   655→  if (task.stepsLeft <= 0) task.sampleCmd(trainer.rng);
+   656→   656→
+   657→   657→  const o = task.observe(sim, S.obsBuf);
+   658→   658→  if (!finiteArr(S.obsBuf)) { sim.reset(); task.reset(trainer.rng, sim); return; }
+   659→   659→  trainer.norm.update(S.obsBuf);
+   660→   660→  const { act, logp, value } = trainer.act(S.obsBuf, false);
+   661→   661→  task.actionToCtrl(sim, act);
+   662→   662→  sim.stepN(substeps);
+   663→   663→  if (task.kind === 'motion') task.advance(CTRL_DT);
+   664→   664→  const { r, done } = task.reward(sim);
+   665→   665→  for (let i = 0; i < act.length; i++) task.lastAct[i] = act[i];
+   666→   666→  S.epReward += r;
+   667→   667→
+   668→   668→  const full = trainer.store(S.obsBuf, act, logp, r, done, value);
+   669→   669→  if (done) {
+   670→   670→    S.episodes++;
+   671→   671→    ui.pushEpisodeReward(S.epReward);
+   672→   672→    S.epReward = 0;
+   673→   673→    sim.reset();
+   674→   674→    task.reset(trainer.rng, sim);
+   675→   675→  }
+   676→   676→  if (full) {
+   677→   677→    const lastObs = task.observe(sim, S.obsBuf);
+   678→   678→    const lastVal = trainer.act(S.obsBuf, true).value;
+   679→   679→    const m = trainer.finishAndUpdate(lastVal);
+   680→   680→    m._lastMetrics = m;
+   681→   681→  }
+   682→   682→}
+   683→   683→
+   684→   684→// ── Modi / manueller Betrieb ────────────────────────────────
+   685→   685→function applyGait(dtCtrl) {
+   686→   686→  const sim = S.sim, cfg = S.sim.cfg;
+   687→   687→  dtCtrl = cfg.ctrlDt || dtCtrl;
+   688→   688→  // KI-Autofahrt (Cruise): fester Fahrbefehl, endet an Zeitgrenze oder
+   689→   689→  // sobald der Nutzer den Stick bewegt (Eingriff geht immer vor).
+   690→   690→  let cmd;
+   691→   691→  if (S.cruise) {
+   692→   692→    if (performance.now() > S.cruise.until || Math.abs(controls.stickX) > 0.15 || Math.abs(controls.stickY) > 0.15) {
+   693→   693→      if (S.cruise.until && performance.now() > S.cruise.until) ui.toast('Autofahrt beendet');
+   694→   694→      else ui.toast('Autofahrt beendet (Stick-Eingriff)');
+   695→   695→      S.cruise = null;
+   696→   696→    }
+   697→   697→  }
+   698→   698→  if (S.cruise) {
+   699→   699→    cmd = { vx: S.cruise.vx, yaw: S.cruise.yaw, climb: 0 };
+   700→   700→  } else {
+   701→   701→    cmd = controls.command(cfg);
+   702→   702→  }
+   703→   703→  const map = {};
+   704→   704→  S.gait.step(sim, dtCtrl, cmd, map);
+   705→   705→  for (const name in map) {
+   706→   706→    const a = sim.actByName[name];
+   707→   707→    if (a !== undefined) sim.ctrl[a] = map[name];
+   708→   708→  }
+   709→   709→  // Physik wirklich weiterschalten (Unterschritte je Regelrate)
+   710→   710→  const substeps = Math.max(1, Math.round(CTRL_DT / sim.timestep));
+   711→   711→  sim.stepN(substeps);
+   712→   712→}
+   713→   713→
+   714→   714→function policyCtrlStep() {
+   715→   715→  const sim = S.sim, task = S.task, trainer = S.trainer;
+   716→   716→  if (!trainer) return;
+   717→   717→  const substeps = Math.max(1, Math.round((S.sim.cfg.ctrlDt || CTRL_DT) / sim.timestep));
+   718→   718→  // Joystick-Steuerung (v2.5.0): bei ctrlMode 'joy' liefert der Stick die
+   719→   719→  // Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy im Training
+   720→   720→  // mit Zufalls-Kommandos kennengelernt hat.
+   721→   721→  if (task.kind === 'motion' && task.ctrlMode === 'joy') {
+   722→   722→    const c = controls.command(S.sim.cfg);
+   723→   723→    task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
+   724→   724→  }
+   725→   725→  task.observe(sim, S.obsBuf);
+   726→   726→  if (!finiteArr(S.obsBuf)) { sim.reset(); if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0; return; }
+   727→   727→  trainer.actDeterministic(S.obsBuf, S.actBuf);
+   728→   728→  task.actionToCtrl(sim, S.actBuf);
+   729→   729→  for (let i = 0; i < S.actBuf.length; i++) task.lastAct[i] = S.actBuf[i];
+   730→   730→  sim.stepN(substeps);
+   731→   731→  if (task.kind === 'motion') task.advance(CTRL_DT);
+   732→   732→}
+   733→   733→
+   734→   734→function resetRobot() {
+   735→   735→  if (!S.sim) return;
+   736→   736→  S.sim.reset();
+   737→   737→  if (S.task && S.task.kind === 'motion') S.task.reset(new RNG(4242), S.sim); // zurück auf den Bahn-Anfang
+   738→   738→  if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
+   739→   739→  S.epReward = 0;
+   740→   740→  log('Roboter zurückgesetzt auf Keyframe „' + S.sim.cfg.keyName + '"');
+   741→   741→}
+   742→   742→
+   743→   743→// Sturz-Erkennung im Echtzeitbetrieb (sanfter Auto-Reset)
+   744→   744→let lastFallLog = 0;
+   745→   745→function checkFall() {
+   746→   746→  const sim = S.sim;
+   747→   747→  if (!sim) return;
+   748→   748→  const o = 4 * sim.baseBody;
+   749→   749→  const x = sim._xquat[o + 1], y = sim._xquat[o + 2]; // (x,y) der Quaternion [w,x,y,z]
+   750→   750→  const upz = 1 - 2 * (x * x + y * y);
+   751→   751→  const height = sim._xpos[3 * sim.baseBody + 2];
+   752→   752→  const limit = sim.cfg.drone ? 0.35 : 0.32;
+   753→   753→  const zMin = sim.cfg.drone ? 0.05 : sim.cfg.done.zMin * 0.8;
+   754→   754→  if (upz < limit || height < zMin) {
+   755→   755→    const now = performance.now();
+   756→   756→    if (now - lastFallLog > 2500) {
+   757→   757→      log('Sturz erkannt — Auto-Reset', 'warn');
+   758→   758→      lastFallLog = now;
+   759→   759→    }
+   760→   760→    sim.reset();
+   761→   761→    if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
+   762→   762→    S.epReward = 0;
+   763→   763→  }
+   764→   764→}
+   765→   765→
+   766→   766→// ── Boot ────────────────────────────────────────────────────
+   767→   767→async function boot() {
+   768→   768→  try {
+   769→   769→    log(`TRAINROBOT v${VERSION} · Testfeld·07 · ${new Date().toLocaleString('de-DE')}`);
+   770→   770→    log('BIOS: Offline-Betrieb, kein Netzwerk nötig');
+   771→   771→    log('KI-Trainer: Gemini (nur auf Anfrage online)');
+   772→   772→    initAITransport();
+   773→   773→    loadGlobalAICfg();
+   774→   774→    S.aiHistory = loadHistory();
+   775→   775→    // KI-Agent-Zustand: Buttons, Joystick-Map, Schubs-Stärke
+   776→   776→    S.aiButtons = loadButtons();
+   777→   777→    controls.joyMap = loadJoyMap();
+   778→   778→    S.pushStrength = loadPushStrength();
+   779→   779→    // GLB-Animation im Training (v2.5.0): persistiert — AUS = nur Gleichgewicht
+   780→   780→    S.animTraining = localStorage.getItem('tr_animOn') !== '0';
+   781→   781→    const animTog = document.getElementById('animTrainToggle');
+   782→   782→    if (animTog) animTog.checked = S.animTraining;
+   783→   783→    controls.onPush = (dir, strength) => doPush(dir, strength);
+   784→   784→    renderAIButtons();
+   785→   785→    ui.splash('Prüfe WebAssembly …', 0.08);
+   786→   786→    ui.splash('Lade MuJoCo-Kern (WASM) …', 0.18);
+   787→   787→    await initEngine(log);
+   788→   788→    ui.splash('Initialisiere 3D-Welt …', 0.45);
+   789→   789→    r3d = new Renderer3D(document.getElementById('gl'));
+   790→   790→    r3d.resize();
+   791→   791→    // Orientierungs-/Größenwechsel: Canvas-Buffer + Kamera-Aspekt nachziehen
+   792→   792→    // (Landscape-Bug: bisher wurde resize nur einmal beim Boot aufgerufen)
+   793→   793→    const onResize = () => { if (r3d) r3d.resize(); };
+   794→   794→    window.addEventListener('resize', onResize);
+   795→   795→    window.addEventListener('orientationchange', () => setTimeout(onResize, 150));
+   796→   796→    if (window.screen && window.screen.orientation && window.screen.orientation.addEventListener) {
+   797→   797→      window.screen.orientation.addEventListener('change', onResize);
+   798→   798→    }
+   799→   799→    if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+   800→   800→    if (window.ResizeObserver) new ResizeObserver(onResize).observe(document.documentElement);
+   801→   801→    const glInfo = (() => {
+   802→   802→      try {
+   803→   803→        const gl = r3d.renderer.getContext();
+   804→   804→        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+   805→   805→        return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'WebGL';
+   806→   806→      } catch (e) { return 'WebGL'; }
+   807→   807→    })();
+   808→   808→    log(`WebGL: ${glInfo}`, 'ok');
+   809→   809→
+   810→   810→    controls.attach(ui, document.getElementById('gl'), r3d);
+   811→   811→    setModelProgress((done, total, rel) => {
+   812→   812→      const sp = document.getElementById('splash');
+   813→   813→      if (sp) ui.splash(`Lade Modelldateien (${done}/${total}) …`, 0.45 + 0.5 * (done / total));
+   814→   814→    });
+   815→   815→
+   816→   816→    ui.splash('Kompiliere Unitree A1 …', 0.6);
+   817→   817→    await loadRobot('a1', true);
+   818→   818→
+   819→   819→    ui.splash('Bereit.', 1);
+   820→   820→    setTimeout(() => { ui.splashDone(); }, 250);
+   821→   821→    log('Bereit. Vier Roboter, ungebunden, gleiche Steuerung.', 'ok');
+   822→   822→    requestAnimationFrame(loop);
+   823→   823→  } catch (err) {
+   824→   824→    console.error(err);
+   825→   825→    log('BOOT-FEHLER: ' + err.message, 'err');
+   826→   826→    ui.splash('Fehler', 1);
+   827→   827→    ui.fail(`Systemstart fehlgeschlagen.\n\n${err.message}\n\nKein Fallback vorgesehen.`);
+   828→   828→  }
+   829→   829→}
+   830→   830→
+   831→   831→// ── Master-Loop ─────────────────────────────────────────────
+   832→   832→let lastT = 0, statusT = 0, chartT = 0;
+   833→   833→function loop(now) {
+   834→   834→  requestAnimationFrame(loop);
+   835→   835→  const dtRaw = (now - lastT) / 1000;
+   836→   836→  lastT = now;
+   837→   837→  const dt = Math.min(Math.max(dtRaw, 0.0001), 0.05);
+   838→   838→  const fps = 1 / dtRaw;
+   839→   839→
+   840→   840→  if (!S.sim) return;
+   841→   841→  controls.tick(dt, r3d);
+   842→   842→  if (controls.consumeReset()) resetRobot();
+   843→   843→
+   844→   844→  if (S.training) {
+   845→   845→    // Trainingsbetrieb: Zeitbudget pro Frame
+   846→   846→    const budget = S.speedMode === 'max' ? 12e3 : 0; // µs
+   847→   847→    const t0 = performance.now();
+   848→   848→    const nSteps = S.speedMode === 'max' ? 1e9 : (S.speedMode === '16' ? 16 : S.speedMode === '4' ? 4 : 1);
+   849→   849→    let done = 0;
+   850→   850→    while (done < nSteps) {
+   851→   851→      trainCtrlStep();
+   852→   852→      done++;
+   853→   853→      if (budget && performance.now() - t0 > budget) break;
+   854→   854→    }
+   855→   855→    const el = performance.now() - t0;
+   856→   856→    S._stepTimes.push({ n: done, ms: el });
+   857→   857→    if (S._stepTimes.length > 30) S._stepTimes.shift();
+   858→   858→    let sn = 0, sm = 0;
+   859→   859→    for (const s of S._stepTimes) { sn += s.n; sm += s.ms; }
+   860→   860→    S.stepsPerSec = sm > 0 ? (sn / sm) * 1000 : 0;
+   861→   861→  } else {
+   862→   862→    // Echtzeit: MANUELL oder POLICY
+   863→   863→    const cdt = S.sim.cfg.ctrlDt || CTRL_DT;
+   864→   864→    S.acc += dt;
+   865→   865→    let guard = 0;
+   866→   866→    while (S.acc >= cdt && guard < 10) {
+   867→   867→      S.acc -= cdt;
+   868→   868→      guard++;
+   869→   869→      if (S.mode === 'policy' && S.trainer) policyCtrlStep();
+   870→   870→      else {
+   871→   871→        applyGait(cdt);
+   872→   872→        // Lehrer läuft auch im MANUELL-Modus weiter (Vorschau der Referenz)
+   873→   873→        if (S.task && S.task.kind === 'motion') S.task.advance(cdt);
+   874→   874→      }
+   875→   875→      checkFall();
+   876→   876→    }
+   877→   877→    S.stepsPerSec = Math.max(1, Math.round(CTRL_DT)) * 0 + fps * Math.max(1, Math.round(CTRL_DT / S.sim.timestep));
+   878→   878→  }
+   879→   879→
+   880→   880→  r3d.updateFrame(S.sim, dt);
+   881→   881→  // Geist: Referenzpose mitlaufen lassen — Lehrer (Original) + G1-Geist
+   882→   882→  // folgen BEIDE der Root-Bahn (der Lehrer läuft wirklich durchs Feld,
+   883→   883→  // der Roboter lernt, ihm zu folgen — nicht „auf der Stelle" zu gehen)
+   884→   884→  if (S.ghostOn && S.task && S.task.kind === 'motion' && (r3d.ghostGroups || r3d.sourceGhost)) {
+   885→   885→    const clip = S.task.clip;
+   886→   886→    const fr = Math.floor(S.task.phase * clip.n) % clip.n;
+   887→   887→    // Loop-Rebase: Referenz läuft nach jedem Durchlauf WEITER (kein Teleport)
+   888→   888→    const rr = clip.root && clip.yaw && S.task.refRoot ? S.task.refRoot(S.task.phase, [0, 0, 0]) : null;
+   889→   889→    if (r3d.sourceGhost) {
+   890→   890→      r3d.updateSourceGhost(fr);
+   891→   891→      if (rr) r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
+   892→   892→    }
+   893→   893→    if (r3d.ghostGroups) {
+   894→   894→      const gh = S.sim.makeGhostData();
+   895→   895→      // baseQ: Lehrer-Nick/Roll (z. B. Zombie-Beuge) — der G1-Geist nimmt die
+   896→   896→      // ABSOLUTE Lehrer-Pose an statt aufrecht daneben zu stehen
+   897→   897→      const bq = clip.baseQ ? clip.baseQ.subarray(4 * fr, 4 * fr + 4) : null;
+   898→   898→      if (rr) {
+   899→   899→        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2], bq);
+   900→   900→      } else if (clip.root && clip.yaw) {
+   901→   901→        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr], bq);
+   902→   902→      } else {
+   903→   903→        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], 0, 0, 0, bq);
+   904→   904→      }
+   905→   905→      r3d.updateGhost(gh);
+   906→   906→    }
+   907→   907→  }
+   908→   908→  r3d.render();
+   909→   909→
+   910→   910→  // Statuszeile (5 Hz)
+   911→   911→  statusT += dt;
+   912→   912→  if (statusT > 0.2) {
+   913→   913→    statusT = 0;
+   914→   914→    ui.status(S.sim.baseSpeed(), S.sim.baseHeight(), fps);
+   915→   915→    if (ui.$('trainSheet') && !ui.$('trainSheet').classList.contains('hidden')) {
+   916→   916→      const m = S.trainer ? S.trainer : null;
+   917→   917→      ui.trainStats({
+   918→   918→        reward: S.trainer ? (lastEma().toFixed(2).replace('.', ',')) : '–',
+   919→   919→        episodes: S.episodes,
+   920→   920→        steps: S.trainer ? S.trainer.stepCount : 0,
+   921→   921→        rate: S.training ? S.stepsPerSec : 0,
+   922→   922→      });
+   923→   923→    }
+   924→   924→  }
+   925→   925→  chartT += dt;
+   926→   926→  if (chartT > 0.35) {
+   927→   927→    chartT = 0;
+   928→   928→    if (!ui.$('trainSheet').classList.contains('hidden')) ui.drawChart();
+   929→   929→  }
+   930→   930→}
+   931→   931→
+   932→   932→function lastEma() {
+   933→   933→  const e = ui.episodeEma;
+   934→   934→  return e.length ? e[e.length - 1] : 0;
+   935→   935→}
+   936→   936→
+   937→   937→// ── UI-Verdrahtung ──────────────────────────────────────────
+   938→   938→function wireUI() {
+   939→   939→  document.getElementById('btnConsole').addEventListener('click', () => { ui.toggleConsole(); controls.buzz(); });
+   940→   940→  document.getElementById('consoleClose').addEventListener('click', () => ui.toggleConsole());
+   941→   941→  // ── KI-Trainer ─────────────────────────────────────────
+   942→   942→  document.getElementById('btnAI').addEventListener('click', async () => {
+   943→   943→    controls.buzz();
+   944→   944→    ui.toggleAI();
+   945→   945→    if (!document.getElementById('aiSheet').classList.contains('hidden')) await aiOnOpen();
+   946→   946→  });
+   947→   947→  document.getElementById('aiClose').addEventListener('click', () => ui.toggleAI(false));
+   948→   948→  for (const b of document.querySelectorAll('.aimode')) {
+   949→   949→    b.addEventListener('click', () => {
+   950→   950→      S.aiMode = b.dataset.aimode;
+   951→   951→      for (const x of document.querySelectorAll('.aimode')) x.classList.toggle('active', x === b);
+   952→   952→      controls.buzz();
+   953→   953→      updateAIModelLabel();
+   954→   954→    });
+   955→   955→  }
+   956→   956→  const _aiSubmit = () => {
+   957→   957→    const inp = document.getElementById('aiInput');
+   958→   958→    const v = inp.value.trim();
+   959→   959→    if (v) { inp.value = ''; sendAIMessage(v); }
+   960→   960→  };
+   961→   961→  document.getElementById('aiSend').addEventListener('click', () => { controls.buzz(); _aiSubmit(); });
+   962→   962→  document.getElementById('aiInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); _aiSubmit(); } });
+   963→   963→  wireAIKey();
+   964→   964→  for (const b of document.querySelectorAll('.ai-sug')) {
+   965→   965→    b.addEventListener('click', () => { controls.buzz(); sendAIMessage(b.dataset.q); });
+   966→   966→  }
+   967→   967→  document.getElementById('btnFull').addEventListener('click', async () => {
+   968→   968→    controls.buzz();
+   969→   969→    try {
+   970→   970→      if (document.fullscreenElement) await document.exitFullscreen();
+   971→   971→      else await document.documentElement.requestFullscreen();
+   972→   972→    } catch (e) { /* WebView ohne Vollbild */ }
+   973→   973→  });
+   974→   974→  document.getElementById('btnTrainTop').addEventListener('click', () => { ui.toggleTrain(); controls.buzz(); });
+   975→   975→  document.getElementById('trainClose').addEventListener('click', () => ui.toggleTrain(false));
+   976→   976→
+   977→   977→  for (const chip of document.querySelectorAll('.robot-chip')) {
+   978→   978→    chip.addEventListener('click', () => {
+   979→   979→      const id = chip.dataset.robot;
+   980→   980→      if (id === S.robotId || S.switching) return;
+   981→   981→      controls.buzz(10);
+   982→   982→      loadRobot(id);
+   983→   983→    });
+   984→   984→  }
+   985→   985→
+   986→   986→  document.getElementById('modeManuell').addEventListener('click', () => {
+   987→   987→    S.mode = 'manuell';
+   988→   988→    ui.setMode(S.mode);
+   989→   989→    controls.buzz();
+   990→   990→    if (S.sim) S.sim.reset();
+   991→   991→  });
+   992→   992→  document.getElementById('modePolicy').addEventListener('click', () => {
+   993→   993→    if (!S.trainer) { ui.toast('Keine Policy vorhanden — erst Training starten', true); return; }
+   994→   994→    S.mode = 'policy';
+   995→   995→    ui.setMode(S.mode);
+   996→   996→    controls.buzz();
+   997→   997→    if (S.sim) S.sim.reset();
+   998→   998→    log('POLICY-Modus: deterministische Politik steuert den Roboter');
+   999→   999→  });
+  1000→  1000→
+  1001→  1001→  document.getElementById('tStart').addEventListener('click', () => {
+  1002→  1002→    controls.buzz();
+  1003→  1003→    if (S.training) stopTraining(); else startTraining();
+  1004→  1004→  });
+  1005→  1005→  document.getElementById('tReset').addEventListener('click', () => {
+  1006→  1006→    controls.buzz();
+  1007→  1007→    stopTraining(true);
+  1008→  1008→    S.trainer = null;
+  1009→  1009→    ui.resetRewards();
+  1010→  1010→    S.episodes = 0;
+  1011→  1011→    if (S.sim) S.sim.reset();
+  1012→  1012→    ui.$('tStart').textContent = 'Training starten';
+  1013→  1013→    ui.$('tStart').classList.remove('btn-stop');
+  1014→  1014→    ui.trainStats({ reward: '–', episodes: 0, steps: 0, rate: 0 });
+  1015→  1015→    ui.drawChart();
+  1016→  1016→    log('Training zurückgesetzt (Netz neu, Norm neu)', 'warn');
+  1017→  1017→  });
+  1018→  1018→  for (const b of document.querySelectorAll('.speed-chip')) {
+  1019→  1019→    b.addEventListener('click', () => {
+  1020→  1020→      for (const x of document.querySelectorAll('.speed-chip')) x.classList.remove('active');
+  1021→  1021→      b.classList.add('active');
+  1022→  1022→      S.speedMode = b.dataset.speed;
+  1023→  1023→      controls.buzz();
+  1024→  1024→    });
+  1025→  1025→  }
+  1026→  1026→  document.getElementById('tSave').addEventListener('click', () => { controls.buzz(); savePolicy(S.robotId); });
+  1027→  1027→  document.getElementById('tLoad').addEventListener('click', () => {
+  1028→  1028→    controls.buzz();
+  1029→  1029→    const p = loadPolicy(S.robotId);
+  1030→  1030→    if (p) {
+  1031→  1031→      S.trainer = p;
+  1032→  1032→      ui.policyAvailable(true);
+  1033→  1033→      ui.toast('Policy geladen (' + p.stepCount + ' Schritte)');
+  1034→  1034→    } else ui.toast('Kein Speicherstand gefunden', true);
+  1035→  1035→  });
+  1036→  1036→  document.getElementById('tExport').addEventListener('click', () => {
+  1037→  1037→    if (!S.trainer) { ui.toast('Keine Policy vorhanden', true); return; }
+  1038→  1038→    const json = JSON.stringify(S.trainer.toJSON());
+  1039→  1039→    const name = 'trainrobot_policy_' + S.robotId + '.json';
+  1040→  1040→    // APK: über Java-Bridge in den Download-Ordner schreiben
+  1041→  1041→    // (blob-Anchor-Downloads sind in WebViews unzuverlässig)
+  1042→  1042→    if (window.TrainrobotBridge && window.TrainrobotBridge.saveFile) {
+  1043→  1043→      try {
+  1044→  1044→        const b64 = btoa(unescape(encodeURIComponent(json)));
+  1045→  1045→        const ok = window.TrainrobotBridge.saveFile(name, b64, 'application/json');
+  1046→  1046→        if (ok) { ui.toast('Policy exportiert → Download-Ordner'); log('Policy exportiert: ' + name, 'ok'); }
+  1047→  1047→        else ui.toast('Export fehlgeschlagen', true);
+  1048→  1048→      } catch (e) { ui.toast('Export fehlgeschlagen: ' + e.message, true); }
+  1049→  1049→      return;
+  1050→  1050→    }
+  1051→  1051→    // Browser (Test): Standard-Anchor-Download
+  1052→  1052→    const blob = new Blob([json], { type: 'application/json' });
+  1053→  1053→    const a = document.createElement('a');
+  1054→  1054→    a.href = URL.createObjectURL(blob);
+  1055→  1055→    a.download = name;
+  1056→  1056→    a.click();
+  1057→  1057→    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  1058→  1058→    ui.toast('Policy exportiert');
+  1059→  1059→  });
+  1060→  1060→  document.getElementById('tImport').addEventListener('click', () => document.getElementById('importFile').click());
+  1061→  1061→  document.getElementById('importFile').addEventListener('change', async (e) => {
+  1062→  1062→    const f = e.target.files && e.target.files[0];
+  1063→  1063→    if (!f) return;
+  1064→  1064→    try {
+  1065→  1065→      const data = JSON.parse(await f.text());
+  1066→  1066→      if (data.fmt !== 'trainrobot-ppo-1') throw new Error('Unbekanntes Format');
+  1067→  1067→      const p = PPO.fromJSON(data);
+  1068→  1068→      if (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim) throw new Error('Policy passt nicht zu diesem Roboter');
+  1069→  1069→      S.trainer = p;
+  1070→  1070→      ui.policyAvailable(true);
+  1071→  1071→      ui.toast('Import ok (' + p.stepCount + ' Schritte)');
+  1072→  1072→      log('Policy importiert: ' + f.name, 'ok');
+  1073→  1073→    } catch (err) {
+  1074→  1074→      ui.toast('Import fehlgeschlagen: ' + err.message, true);
+  1075→  1075→    }
+  1076→  1076→    e.target.value = '';
+  1077→  1077→  });
+  1078→  1078→  document.getElementById('failReload').addEventListener('click', () => location.reload());
+  1079→  1079→
+  1080→  1080→  // ── GLB-Bewegung (G1) ──────────────────────────────────
+  1081→  1081→  document.getElementById('glbImportBtn').addEventListener('click', () => document.getElementById('glbFile').click());
+  1082→  1082→  document.getElementById('glbFile').addEventListener('change', onGlbFiles);
+  1083→  1083→  document.getElementById('bcBtn').addEventListener('click', () => runBC());
+  1084→  1084→  // ── Steuerung je Clip (v2.5.0): Keine = Referenzbahn, Joystick = Zufalls-
+  1085→  1085→  // Kommandos im Training + echte Stick-Steuerung im POLICY-Modus
+  1086→  1086→  for (const b of document.querySelectorAll('.ctrl-chip')) {
+  1087→  1087→    b.addEventListener('click', () => {
+  1088→  1088→      controls.buzz();
+  1089→  1089→      const mode = b.dataset.ctrl;
+  1090→  1090→      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+  1091→  1091→      if (!rec || !S.task || S.task.kind !== 'motion') { ui.toast('Zuerst eine GLB-Referenz wählen', true); return; }
+  1092→  1092→      for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x === b);
+  1093→  1093→      rec.ctrl = mode;
+  1094→  1094→      putClip(rec).catch(() => {});
+  1095→  1095→      S.task.ctrlMode = mode;
+  1096→  1096→      S.task.cmd.vx = 0; S.task.cmd.wz = 0; S.task._cmdHold = 0;
+  1097→  1097→      log(mode === 'joy'
+  1098→  1098→        ? 'Steuerung: JOYSTICK — im Training werden zufällige Fahrbefehle (vx, Gier-Rate) gewürfelt, damit die Policy lernt, dass der Joystick sie steuert; im POLICY-Modus steuert der echte Stick'
+  1099→  1099→        : 'Steuerung: KEINE — das Gelernte folgt rein der Referenzbahn (typisch für Idle)', 'ok');
+  1100→  1100→      ui.toast(mode === 'joy' ? 'Steuerung: Joystick' : 'Steuerung: keine');
+  1101→  1101→    });
+  1102→  1102→  }
+  1103→  1103→  // ── Animation im Training an/aus (v2.5.0): AUS = nur Gleichgewicht lernen
+  1104→  1104→  const animT = document.getElementById('animTrainToggle');
+  1105→  1105→  if (animT) animT.addEventListener('change', () => {
+  1106→  1106→    S.animTraining = animT.checked;
+  1107→  1107→    try { localStorage.setItem('tr_animOn', animT.checked ? '1' : '0'); } catch (e) { /* voll */ }
+  1108→  1108→    if (S.task && S.task.kind === 'motion') S.task.animOn = animT.checked;
+  1109→  1109→    log(animT.checked
+  1110→  1110→      ? 'Animation im Training: AN — Posen-Tracking aktiv'
+  1111→  1111→      : 'Animation im Training: AUS — es wird nur GLEICHGEWICHT gelernt (Referenz = Stand; die Animationen haben ja kein Gleichgewicht)', 'warn');
+  1112→  1112→    ui.toast(animT.checked ? 'Animation im Training an' : 'Nur Gleichgewicht lernen');
+  1113→  1113→  });
+  1114→  1114→  document.getElementById('ghostToggle').addEventListener('change', (e) => {
+  1115→  1115→    S.ghostOn = e.target.checked;
+  1116→  1116→    if (!S.ghostOn) { r3d.removeGhost(); r3d.removeSourceGhost(); }
+  1117→  1117→    else if (S.task && S.task.kind === 'motion' && S.motionClip) {
+  1118→  1118→      if (S.sim) r3d.buildGhost(S.sim);
+  1119→  1119→      r3d.buildSourceGhost(S.motionClip, S.srcScene || null);
+  1120→  1120→    }
+  1121→  1121→  });
+  1122→  1122→
+  1123→  1123→  refreshClipList().catch(() => { /* IDB evtl. gesperrt */ });
+  1124→  1124→}
+  1125→  1125→
+  1126→  1126→// ── GLB: Import, Liste, Aktivierung, BC ────────────────────
+  1127→  1127→// Universell: GLB von beliebiger Quelle (Mixamo, Cartwheel, Unity,
+  1128→  1128→// Unreal, VRM …) — das Retargeting erkennt das Skelett automatisch
+  1129→  1129→// (Alias-Tabelle + Heuristik). Import aus JEDEM Roboter-View möglich:
+  1130→  1130→// nötigenfalls wechselt die App zum G1 (humanoides Ziel). ALLE
+  1131→  1131→// Animationen einer Datei werden importiert (Hart-Limit 8).
+  1132→  1132→async function onGlbFiles(e) {
+  1133→  1133→  const files = Array.from(e.target.files || []);
+  1134→  1134→  e.target.value = '';
+  1135→  1135→  if (!files.length) return;
+  1136→  1136→  if (S.robotId !== 'g1' || !S.sim) {
+  1137→  1137→    ui.toast('Wechsle zum G1 — humanoides Retargeting', false, 2600);
+  1138→  1138→    log('GLB-Import: automatischer Wechsel zum G1 (humanoides Ziel)', 'warn');
+  1139→  1139→    await loadRobot('g1');
+  1140→  1140→    if (S.robotId !== 'g1' || !S.sim) { ui.toast('G1 konnte nicht geladen werden', true); return; }
+  1141→  1141→  }
+  1142→  1142→  for (const f of files) {
+  1143→  1143→    ui.$('glbStatus').textContent = 'Importiere ' + f.name + ' …';
+  1144→  1144→    try {
+  1145→  1145→      const buf = await f.arrayBuffer();
+  1146→  1146→      const clip = new GlbClip(buf);
+  1147→  1147→      const anims = clip.animations;
+  1148→  1148→      log('GLB „' + f.name + '": ' + anims.length + ' Animation(en) — ' + anims.map(a => a.name + ' (' + a.duration.toFixed(1) + 's)').join(', '));
+  1149→  1149→      const list = anims.slice(0, 8);
+  1150→  1150→      let last = null;
+  1151→  1151→      for (const an of list) {
+  1152→  1152→        if (an.index > 0) clip.useAnimation(an.index);
+  1153→  1153→        const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+  1154→  1154→        const rec = {
+  1155→  1155→          id: 'glb_' + Date.now() + '_' + an.index + '_' + Math.floor(Math.random() * 1e4),
+  1156→  1156→          name: f.name.replace(/\.glb$/i, '') + (anims.length > 1 ? ' · ' + an.name : ''),
+  1157→  1157→          size: buf.byteLength,
+  1158→  1158→          glb: an.index === 0 ? buf : null,
+  1159→  1159→          animIndex: an.index,
+  1160→  1160→          motion: packMotion(motion),
+  1161→  1161→        };
+  1162→  1162→        await putClip(rec);
+  1163→  1163→        log('Retargeting „' + rec.name + '": ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke, ' + motion.duration.toFixed(1) + 's — Boden angepasst', 'ok');
+  1164→  1164→        last = rec;
+  1165→  1165→        await new Promise(r => setTimeout(r, 0)); // UI-Frame
+  1166→  1166→      }
+  1167→  1167→      await refreshClipList();
+  1168→  1168→      ui.$('glbStatus').textContent = (list.length > 1 ? list.length + ' Animationen importiert — letzte: ' : '') + (last ? last.name + ': ' + last.motion.duration.toFixed(1) + 's @ ' + last.motion.fps + ' fps bereit' : 'bereit');
+  1169→  1169→      ui.toast('GLB importiert: ' + (last ? last.name : f.name));
+  1170→  1170→    } catch (err) {
+  1171→  1171→      console.error(err);
+  1172→  1172→      log('GLB-Fehler: ' + err.message, 'err');
+  1173→  1173→      ui.$('glbStatus').textContent = 'Fehler: ' + err.message;
+  1174→  1174→      ui.toast('GLB-Import fehlgeschlagen: ' + err.message, true, 4000);
+  1175→  1175→    }
+  1176→  1176→  }
+  1177→  1177→}
+  1178→  1178→
+  1179→  1179→let _bcRunning = false;
+  1180→  1180→async function runBC() {
+  1181→  1181→  if (_bcRunning) return;
+  1182→  1182→  if (!S.task || S.task.kind !== 'motion') { ui.toast('Zuerst eine GLB-Referenz wählen', true); return; }
+  1183→  1183→  _bcRunning = true;
+  1184→  1184→  try {
+  1185→  1185→    const task = S.task;
+  1186→  1186→    ui.$('glbStatus').textContent = 'BC: Datensatz aus Referenz erzeugen …';
+  1187→  1187→    await new Promise((r) => setTimeout(r, 30));
+  1188→  1188→    const ds = task.buildBCDataset(S.sim);
+  1189→  1189→    log('BC-Datensatz: ' + ds.n + ' Frames (Geist + Rauschen) — Etikett = nächste Referenzpose');
+  1190→  1190→    if (!S.trainer) {
+  1191→  1191→      S.trainer = new PPO(task.obsDim, task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
+  1192→  1192→    }
+  1193→  1193→    const trainer = S.trainer;
+  1194→  1194→    for (let f = 0; f < ds.n; f++) {
+  1195→  1195→      const o = new Float32Array(task.obsDim);
+  1196→  1196→      for (let i = 0; i < task.obsDim; i++) o[i] = ds.X[f * task.obsDim + i];
+  1197→  1197→      trainer.norm.update(o);
+  1198→  1198→    }
+  1199→  1199→    const EPOCHS = 60;
+  1200→  1200→    for (let ep = 0; ep < EPOCHS; ep++) {
+  1201→  1201→      const loss = trainer.bcEpoch(ds.X, ds.Y, ds.n, 128);
+  1202→  1202→      if (ep % 10 === 0 || ep === EPOCHS - 1) {
+  1203→  1203→        log('BC Epoche ' + (ep + 1) + '/' + EPOCHS + ' — MSE ' + loss.toFixed(4));
+  1204→  1204→        ui.$('glbStatus').textContent = 'BC Epoche ' + (ep + 1) + '/' + EPOCHS + ' · MSE ' + loss.toFixed(4);
+  1205→  1205→        await new Promise((r) => setTimeout(r, 0));
+  1206→  1206→      }
+  1207→  1207→    }
+  1208→  1208→    ui.toast('BC fertig — jetzt PPO verfeinern');
+  1209→  1209→    log('BC abgeschlossen. Empfehlung: Training starten (PPO-Residual auf der CPU).', 'ok');
+  1210→  1210→    ui.$('glbStatus').textContent = 'BC fertig. PPO verfeinern mit „Training starten".';
+  1211→  1211→  } catch (err) {
+  1212→  1212→    console.error(err);
+  1213→  1213→    log('BC-Fehler: ' + err.message, 'err');
+  1214→  1214→    ui.toast('BC fehlgeschlagen: ' + err.message, true);
+  1215→  1215→  } finally {
+  1216→  1216→    _bcRunning = false;
+  1217→  1217→  }
+  1218→  1218→}
+  1219→  1219→
+  1220→  1220→// Chips der Steuerungs-Wahl auf den aktiven Clip syncen (v2.5.0)
+  1221→  1221→function syncCtrlChips() {
+  1222→  1222→  const mode = S.task && S.task.kind === 'motion' ? S.task.ctrlMode : 'none';
+  1223→  1223→  for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x.dataset.ctrl === mode);
+  1224→  1224→}
+  1225→  1225→
+  1226→  1226→async function refreshClipList() {
+  1227→  1227→  S.clips = await listClips();
+  1228→  1228→  const list = document.getElementById('glbList');
+  1229→  1229→  if (!list) return;
+  1230→  1230→  list.innerHTML = '';
+  1231→  1231→  for (const rec of S.clips) {
+  1232→  1232→    const row = document.createElement('div');
+  1233→  1233→    const active = S.motionClip && S.motionClip.name === rec.name;
+  1234→  1234→    row.className = 'glb-clip' + (active ? ' active' : '');
+  1235→  1235→    const name = document.createElement('span');
+  1236→  1236→    name.className = 'glb-clip-name';
+  1237→  1237→    name.textContent = rec.name;
+  1238→  1238→    const meta = document.createElement('span');
+  1239→  1239→    meta.className = 'glb-clip-meta';
+  1240→  1240→    const m = rec.motion;
+  1241→  1241→    meta.textContent = (m.duration || 0).toFixed(1) + 's · ' + m.n + 'F';
+  1242→  1242→    const use = document.createElement('button');
+  1243→  1243→    use.className = 'btn small';
+  1244→  1244→    use.textContent = active ? 'Aktiv' : 'Referenz';
+  1245→  1245→    use.addEventListener('click', () => activateClip(rec));
+  1246→  1246→    const del = document.createElement('button');
+  1247→  1247→    del.className = 'btn small';
+  1248→  1248→    del.textContent = '×';
+  1249→  1249→    del.addEventListener('click', async () => {
+  1250→  1250→      await deleteClip(rec.id);
+  1251→  1251→      if (active) deactivateClip();
+  1252→  1252→      await refreshClipList();
+  1253→  1253→    });
+  1254→  1254→    row.append(name, meta, use, del);
+  1255→  1255→    list.appendChild(row);
+  1256→  1256→  }
+  1257→  1257→}
+  1258→  1258→
+  1259→  1259→function activateClip(rec) {
+  1260→  1260→  if (S.robotId !== 'g1' || !S.sim) { ui.toast('Nur mit dem G1 möglich', true); return; }
+  1261→  1261→  stopTraining(true);
+  1262→  1262→  S.activeRecId = rec.id; // aktiver Clip-Datensatz (für Steuerungs-Wahl, v2.5.0)
+  1263→  1263→  S.motionClip = unpackMotion(rec.motion);
+  1264→  1264→  S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
+  1265→  1265→  // Steuerung + Animation-Status je Clip (v2.5.0)
+  1266→  1266→  S.task.ctrlMode = rec.ctrl === 'joy' ? 'joy' : 'none';
+  1267→  1267→  S.task.animOn = S.animTraining;
+  1268→  1268→  syncCtrlChips();
+  1269→  1269→  S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
+  1270→  1270→  S.obsBuf = new Float32Array(S.task.obsDim);
+  1271→  1271→  S.actBuf = new Float32Array(S.task.actDim);
+  1272→  1272→  S.trainer = loadPolicy(S.robotId);
+  1273→  1273→  ui.policyAvailable(!!S.trainer);
+  1274→  1274→  ui.$('stMode').textContent = 'GLB';
+  1275→  1275→  // Lehrer-Ghost: Skelett-Figur sofort, Original-Mesh sobald gebaut
+  1276→  1276→  S.srcScene = null;
+  1277→  1277→  if (S.ghostOn) {
+  1278→  1278→    r3d.buildGhost(S.sim);
+  1279→  1279→    r3d.buildSourceGhost(S.motionClip, null);
+  1280→  1280→  }
+  1281→  1281→  if (rec.glb) {
+  1282→  1282→    try {
+  1283→  1283→      const c2 = new GlbClip(rec.glb);
+  1284→  1284→      c2.useAnimation(rec.animIndex || 0);
+  1285→  1285→      const pkg = buildGlbScene(c2);
+  1286→  1286→      if (pkg) {
+  1287→  1287→        S.srcScene = pkg;
+  1288→  1288→        if (S.ghostOn) r3d.buildSourceGhost(S.motionClip, pkg);
+  1289→  1289→        log('Lehrer: Original-Modell (' + pkg.meshCount + ' Meshes, ' + pkg.bones + ' Knochen) zeigt die Animation');
+  1290→  1290→      }
+  1291→  1291→    } catch (e) { log('Original-Modell nicht darstellbar — Skelett-Lehrer aktiv (' + e.message + ')'); }
+  1292→  1292→  }
+  1293→  1293→  const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Roboter folgt dem wandernden Lehrer)' : '';
+  1294→  1294→  const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
+  1295→  1295→  const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
+  1296→  1296→    : ' · Steuerung: keine (rein Referenzbahn)';
+  1297→  1297→  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
+  1298→  1298→  ui.toast('Referenz aktiv: ' + rec.name);
+  1299→  1299→  refreshClipList().catch(() => {});
+  1300→  1300→}
+  1301→  1301→
+  1302→  1302→function deactivateClip() {
+  1303→  1303→  stopTraining(true);
+  1304→  1304→  S.motionClip = null;
+  1305→  1305→  S.srcScene = null;
+  1306→  1306→  S.activeRecId = null;
+  1307→  1307→  syncCtrlChips();
+  1308→  1308→  r3d.removeGhost();
+  1309→  1309→  r3d.removeSourceGhost();
+  1310→  1310→  if (S.sim) {
+  1311→  1311→    const cfg = S.sim.cfg;
+  1312→  1312→    S.task = cfg.task(cfg);
+  1313→  1313→    S.task.reset(new RNG(4242), S.sim);
+  1314→  1314→    S.obsBuf = new Float32Array(S.task.obsDim);
+  1315→  1315→    S.actBuf = new Float32Array(S.task.actDim);
+  1316→  1316→    S.trainer = loadPolicy(S.robotId);
+  1317→  1317→    ui.policyAvailable(!!S.trainer);
+  1318→  1318→    ui.$('stMode').textContent = 'MANUELL';
+  1319→  1319→    log('GLB-Referenz deaktiviert — zurück auf Geschwindigkeitsaufgabe');
+  1320→  1320→  }
+  1321→  1321→  refreshClipList().catch(() => {});
+  1322→  1322→}
+  1323→  1323→
+  1324→  1324→// Test-/Debug-Handle (schadlos in Produktion)
+  1325→  1325→Object.defineProperty(window, '__trainrobot', {
+  1326→  1326→  get: () => ({
+  1327→  1327→    sim: S.sim,
+  1328→  1328→    controls,
+  1329→  1329→    get trainer() { return S.trainer; },
+  1330→  1330→    get episodes() { return S.episodes; },
+  1331→  1331→    get mode() { return S.mode; },
+  1332→  1332→    get task() { return S.task; },
+  1333→  1333→    get motionClip() { return S.motionClip; },
+  1334→  1334→    get renderer() { return r3d; },
+  1335→  1335→    get cfg() { return S.sim ? S.sim.cfg : null; },
+  1336→  1336→    get motionR() { return MOTION_R; },
+  1337→  1337→    get hoverR() { return HOVER_R; },
+  1338→  1338→    get ppoOverrides() { return PPO_OVERRIDES; },
+  1339→  1339→    get aiBusy() { return S.aiBusy; },
+  1340→  1340→    get pushStrength() { return S.pushStrength; },
+  1341→  1341→    get joyMap() { return controls.joyMap; },
+  1342→  1342→    get aiButtons() { return S.aiButtons; },
+  1343→  1343→    get cruise() { return S.cruise; },
+  1344→  1344→    doPush: (dir, strength) => doPush(dir, strength),
+  1345→  1345→    executeAction: (action) => executeAction(action),
+  1346→  1346→    applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
+  1347→  1347→    ui,
+  1348→  1348→  }),
+  1349→  1349→});
+  1350→  1350→
+  1351→  1351→wireUI();
+  1352→  1352→boot();
+  1353→  1353→
