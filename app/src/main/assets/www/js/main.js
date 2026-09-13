@@ -12,14 +12,14 @@ import { UI } from './ui.js';
 import { PPO, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1 } from './retarget.js';
+import { retargetToG1, RT_ALG } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.6.0';
+const VERSION = '2.6.1';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -1354,11 +1354,32 @@ async function refreshClipList() {
   }
 }
 
-function activateClip(rec) {
+async function activateClip(rec) {
   if (S.robotId !== 'g1' || !S.sim) { ui.toast('Nur mit dem G1 möglich', true); return; }
   stopTraining(true);
   S.activeRecId = rec.id; // aktiver Clip-Datensatz (für Steuerungs-Wahl, v2.5.0)
   S.motionClip = unpackMotion(rec.motion);
+  // v2.6.1 — AUTO-RE-RETARGET bei altem Algorithmus-Bestand: Das retargetete
+  // Ergebnis liegt PERSISTIERT im Record (IndexedDB) — ein Bein-Fix im Code
+  // erreichte bestehende Clips deshalb NIE („es ist wie davor", obwohl die
+  // v2.6.0 längst den Valgus-Fix hatte). Ist der gespeicherte Stand älter
+  // als RT_ALG UND die GLB-Datei liegt noch im Record, wird beim Aktivieren
+  // EINMAL neu retargetet und der Record aktualisiert (ctrl/buttons/glb
+  // bleiben erhalten — nur motion wird ausgetauscht).
+  if ((rec.motion.alg || 0) < RT_ALG && rec.glb) {
+    try {
+      log('Bein-Algorithmus ist neuer als beim Import — „' + rec.name + '\u201c wird neu retargetet …');
+      const c2 = new GlbClip(rec.glb);
+      c2.useAnimation(rec.animIndex || 0);
+      const motion = retargetToG1(c2, S.sim, (m) => log('  ' + m));
+      rec.motion = packMotion(motion);
+      await putClip(rec); // gleiche id → überschreibt nur motion
+      S.motionClip = unpackMotion(rec.motion);
+      log('Neu retargetet: ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke — Beine im natürlichen G1-Stand (v' + VERSION + ')', 'ok');
+    } catch (e) {
+      log('Neu-Retargeting fehlgeschlagen — alter Bestand bleibt (' + (e && e.message ? e.message : e) + ')', 'warn');
+    }
+  }
   S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
   // Steuerung + Animation-Status je Clip (v2.5.0, Buttons v2.6.0)
   S.task.ctrlMode = rec.ctrl === 'joy' || rec.ctrl === 'btn' ? rec.ctrl : 'none';

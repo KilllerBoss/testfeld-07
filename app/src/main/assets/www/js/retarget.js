@@ -20,6 +20,15 @@
 
 import { GlbClip, quatMul, quatRot as rotVec, quatRotInv } from './glb.js';
 
+// Versionszähler des Retargeting-ALGORITHMUS. Jede Änderung, die andere
+// Gelenk-Timelines erzeugt, MUSS diesen Wert erhöhen: main.js vergleicht ihn
+// mit dem in IndexedDB gespeicherten motion.alg und re-retargetet bestehende
+// Clips beim Aktivieren automatisch (sonst sähe der Nutzer für immer das
+// Ergebnis der import-Zeit — „es ist wie davor", obwohl der Fix im Code war).
+// 1 = vor v2.6.0 (X-Beine), 2 = v2.6.0 (Winkelbisektor), 3 = v2.6.1
+// (voller Valgus → natürlicher G1-A-Stand bei geradem Bein).
+export const RT_ALG = 3;
+
 // Universeller Knochen-Resolver:
 //   1) Alias-Tabelle (normalisiert, ohne Sonderzeichen) — Mixamo mit/ohne
 //      Präfix, Cartwheel (forge fbx_to_glb), Unity, Unreal, VRM.
@@ -683,15 +692,26 @@ export function retargetToG1(clip, sim, log = () => {}) {
       }
       if (g.hasThigh && g.hasShin) {
         const dot = Math.max(-1, Math.min(1, g.dThigh[0] * g.dShin[0] + g.dThigh[1] * g.dShin[1] + g.dThigh[2] * g.dShin[2]));
-        if (dot > 0.94) { // < ~20° Kniebeuge → „gerades“ Bein
-          let bx = g.dThigh[0] + g.dShin[0], by = g.dThigh[1] + g.dShin[1], bz = g.dThigh[2] + g.dShin[2];
-          // Valgus-Kompensation: Ziel um −valgus/2 um die Basis-X-Achse
-          // (Vorwärts) drehen → Hüftziel je Seite ~4,5° nach AUÑEN —
-          // OS und SB teilen sich den Restfehler symmetrisch.
-          const half = -(VALGUS[side] || 0) / 2;
-          const cy = Math.cos(half), sy = Math.sin(half);
-          const by2 = by * cy - bz * sy, bz2 = by * sy + bz * cy;
-          by = by2; bz = bz2;
+        // Gewicht: 1 bei nahezu gestrecktem Bein, 0 ab ~20° Kniebeuge —
+        // smoothstep über dot 0,80…0,97 (statt der harten 0,94-Schwelle von
+        // v2.6.0: dort sprang das Hüftziel beim Übergang um mehrere Grad).
+        const sLin = Math.max(0, Math.min(1, (dot - 0.80) / 0.17));
+        const w = sLin * sLin * (3 - 2 * sLin);
+        if (w > 0.001) {
+          // v2.6.1 — VOLLER Valgus statt Winkelbisektor: Ein GERADES
+          // Lehrer-Bein soll am G1 als natürlicher A-STAND erscheinen
+          // (Oberschenkel ~±9° nach außen, Schienbein senkrecht = Nullpose,
+          // Füße unter den Hüften). Der v2.6.0-Bisektor teilte den unver-
+          // meidlichen Restfehler 50/50 — die SCHIENEN knickten dabei
+          // weiterhin ~4,5° nach INNEN („linkes Bein zeigt nach innen,
+          // muss aber nach außen"). Mit Ziel = um den vollen Valgus
+          // nach außen rotierter OS-Richtung landet die Hüfte bei
+          // hip_roll ≈ 0: das Bein liest sich durchgängig nach AUßEN.
+          // Gebogene Beine (w → 0) zielen weiter exakt auf den OS.
+          const a = -(VALGUS[side] || 0) * w;
+          const cy = Math.cos(a), sy = Math.sin(a);
+          const bx = g.dThigh[0], by0 = g.dThigh[1], bz0 = g.dThigh[2];
+          const by = by0 * cy - bz0 * sy, bz = by0 * sy + bz0 * cy;
           const l = Math.hypot(bx, by, bz) || 1;
           g.dHip = [bx / l, by / l, bz / l];
           g.straightLeg = true;
@@ -1058,6 +1078,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     baseQ, // Basis-Orientierung je Frame (n×4, xyzw) — Lehrer-Nick/Roll für den Geist
     rawYaw, triadYaw, // Diagnose: Blick-Rohwert + Triaden-Yaw vor Unwrap
     locomotion, meanSpeed, // true = echte Fortbewegung (Loop-Rebase erlaubt)
+    alg: RT_ALG, // Algorithmus-Version (glbstore/main: Auto-Re-Retarget alter Bestände)
     scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
     mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,

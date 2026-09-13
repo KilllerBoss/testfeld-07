@@ -64,6 +64,7 @@ export function packMotion(motion) {
     duration: motion.duration,
     mapped: motion.mapped,
     mergedFrom: motion.mergedFrom || 0,
+    alg: motion.alg || 0, // Retargeting-Algorithmus-Version (Auto-Re-Retarget, v2.6.1)
   };
   if (motion.root) out.root = Array.from(motion.root);
   if (motion.yaw) out.yaw = Array.from(motion.yaw);
@@ -81,6 +82,7 @@ export function unpackMotion(rec) {
     name: rec.name, fps: rec.fps, n: rec.n, nu: rec.nu,
     q, h, duration: rec.duration, mapped: rec.mapped || [],
     mergedFrom: rec.mergedFrom || 0,
+    alg: rec.alg || 0, // alte Datensätze: 0 (< RT_ALG) → activateClip re-retargetet
     locomotion: rec.locomotion !== false, // alte Datensätze: Rebase wie bisher an
   };
   // Alte Datensätze (vor Root-Motion) bleiben lauffähig — Felder optional
