@@ -60,7 +60,7 @@ export function _validateAction(raw) {
   if (type === 'reset') return { type: 'reset' };
   if (type === 'push') {
     const dir = ['auto', 'fwd', 'back', 'left', 'right'].includes(raw.dir) ? raw.dir : 'auto';
-    return { type: 'push', dir, strength: _num(raw.strength, 0.2, 4, 1.5) };
+    return { type: 'push', dir, strength: _num(raw.strength, 0.5, 10, 3) };
   }
   if (type === 'cmd') {
     return {
@@ -139,10 +139,10 @@ export function validateJoyMap(raw) {
   return m;
 }
 
-// ── Schubs-Stärke ───────────────────────────────────────────
-export function loadPushStrength() { return _num(parseFloat(localStorage.getItem(LS_PUSH)), 0.2, 6, 1.5); }
+// ── Schubs-Stärke (v2.5.0: Δv-basiert — 1,0 ≈ 1 m/s Geschwindigkeitssprung) ──
+export function loadPushStrength() { return _num(parseFloat(localStorage.getItem(LS_PUSH)), 0.5, 10, 3); }
 export function savePushStrength(v) {
-  const x = _num(v, 0.2, 6, 1.5);
+  const x = _num(v, 0.5, 10, 3);
   try { localStorage.setItem(LS_PUSH, String(x)); } catch (e) { /* voll */ }
   return x;
 }

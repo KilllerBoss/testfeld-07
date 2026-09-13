@@ -19,7 +19,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.4.1';
+const VERSION = '2.5.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -51,7 +51,8 @@ const S = {
   aiMode: 'fast',    // KI-Trainer: 'fast' (Flash-Lite) | 'smart' (Flash)
   aiHistory: [],     // Chat-Verlauf für die KI
   aiBusy: false,
-  pushStrength: 1.5, // Schubs-Impuls (KI-tunbar, persistiert)
+  pushStrength: 3.0, // Schubs-Stärke (Δv in m/s — v2.5.0, KI-tunbar, persistiert)
+  animTraining: true, // GLB-Animation im Training an/aus (aus = nur Gleichgewicht)
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
 };
@@ -95,6 +96,11 @@ async function loadRobot(id, first = false) {
     // Trainingsaufgabe: GLB-Motion-Tracking (nur G1 mit aktivem Clip) sonst Geschwindigkeit
     if (id === 'g1' && S.motionClip) {
       S.task = makeMotionTask(cfg, S.motionClip, sim);
+      S.task.animOn = S.animTraining;
+      // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0)
+      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+      if (rec && rec.ctrl === 'joy') S.task.ctrlMode = 'joy';
+      syncCtrlChips();
     } else {
       S.task = cfg.task(cfg);
     }
@@ -154,8 +160,12 @@ function loadPolicy(id) {
     if (!raw) return null;
     const p = PPO.fromJSON(JSON.parse(raw));
     // Format-Wache: Policy muss zur AKTUELLEN Aufgabe passen (Motion hat
-    // seit Root-Folgen einen anderen Beobachtungsraum als Speed)
-    if (S.task && (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim)) return null;
+    // seit Root-Folgen einen anderen Beobachtungsraum als Speed; v2.5.0
+    // kam +2 Kommando-Kanäle hinzu)
+    if (S.task && (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim)) {
+      log(`Alte Policy verworfen: Beobachtungsraum ${p.obsDim} ≠ ${S.task.obsDim} (v2.5.0: +2 Steuerungs-Kanäle) — neu trainieren`, 'warn');
+      return null;
+    }
     return p;
   } catch (e) { return null; }
 }
@@ -302,11 +312,11 @@ function applySavedAICfg(id) {
 // ── KI-AGENT: Werkzeuge, Buttons, Schubsen ───────────────
 function doPush(dir = 'auto', strength = null) {
   if (!S.sim) return 'Kein Roboter geladen';
-  const st = strength != null ? Math.min(4, Math.max(0.2, strength)) : S.pushStrength;
+  const st = strength != null ? Math.min(10, Math.max(0.5, strength)) : S.pushStrength;
   S.sim.pushRandom(dir, st);
   controls.buzz(30);
   ui.toast('SCHUBS! (' + dir + ', Stärke ' + st.toFixed(1) + ')');
-  log('Schubs: dir=' + dir + ' Stärke=' + st.toFixed(1) + ' (Δv≈' + (st * 12 / (S.sim._totalMass || 20)).toFixed(2) + ' m/s)', 'warn');
+  log('Schubs: dir=' + dir + ' Stärke=' + st.toFixed(1) + ' (Δv≈' + st.toFixed(1) + ' m/s)', 'warn');
   return 'Schubs ausgeführt (dir=' + dir + ', strength=' + st.toFixed(1) + ')';
 }
 
@@ -329,6 +339,9 @@ function observeState() {
     policySaved: !!S.trainer,
     motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
     activeClip: S.motionClip ? S.motionClip.name : null,
+    motionCtrl: S.task && S.task.kind === 'motion'
+      ? { ctrlMode: S.task.ctrlMode, animOn: S.task.animOn, cmd: { vx: +S.task.cmd.vx.toFixed(2), wz: +S.task.cmd.wz.toFixed(2) } }
+      : null,
     pushStrength: S.pushStrength,
     joystick: controls.joyMap,
     buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
@@ -702,6 +715,13 @@ function policyCtrlStep() {
   const sim = S.sim, task = S.task, trainer = S.trainer;
   if (!trainer) return;
   const substeps = Math.max(1, Math.round((S.sim.cfg.ctrlDt || CTRL_DT) / sim.timestep));
+  // Joystick-Steuerung (v2.5.0): bei ctrlMode 'joy' liefert der Stick die
+  // Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy im Training
+  // mit Zufalls-Kommandos kennengelernt hat.
+  if (task.kind === 'motion' && task.ctrlMode === 'joy') {
+    const c = controls.command(S.sim.cfg);
+    task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
+  }
   task.observe(sim, S.obsBuf);
   if (!finiteArr(S.obsBuf)) { sim.reset(); if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0; return; }
   trainer.actDeterministic(S.obsBuf, S.actBuf);
@@ -756,6 +776,10 @@ async function boot() {
     S.aiButtons = loadButtons();
     controls.joyMap = loadJoyMap();
     S.pushStrength = loadPushStrength();
+    // GLB-Animation im Training (v2.5.0): persistiert — AUS = nur Gleichgewicht
+    S.animTraining = localStorage.getItem('tr_animOn') !== '0';
+    const animTog = document.getElementById('animTrainToggle');
+    if (animTog) animTog.checked = S.animTraining;
     controls.onPush = (dir, strength) => doPush(dir, strength);
     renderAIButtons();
     ui.splash('Prüfe WebAssembly …', 0.08);
@@ -1057,6 +1081,36 @@ function wireUI() {
   document.getElementById('glbImportBtn').addEventListener('click', () => document.getElementById('glbFile').click());
   document.getElementById('glbFile').addEventListener('change', onGlbFiles);
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
+  // ── Steuerung je Clip (v2.5.0): Keine = Referenzbahn, Joystick = Zufalls-
+  // Kommandos im Training + echte Stick-Steuerung im POLICY-Modus
+  for (const b of document.querySelectorAll('.ctrl-chip')) {
+    b.addEventListener('click', () => {
+      controls.buzz();
+      const mode = b.dataset.ctrl;
+      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+      if (!rec || !S.task || S.task.kind !== 'motion') { ui.toast('Zuerst eine GLB-Referenz wählen', true); return; }
+      for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x === b);
+      rec.ctrl = mode;
+      putClip(rec).catch(() => {});
+      S.task.ctrlMode = mode;
+      S.task.cmd.vx = 0; S.task.cmd.wz = 0; S.task._cmdHold = 0;
+      log(mode === 'joy'
+        ? 'Steuerung: JOYSTICK — im Training werden zufällige Fahrbefehle (vx, Gier-Rate) gewürfelt, damit die Policy lernt, dass der Joystick sie steuert; im POLICY-Modus steuert der echte Stick'
+        : 'Steuerung: KEINE — das Gelernte folgt rein der Referenzbahn (typisch für Idle)', 'ok');
+      ui.toast(mode === 'joy' ? 'Steuerung: Joystick' : 'Steuerung: keine');
+    });
+  }
+  // ── Animation im Training an/aus (v2.5.0): AUS = nur Gleichgewicht lernen
+  const animT = document.getElementById('animTrainToggle');
+  if (animT) animT.addEventListener('change', () => {
+    S.animTraining = animT.checked;
+    try { localStorage.setItem('tr_animOn', animT.checked ? '1' : '0'); } catch (e) { /* voll */ }
+    if (S.task && S.task.kind === 'motion') S.task.animOn = animT.checked;
+    log(animT.checked
+      ? 'Animation im Training: AN — Posen-Tracking aktiv'
+      : 'Animation im Training: AUS — es wird nur GLEICHGEWICHT gelernt (Referenz = Stand; die Animationen haben ja kein Gleichgewicht)', 'warn');
+    ui.toast(animT.checked ? 'Animation im Training an' : 'Nur Gleichgewicht lernen');
+  });
   document.getElementById('ghostToggle').addEventListener('change', (e) => {
     S.ghostOn = e.target.checked;
     if (!S.ghostOn) { r3d.removeGhost(); r3d.removeSourceGhost(); }
@@ -1163,6 +1217,12 @@ async function runBC() {
   }
 }
 
+// Chips der Steuerungs-Wahl auf den aktiven Clip syncen (v2.5.0)
+function syncCtrlChips() {
+  const mode = S.task && S.task.kind === 'motion' ? S.task.ctrlMode : 'none';
+  for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x.dataset.ctrl === mode);
+}
+
 async function refreshClipList() {
   S.clips = await listClips();
   const list = document.getElementById('glbList');
@@ -1199,8 +1259,13 @@ async function refreshClipList() {
 function activateClip(rec) {
   if (S.robotId !== 'g1' || !S.sim) { ui.toast('Nur mit dem G1 möglich', true); return; }
   stopTraining(true);
+  S.activeRecId = rec.id; // aktiver Clip-Datensatz (für Steuerungs-Wahl, v2.5.0)
   S.motionClip = unpackMotion(rec.motion);
   S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
+  // Steuerung + Animation-Status je Clip (v2.5.0)
+  S.task.ctrlMode = rec.ctrl === 'joy' ? 'joy' : 'none';
+  S.task.animOn = S.animTraining;
+  syncCtrlChips();
   S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
   S.obsBuf = new Float32Array(S.task.obsDim);
   S.actBuf = new Float32Array(S.task.actDim);
@@ -1227,7 +1292,9 @@ function activateClip(rec) {
   }
   const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Roboter folgt dem wandernden Lehrer)' : '';
   const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
-  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ' — Aufgabe: Motion-Tracking', 'ok');
+  const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
+    : ' · Steuerung: keine (rein Referenzbahn)';
+  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);
   refreshClipList().catch(() => {});
 }
@@ -1236,6 +1303,8 @@ function deactivateClip() {
   stopTraining(true);
   S.motionClip = null;
   S.srcScene = null;
+  S.activeRecId = null;
+  syncCtrlChips();
   r3d.removeGhost();
   r3d.removeSourceGhost();
   if (S.sim) {

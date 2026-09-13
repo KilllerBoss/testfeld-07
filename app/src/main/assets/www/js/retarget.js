@@ -215,13 +215,28 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const ALIGN = [0.5, 0.5, 0.5, 0.5];
   const ALIGN_INV = [-0.5, -0.5, -0.5, 0.5];
 
-  // „Brust“ = nächster Vorfahre der Arme — deren WELTrotation enthält die
-  // komplette Oberkörperbeugung (Wirbelsäulen-Kette akkumuliert). Die G1-
-  // Basis trägt diese Orientierung (inkl. Ruhepose-Beugung wie beim Zombie).
+  // „Brust“ = oberste WIRBELSÄULEN-Node zwischen Hüfte und Armen.
+  // v2.5.0-Fix („Rücken schief“): Der direkte Eltern-Knochen des Arms ist
+  // bei Mixamo (LeftShoulder) und UE-Manny (clavicle_l) das SEITLICH
+  // versetzte Schlüsselbein. Als „Brust“ kippte die Basis-Triade seitlich
+  // (up = Hüfte→Schlüsselbein = Dauer-Schräglauf, der mit der Schulter-
+  // Animation wackelt). Jetzt laufen wir die Vorfahren aufwärts und nehmen
+  // die oberste SPINE-Node (Mixamo: Spine2, UE: spine_03) — zentriert und
+  // in voller Oberkörperhöhe.
   const armNode = bones.leftArm !== undefined ? bones.leftArm
     : (bones.rightArm !== undefined ? bones.rightArm : undefined);
-  let chestIdx = armNode !== undefined ? clip.parentOf.get(armNode) : undefined;
-  if (chestIdx === undefined || chestIdx === bones.hips) chestIdx = bones.spine;
+  let chestIdx = undefined;
+  if (armNode !== undefined) {
+    const SPINE_RE = /(spine|chest|torso|upperbody)/;
+    const OFF_RE = /(clavicle|shoulder|collar)/;
+    let cur = clip.parentOf.get(armNode);
+    for (let guard = 0; cur !== undefined && cur !== bones.hips && guard < 24; guard++) {
+      const nm = (clip.nodes[cur].name || '').toLowerCase();
+      if (SPINE_RE.test(nm) && !OFF_RE.test(nm) && !BAD_NAME.test(nm)) { chestIdx = cur; break; }
+      cur = clip.parentOf.get(cur);
+    }
+  }
+  if (chestIdx === undefined) chestIdx = bones.spine;
   if (chestIdx === undefined) chestIdx = bones.hips;
 
   const fps = Math.min(30, Math.max(15, clip.fpsHint));
@@ -518,6 +533,31 @@ export function retargetToG1(clip, sim, log = () => {}) {
     }
   }
 
+  // Lücken-Füllung (v2.5.0): Fehlt ein Zielrichtungs- oder Fußquat-Sample
+  // (Track-Lücke/NaN im Export), hält der Slot den LETZTEN gültigen Wert —
+  // sonst lief die IK dieses Frame ohne Ziel (Warm-Start friert) und sprang
+  // beim Wiederkommen der sampled Lücke zurück = sichtbarer Ruck (z. B.
+  // linker Arm beim Zombie-Idle). Führende Lücken ← erster gültiger Wert.
+  {
+    const fillGaps = (arr, perFrame) => {
+      for (let s = 0; s < perFrame; s++) {
+        let last = NaN;
+        for (let f = 0; f < n; f++) {
+          const i = f * perFrame + s;
+          if (Number.isFinite(arr[i])) last = arr[i];
+          else if (!Number.isNaN(last)) arr[i] = last;
+        }
+        let first = NaN;
+        for (let f = 0; f < n && Number.isNaN(first); f++) first = arr[f * perFrame + s];
+        if (Number.isFinite(first)) {
+          for (let f = 0; f < n && Number.isNaN(arr[f * perFrame + s]); f++) arr[f * perFrame + s] = first;
+        }
+      }
+    };
+    fillGaps(dSrc, 24); // 8 Slots × 3 Komponenten je Frame
+    fillGaps(footW, 8); // 2 Füße × 4 Komponenten je Frame
+  }
+
   // Yaw: Bei Locomotion (Bahn bewegt sich) ist die BEWEGUNGSRICHTUNG der
   // stabile Blick — die Hüft-Vorwärtsachse kippt beim Laufen stark mit
   // (Beckenrotation/Neigung). Bei Stillstand (Idle) liefert die Hüft-
@@ -649,7 +689,9 @@ export function retargetToG1(clip, sim, log = () => {}) {
     // projizieren. Ohne Seed wandert der gierige Abstieg bei großen Winkeln
     // (Zombie: ~105° Hüftbeugung) in verdrehte Äquivalentlösungen (90°-Yaw,
     // Roll am Limit) — der Seed hält den Twist naturbelassen.
-    const seedChain = (off2, d0, dGoalW, jNames) => {
+    // v2.5.0: maxStep begrenzt die Korrektur je Frame (Sanftanker) — bei
+    // Infinity (Frame 0) wird der Seed voll angetragen.
+    const seedChain = (off2, d0, dGoalW, jNames, maxStep = Infinity) => {
       quatConj(bq4, tInv);
       rotVec(tInv, dGoalW, dBase);
       quatFromTwoVecs(d0, dBase, qTmp);
@@ -661,7 +703,12 @@ export function retargetToG1(clip, sim, log = () => {}) {
         console.log(`[SEED] d0=(${d0.map(v => v.toFixed(2))}) dGoalW=(${dGoalW.map(v => v.toFixed(2))}) dBase=(${dBase.map(v => v.toFixed(2))}) ` +
           `seed(yaw/roll/pitch)=${seed.map(v => v.toFixed(2)).join('/')} baseQ=(${[bq4[0], bq4[1], bq4[2], bq4[3]].map(v => v.toFixed(2)).join(',')})`);
       }
-      for (let j = 0; j < 3; j++) q[off2 + A[jNames[j]]] = clampA(jNames[j], seed[j]);
+      for (let j = 0; j < 3; j++) {
+        const goal = clampA(jNames[j], seed[j]);
+        const cur = q[off2 + A[jNames[j]]];
+        const d = goal - cur;
+        q[off2 + A[jNames[j]]] = Math.abs(d) <= maxStep ? goal : cur + Math.sign(d) * maxStep;
+      }
     };
     // Koordinaten-Abstieg: entries = [{name, aid, anti?}]. „anti“ ist ein
     // gekoppelter Folgegelenk-Zug, der die NEGATIVE Deltasumme erhält:
@@ -731,7 +778,6 @@ export function retargetToG1(clip, sim, log = () => {}) {
         // Hüfte/Schulter erhalten je einen Minimal-Twist-Seed (s. o.).
         {
           const hipNames = [side + '_hip_yaw_joint', side + '_hip_roll_joint', side + '_hip_pitch_joint'];
-          if (G.hasThigh) seedChain(off2, G1D0[side].thigh, G.dThigh, hipNames);
           // ALTERNIEREND: Hüfte (nur Oberschenkel-Ziel) ↔ Knie (nur Schien-Ziel),
           // 2 Runden. Ein kombinierter Fehler funktioniert NICHT: Mit festem
           // Knie dreht eine Hüftbewegung Oberschenkel UND Schiene gleichmäßig →
@@ -758,7 +804,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
             dirFromTo(pA, pB, dDisp);
             return angBetween(dDisp, G.dShin);
           } : () => 0;
-          // Kombiniert (nur für die Rettungsrunde)
+          // Kombiniert (Rettungsrunde + Warm-Gate-Bewertung)
           const legErr = (G.hasThigh || G.hasShin) ? () => {
             sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
             let e = 0;
@@ -774,6 +820,12 @@ export function retargetToG1(clip, sim, log = () => {}) {
             }
             return e;
           } : () => 0;
+          // Hüft-Seed (v2.5.0): Wie v2.4.1 JEDES Frame voll antragen — bei
+          // den Beinen ist das bewährt (Knie hat riesige Range, keine
+          // Klemm-Konflikte; der kontinuierliche Anker hielt die Yaw-Spikes
+          // klein). Die WARM-GATE-Behandlung bleibt der Schulter (Arm-
+          // Ellbogen kann klemmen — dort ist der Sanftanker nötig).
+          if (G.hasThigh) seedChain(off2, G1D0[side].thigh, G.dThigh, hipNames);
           for (let round = 0; round < 2; round++) {
             descend(off2, thighErr, hipEntries, 6);
             descend(off2, shinErr, kneeEntries, 6);
@@ -796,16 +848,6 @@ export function retargetToG1(clip, sim, log = () => {}) {
         if (bones[side + 'Arm'] !== undefined) {
           {
             const shNames = [side + '_shoulder_pitch_joint', side + '_shoulder_roll_joint', side + '_shoulder_yaw_joint'];
-            if (G.hasArm) {
-              // Seed: [pitch, roll, yaw] — Rotvektor (X, Y, Z) → pitch=X, roll=Y, yaw=Z
-              quatConj(bq4, tInv);
-              rotVec(tInv, G.dArm, dBase);
-              quatFromTwoVecs(G1D0[side].arm, dBase, qTmp);
-              const ang = quatLogAxis(qTmp, axisTmp);
-              const rvS = [axisTmp[0] * ang, axisTmp[1] * ang, axisTmp[2] * ang];
-              const seedS = [rvS[0], rvS[1], rvS[2]]; // pitch←X, roll←Y, yaw←Z
-              for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = clampA(shNames[j], seedS[j]);
-            }
             // Arm ALTERNIEREND: Schulter (nur Oberarm-Ziel) ↔ Ellbogen
             // (nur Unterarm-Ziel), 2 Runden — gleiche Begründung wie beim Bein
             // (kombinierter Fehler = Barriere für die proximale Kette).
@@ -829,7 +871,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
               dirFromTo(pA, pB, dDisp);
               return angBetween(dDisp, G.dFore);
             } : () => 0;
-            // Kombiniert (nur für die Rettungsrunde)
+            // Kombiniert (Rettungsrunde + Warm-Gate-Bewertung)
             const armErr = (G.hasArm || G.hasFore) ? () => {
               sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
               let e = 0;
@@ -845,6 +887,46 @@ export function retargetToG1(clip, sim, log = () => {}) {
               }
               return e;
             } : () => 0;
+            if (G.hasArm) {
+              // Seed: [pitch, roll, yaw]. v2.5.0-Fix („linker Arm zuckt“):
+              // a) Die G1-Schulter hat DIESELBE Achsenkonvention wie die Hüfte
+              //    (g1.xml: pitch axis=0 1 0 LATERAL, roll axis=1 0 0 VORWÄRTS,
+              //    yaw axis=0 0 1). Der alte Seed vertauschte pitch/roll
+              //    (pitch←X, roll←Y): Beim Zombie-Arm (−90° horizontal) landete
+              //    der ganze Winkel im ROLL (Range ±1,59!) statt im PITCH
+              //    (±3,09) → klemmender Seed am Limit.
+              // b) SANFTANKER mit LOOK-AHEAD statt Zwangs-Seed: Der alte Code
+              //    trug den Seed JEDES Frame gewaltsam ein und warf die
+              //    konvergierte Warm-Start-Lösung weg → Frame-Rucke. Jetzt:
+              //    Frame 0 voll verankern; danach den VOLL-Seed nur MESSEN —
+              //    bringt er > 0,05 rad, wird er ratenlimitiert (0,25 rad/
+              //    Frame) hinzitiert. Idles bleiben still, Re-Ankerungen
+              //    gleiten, der Gang wird nicht mehr oszilliert.
+              const oldS = [q[off2 + A[shNames[0]]], q[off2 + A[shNames[1]]], q[off2 + A[shNames[2]]]];
+              quatConj(bq4, tInv);
+              rotVec(tInv, G.dArm, dBase);
+              quatFromTwoVecs(G1D0[side].arm, dBase, qTmp);
+              const ang = quatLogAxis(qTmp, axisTmp);
+              const rvS = [axisTmp[0] * ang, axisTmp[1] * ang, axisTmp[2] * ang];
+              const seedS = [rvS[1], rvS[0], rvS[2]]; // pitch←Y, roll←X, yaw←Z
+              if (f === 0) {
+                for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = clampA(shNames[j], seedS[j]);
+              } else {
+                // Look-Ahead: vollen Seed temporär antragen + messen
+                for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = clampA(shNames[j], seedS[j]);
+                const goals = [q[off2 + A[shNames[0]]], q[off2 + A[shNames[1]]], q[off2 + A[shNames[2]]]];
+                const eFull = armErr();
+                for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = oldS[j]; // Warm-Start zurück
+                const eWarm = armErr();
+                if (eWarm - eFull > 0.05) {
+                  // Re-Ankerung lohnt sich → sanft hinzitieren
+                  for (let j = 0; j < 3; j++) {
+                    const d = goals[j] - oldS[j];
+                    q[off2 + A[shNames[j]]] = Math.abs(d) <= 0.25 ? goals[j] : oldS[j] + Math.sign(d) * 0.25;
+                  }
+                }
+              }
+            }
             for (let round = 0; round < 2; round++) {
               descend(off2, armDirErr, shEntries, 6);
               descend(off2, foreDirErr, elEntries, 6);
@@ -953,13 +1035,22 @@ export function retargetToG1(clip, sim, log = () => {}) {
 function denoiseTimeline(q, n, nu) {
   if (n < 5) return;
   for (let j = 0; j < nu; j++) {
+    // Aktivität des Gelenks über die GANZE Timeline (v2.5.0): Ruhteile
+    // (Zombie-Arme!) bekommen eine viel feinere Nadel-Schwelle — ein 8°-
+    // Ruck in einem fast stillen Gelenk ist ein Glitch, in einer schnellen
+    // Bewegung Normalität. Die alte Pauschal-Schwelle 0,3 rad (17°) ließ
+    // genau diese Idles-Rucke durch.
+    let aMin = Infinity, aMax = -Infinity;
+    for (let f = 0; f < n; f++) { const v = q[f * nu + j]; if (v < aMin) aMin = v; if (v > aMax) aMax = v; }
+    const quiet = (aMax - aMin) < 0.45; // rad — kaum Bewegung über den Clip
+    const edgeMin = quiet ? 0.045 : 0.3;
     for (let pass = 0; pass < 2; pass++) {
       let changed = false;
       for (let f = 1; f < n - 1; f++) {
         const v0 = q[(f - 1) * nu + j], v1 = q[f * nu + j], v2 = q[(f + 1) * nu + j];
         const d0 = Math.abs(v1 - v0), d1 = Math.abs(v2 - v1);
         const edge = Math.max(d0, d1);
-        if (edge < 0.3) continue; // unter der Nadel-Schwelle
+        if (edge < edgeMin) continue; // unter der Nadel-Schwelle
         // lokale Bewegungsskala (Median der Nachbar-Deltas ohne f)
         const nb = [];
         for (let g = Math.max(1, f - 3); g <= Math.min(n - 1, f + 4); g++) {
@@ -968,13 +1059,43 @@ function denoiseTimeline(q, n, nu) {
         }
         nb.sort((a, b) => a - b);
         const med = nb.length ? nb[nb.length >> 1] : 0;
-        const thr = Math.max(0.3, 6 * med);
+        const thr = Math.max(edgeMin, 6 * med);
         if (d0 > thr && d1 > thr) {
           q[f * nu + j] = 0.5 * (v0 + v2); // Nadel → Brücke
           changed = true;
         }
       }
       if (!changed) break;
+    }
+    // Ruhige Gelenke: 3-Tap-Median glättet 1-Frame-Ausreißer UNTER der
+    // Nadel-Schwelle (erhält Stufen & Rampen, killt Blips)
+    if (quiet && n >= 3) {
+      const col = new Float32Array(n);
+      for (let f = 0; f < n; f++) col[f] = q[f * nu + j];
+      for (let f = 1; f < n - 1; f++) {
+        const a = col[f - 1], b = col[f], c = col[f + 1];
+        q[f * nu + j] = (a <= b ? b <= c ? b : a <= c ? c : a : a <= c ? a : b <= c ? c : b);
+      }
+    }
+    // Stufen-Brücke (v2.5.0): ein EINMALiger Sprung > 0,45 rad, dem sofort
+    // wieder Ruhe folgt (< 25 % des Sprungs), ist eine IK-Re-Ankerungs-
+    // Kante — echte schnelle Bewegungen sind RAMPELN (mehrere große Deltas
+    // hintereinander) und bleiben unangetastet. Die Stufe wird über 2
+    // Frames verteilt.
+    for (let pass = 0; pass < 2; pass++) {
+      let bridged = false;
+      for (let f = 1; f < n - 2; f++) {
+        const a = q[(f - 1) * nu + j], b = q[f * nu + j], c = q[(f + 1) * nu + j];
+        const step = b - a;
+        if (Math.abs(step) < 0.45) continue;
+        if (Math.abs(c - b) > 0.25 * Math.abs(step)) continue; // Rampe →echt
+        const d = q[(f + 2) * nu + j];
+        if (Math.abs(d - c) > 0.35 * Math.abs(step)) continue; // Folge-Rampe → echt
+        q[f * nu + j] = a + 0.5 * step;       // halber Schritt auf f
+        q[(f + 1) * nu + j] = c;              // f+1 endet wie gehabt → Rest automatisch
+        bridged = true;
+      }
+      if (!bridged) break;
     }
   }
 }

@@ -157,8 +157,14 @@
         <input type="file" id="glbFile" accept=".glb,model/gltf-binary" class="hidden" multiple>
         <button id="bcBtn" class="btn small">BC vortrainieren</button>
       </div>
+      <div class="glb-row glb-ctrl-row">
+        <span class="glb-ctrl-label">Steuerung</span>
+        <button class="speed-chip ctrl-chip active" data-ctrl="none">Keine</button>
+        <button class="speed-chip ctrl-chip" data-ctrl="joy">Joystick</button>
+        <label class="glb-toggle anim-train-toggle"><input type="checkbox" id="animTrainToggle" checked> Animation im Training</label>
+      </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">Lehrer-Ghost spielt die ORIGINAL-Animation (mit Root-Bewegung durchs Feld) — auch Mixamo-, Cartwheel- &amp; assimp-Dateien. Der G1 lernt, der Bahn zu folgen.</div>
+      <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
     </div>
     <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
   </section>

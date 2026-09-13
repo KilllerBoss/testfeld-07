@@ -5,9 +5,18 @@
 //   der Roboter folgt dem wandernden Lehrer statt „auf der Stelle" zu gehen.
 // Reward = Posen-Ähnlichkeit (RMS) + Höhe + Bahn-Folgen (Abstand + Blick)
 //   + Aufrecht, Abbruch bei Sturz oder verlorenem Kontakt zur Bahn.
-// Beobachtungsraum: 3·nu + 12 (Pose-Fehler, Geschwindigkeiten, Orientierung,
-//   Bahn-Fehler lokal, Referenz-Tempo, Phase) — Geschwindigkeits- und
-//   Motion-Policies sind damit getrennt (obsDim unterscheidet sich).
+// Beobachtungsraum: 3·nu + 14 (Pose-Fehler, Geschwindigkeiten, Orientierung,
+//   Bahn-Fehler lokal, Führung, Phase, KOMMANDO vx/wz) — Geschwindigkeits-
+//   und Motion-Policies sind damit getrennt (obsDim unterscheidet sich).
+// v2.5.0 — STEUERUNG: ctrlMode 'none' (rein Referenzbahn, für Idles) oder
+//   'joy' (Kommandos vx/wz führen die Wurzel). Im TRAINING werden die
+//   Kommandos zufällig gewürfelt (Domain-Randomization — die Policy lernt,
+//   dass der Joystick sie steuert), im POLICY-Modus liefert der Stick sie.
+// v2.5.0 — ANIMATION AN/AUS: animOn=false schaltet das Posen-Tracking ab
+//   (Referenz = Keyframe-Stand) — so lernt der Roboter NUR GLEICHGEWICHT,
+//   denn die GLB-Animationen besitzen selbst kein physikalisches
+//   Gleichgewicht. Erst Animation lernen, dann abschalten und Balance
+//   nachziehen — das Netz bleibt dabei erhalten (Curriculum).
 // ═══════════════════════════════════════════════════════════
 
 import { clamp } from './math.js';
@@ -38,7 +47,21 @@ export function makeMotionTask(cfg, clip, sim) {
     kind: 'motion',
     clip,
     hasRoot,
-    obsDim: 3 * nu + 12,
+    // ── Steuerung (v2.5.0) ─────────────────────────────────
+    // 'none': Verhalten folgt rein der Referenzbahn (z. B. Idle-Clips).
+    // 'joy':  Kommandos (vx = Vorwärtstempo m/s, wz = Gier-Rate rad/s)
+    //   führen das Wurzel-Ziel. Training: Zufalls-Kommandos (Domain-
+    //   Randomization). POLICY-Modus: der Joystick liefert sie.
+    ctrlMode: 'none',
+    // ── Animation an/aus (v2.5.0) ──────────────────────────
+    // false = Posen-Tracking AUS (Referenz = Keyframe-Stand): es wird nur
+    //   GLEICHGEWICHT gelernt. Der Posen-Anteil fällt auf 35 % (grobe
+    //   Stand-Attraktor), damit Beine beim Joystick-Gehen frei bleiben.
+    animOn: true,
+    cmd: { vx: 0, wz: 0 },   // aktuelles Kommando (Training: gewürfelt, Policy: Stick)
+    _cmdHold: 0,             // Rest-Haltezeit des Kommandos (s)
+    _tx: 0, _ty: 0, _tyaw: 0, // Kommando-integriertes Wurzel-Ziel
+    obsDim: 3 * nu + 14,
     actDim: nu,
     phase: 0,
     lastAct: new Float64Array(nu),
@@ -57,6 +80,12 @@ export function makeMotionTask(cfg, clip, sim) {
       this.tElapsed = 0;
       this.lastAct.fill(0);
       this._loopX = 0; this._loopY = 0; this._loopYaw = 0;
+      // Kommando-Ziel auf den Bahn-Anfang setzen (v2.5.0)
+      this._tx = hasRoot ? clip.root[0] : 0;
+      this._ty = hasRoot ? clip.root[1] : 0;
+      this._tyaw = hasRoot ? (clip.yaw[0] || 0) : 0;
+      this._cmdHold = 0; // erzwingt sampleCmd beim ersten Trainingsschritt
+      this.cmd.vx = 0; this.cmd.wz = 0;
       // Roboter AUF die Referenz-Bahn setzen (nicht in den Ursprung)
       if (sim2 && hasRoot) {
         try { sim2.placeBase(clip.root[0], clip.root[1], clip.yaw[0] || 0); } catch (e) { /* Basis ohne freies Gelenk */ }
@@ -66,8 +95,15 @@ export function makeMotionTask(cfg, clip, sim) {
     // Referenzpose zur Phase (lineare Interpolation, Endlosschleife).
     // Sanfter Einstieg: erste 0,6 s von der Keyframe-Pose hineinblenden,
     // damit der Roboter nicht ruckartig in die Clip-Pose springt.
+    // animOn=false (v2.5.0): Referenz = Keyframe-STAND — es wird nur
+    // Gleichgewicht gelernt, die GLB-Animation fließt nicht ein.
     sampleRef(phase, outQ, outH) {
       const c = clip;
+      if (this.animOn === false) {
+        for (let j = 0; j < nu; j++) outQ[j] = keyCtrl[j];
+        if (outH) outH[0] = 0.79;
+        return;
+      }
       const t = (phase * c.fps) % c.n;
       const i0 = Math.floor(t), i1 = (i0 + 1) % c.n;
       const u = t - i0;
@@ -106,7 +142,19 @@ export function makeMotionTask(cfg, clip, sim) {
       return Math.hypot(dx, dy) * c.fps;
     },
 
-    sampleCmd(rng) { /* Phase läuft autonom */ },
+    // Zufalls-Kommandos im TRAINING (v2.5.0, Domain-Randomization): der
+    // Roboter lernt, dass (vx, wz) ihn steuert — Haltezeit 1,5–4 s,
+    // ~25 % Stille (Stehen), sonst Vorwärts/Rückwärts + Gieren.
+    sampleCmd() {
+      if (this.ctrlMode !== 'joy') { this.cmd.vx = 0; this.cmd.wz = 0; this._cmdHold = Infinity; return; }
+      const vxMax = Math.max(0.5, Math.min(1.0, (clip.meanSpeed || 0.4) * 1.6));
+      if (Math.random() < 0.25) { this.cmd.vx = 0; this.cmd.wz = 0; }
+      else {
+        this.cmd.vx = Math.random() < 0.15 ? -0.25 * Math.random() : Math.random() * vxMax;
+        this.cmd.wz = (Math.random() * 2 - 1) * 0.9;
+      }
+      this._cmdHold = 1.5 + Math.random() * 2.5;
+    },
 
     observe(sim, out) {
       let o = 0;
@@ -123,19 +171,28 @@ export function makeMotionTask(cfg, clip, sim) {
       out[o++] = sim._qvel[5];
       const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
       sim.baseVelWorld(this._bv);
-      const c = Math.cos(yaw), s = Math.sin(yaw);
-      out[o++] = c * this._bv[0] + s * this._bv[1];
-      out[o++] = -s * this._bv[0] + c * this._bv[1];
-      // Bahn-Fehler (lokal zur Basis) + Referenz-Tempo — Root-Folgen lernen
-      this.refRoot(this.phase, this._rr);
+      const cy = Math.cos(yaw), s = Math.sin(yaw);
+      out[o++] = cy * this._bv[0] + s * this._bv[1];
+      out[o++] = -s * this._bv[0] + cy * this._bv[1];
+      // Bahn-Fehler (lokal zur Basis) + Führung — Root-Folgen lernen.
+      // v2.5.0: bei ctrlMode 'joy' ist das Ziel die KOMMANDO-INTEGRATION
+      // (der Joystick führt!), sonst die Referenzbahn des Clips.
+      const joy = this.ctrlMode === 'joy';
+      let tx, ty, tyaw, lead;
+      if (joy) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = this.cmd.vx; }
+      else { this.refRoot(this.phase, this._rr); tx = this._rr[0]; ty = this._rr[1]; tyaw = this._rr[2]; lead = this.refSpeed(this.phase); }
       sim.basePos(this._p);
-      const dx = this._rr[0] - this._p[0], dy = this._rr[1] - this._p[1];
-      out[o++] = c * dx + s * dy;
-      out[o++] = -s * dx + c * dy;
-      out[o++] = wrapAngle(this._rr[2] - yaw);
-      out[o++] = this.refSpeed(this.phase);
+      const dx = tx - this._p[0], dy = ty - this._p[1];
+      out[o++] = cy * dx + s * dy;
+      out[o++] = -s * dx + cy * dy;
+      out[o++] = wrapAngle(tyaw - yaw);
+      out[o++] = lead;
       out[o++] = Math.sin(2 * Math.PI * this.phase);
       out[o++] = Math.cos(2 * Math.PI * this.phase);
+      // Kommando-Kanäle (v2.5.0): IMMER im Beobachtungsraum (dim-stabil);
+      // bei 'none' dauerhaft 0.
+      out[o++] = this.cmd.vx;
+      out[o++] = this.cmd.wz;
       for (let i = 0; i < nu; i++) out[o++] = this.lastAct[i];
       return o;
     },
@@ -158,6 +215,7 @@ export function makeMotionTask(cfg, clip, sim) {
       out[o++] = this.refSpeed(phase);
       out[o++] = Math.sin(2 * Math.PI * phase);
       out[o++] = Math.cos(2 * Math.PI * phase);
+      out[o++] = 0; out[o++] = 0; // Kommando-Kanäle (BC ohne Führung)
       for (let i = 0; i < nu; i++) out[o++] = 0;
       return o;
     },
@@ -179,9 +237,18 @@ export function makeMotionTask(cfg, clip, sim) {
       sim.basePos(this._p);
       const h = this._p[2];
       const eH = Math.exp(-Math.pow((h - this._href[0]) / MOTION_R.hScale, 2));
-      // Bahn-Folgen: Abstand zur wandernden Referenz-Wurzel + Blick
+      // Bahn-Folgen: Abstand zur Wurzel + Blick. v2.5.0: bei Kommando-
+      // führung (joy) oder animOn=false ist das Ziel die Integration
+      // (_tx/_ty/_tyaw), sonst die wandernde Referenz-Bahn.
       let eRoot = 1, eYaw = 1, dRoot = 0;
-      if (hasRoot) {
+      const trackCmd = this.ctrlMode === 'joy' || this.animOn === false;
+      if (trackCmd) {
+        const dx = this._tx - this._p[0], dy = this._ty - this._p[1];
+        dRoot = Math.hypot(dx, dy);
+        eRoot = Math.exp(-Math.pow(dRoot / MOTION_R.rootScale, 2));
+        const yawBase = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+        eYaw = Math.exp(-Math.pow(Math.abs(wrapAngle(this._tyaw - yawBase)) / MOTION_R.yawScale, 2));
+      } else if (hasRoot) {
         this.refRoot(this.phase, this._rr);
         const dx = this._rr[0] - this._p[0], dy = this._rr[1] - this._p[1];
         dRoot = Math.hypot(dx, dy);
@@ -191,7 +258,10 @@ export function makeMotionTask(cfg, clip, sim) {
       }
       let e = 0;
       for (let i = 0; i < nu; i++) e += this.lastAct[i] * this.lastAct[i];
-      const r = MOTION_R.pose * eQ + MOTION_R.height * eH
+      // animOn=false: Posen-Anteil gedämpft (grobe Stand-Attraktor — die
+      // Beine bleiben frei genug, um auf Joystick-Kommandos zu gehen)
+      const poseW = this.animOn === false ? MOTION_R.pose * 0.35 : MOTION_R.pose;
+      const r = poseW * eQ + MOTION_R.height * eH
         + MOTION_R.root * eRoot + MOTION_R.yaw * eYaw
         + MOTION_R.up * clamp(upz, 0, 1) + MOTION_R.base - MOTION_R.energy * e;
       // Abbruch: Sturz ODER dauerhaft verloren von der Bahn (Eingangsphase geschont)
@@ -202,7 +272,30 @@ export function makeMotionTask(cfg, clip, sim) {
 
     advance(dt) {
       const old = this.phase;
-      this.phase += dt * this.clip.fps / this.clip.n;
+      const c = clip;
+      // Kommando-Führung (v2.5.0): das Wurzel-Ziel integriert (vx, wz).
+      // joy + animOn: Kommandos führen (Training: gewürfelt, Policy: Stick).
+      // animOn=false: Ziel bleibt an der Startposition stehen (Gleichgewicht
+      //   lernen ohne Weglauf-Drang) — außer bei joy (dort führt der Stick).
+      const joy = this.ctrlMode === 'joy';
+      if (joy) {
+        this._cmdHold -= dt;
+        if (this._cmdHold <= 0) this.sampleCmd();
+        this._tyaw = wrapAngle(this._tyaw + this.cmd.wz * dt);
+        this._tx += Math.cos(this._tyaw) * this.cmd.vx * dt;
+        this._ty += Math.sin(this._tyaw) * this.cmd.vx * dt;
+      } else if (this.animOn === false) {
+        // _tx/_ty/_tyaw bleiben fix — Ziel = Startposition (Stehen lernen)
+      }
+      // Phasen-Tempo: bei Joystick-Führung die Schrittfrequenz grob ans
+      // Kommandotempo anpassen (Geh-Clip + Stand-Kommando → Zeitlupe,
+      // schnelleres Kommando → rasender Takt). Nur bei echter Locomotion.
+      let factor = 1;
+      if (joy && c.locomotion !== false && this.animOn !== false) {
+        const rs = this.refSpeed(this.phase);
+        if (rs > 0.15) factor = Math.min(1.7, Math.max(0.4, Math.abs(this.cmd.vx) / rs));
+      }
+      this.phase += dt * c.fps / c.n * factor;
       this.phase %= 1;
       // Schleifen-Sprung: die Bahn läuft von der ENDPOSITION weiter
       // (Endlosgehen über die Arena statt Teleport zurück zum Start).

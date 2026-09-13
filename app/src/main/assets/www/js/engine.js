@@ -242,8 +242,14 @@ export class RobotSim {
     return mass;
   }
 
-  /** Zufälliger horizontaler Schubs in Richtung dir ('auto'|'fwd'|'back'|'left'|'right') — relativ zur BLICKRICHTUNG des Roboters. */
-  pushRandom(dir = 'auto', strength = 1.5) {
+  /**
+   * Zufälliger horizontaler Schubs in Richtung dir ('auto'|'fwd'|'back'|'left'|'right') — relativ zur BLICKRICHTUNG des Roboters.
+   * v2.5.0: Die Stärke ist ROBOTERUNABHÄNGIG als Geschwindigkeitssprung
+   * definiert — Δv = strength m/s (vorher strength×12 N·s, was beim ~35 kg
+   * schweren G1 nur Δv ≈ 0,5 m/s ergab — „Schubsen geht nicht").
+   * strength 3 ≈ kräftiger Ruck (Δv 3 m/s), strength 10 ≈ Full-Check.
+   */
+  pushRandom(dir = 'auto', strength = 3) {
     const az = dir === 'auto' ? Math.random() * Math.PI * 2
       : dir === 'fwd' ? 0 : dir === 'back' ? Math.PI
         : dir === 'left' ? Math.PI / 2 : -Math.PI / 2;
@@ -252,7 +258,12 @@ export class RobotSim {
     const qw = this._xquat[o], qx = this._xquat[o + 1], qy = this._xquat[o + 2], qz = this._xquat[o + 3];
     const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
     const a = az + yaw;
-    const j = strength * 12; // N·s — 12 N·s ≈ kräftiger Ruds (Δv ≈ 0,6 m/s bei 20 kg)
+    const mass = this._totalMass || (this._totalMass = (() => {
+      let s = 0;
+      for (let b = 0; b < this.nbody; b++) s += this.model.body_mass[b];
+      return s > 1 ? s : 20;
+    })());
+    const j = strength * mass; // N·s — Impuls = Δv × Gesamtmasse
     return this.pushImpulse(Math.cos(a) * j, Math.sin(a) * j, 0);
   }
 

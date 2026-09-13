@@ -155,7 +155,7 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 1. tool="applyConfig" — Trainingskonfiguration ändern. args = {patch:{…}, resetTraining:<bool>} (gleiche Felder wie „patch" unten). Nur in einem Schritt; nutze DAS statt patch.
 2. tool="addButton" — eigenen Button in die App-Leiste legen. args = {label:"≤20 Zeichen", action:{…}}. Aktionen (deklarativ, hart validiert):
    {type:"reset"} — Roboter zurücksetzen
-   {type:"push", dir:"auto"|"fwd"|"back"|"left"|"right", strength:0.2…4} — Roboter schubsen (Störungs-Test)
+   {type:"push", dir:"auto"|"fwd"|"back"|"left"|"right", strength:0.5…10} — Roboter schubsen (Störungs-Test)
    {type:"cmd", vx:-2…3, yaw:-3…3, ms:300…60000} — autonom fahren (m/s, rad/s, Dauer ms); endet bei Stick-Bewegung
    {type:"mode", mode:"manuell"|"policy"} — Modus wechseln
    {type:"clip", index:0…7} — importierte GLB-Animation wählen (nur G1 mit Import)
@@ -228,7 +228,7 @@ export function validatePatch(raw) {
   }
   if (raw.done) { out.done = {}; _clampObj(raw.done, { upMin: [0.1, 0.9], zMin: [0, 1], zMax: [0.5, 3] }, out.done); }
   if (raw.actSpan !== undefined) out.actSpan = _num(raw.actSpan, 0.05, 1.2, 0.5);
-  if (raw.push) { out.push = {}; _clampObj(raw.push, { impulse: [0.2, 6] }, out.push); }
+  if (raw.push) { out.push = {}; _clampObj(raw.push, { impulse: [0.5, 10] }, out.push); }
   if (raw.motionR) { out.motionR = {}; _clampObj(raw.motionR, { pose: [0, 2], height: [0, 2], root: [0, 2], yaw: [0, 2], up: [0, 2], base: [0, 0.2], energy: [0, 0.001], poseScale: [0.1, 1], hScale: [0.02, 0.3], rootScale: [0.1, 1.5], yawScale: [0.2, 2], upMin: [0.1, 0.95], hMin: [0.2, 1.2], hMax: [0.8, 2], rootDone: [0.4, 5] }, out.motionR); }
   if (raw.hoverR) { out.hoverR = {}; _clampObj(raw.hoverR, { alt: [0, 2], vel: [0, 2], tilt: [0, 2], vz: [0, 2], base: [0, 0.2], energy: [0, 0.005], zMin: [0.02, 0.5], upMin: [0.1, 0.9], xyMax: [3, 50] }, out.hoverR); }
   if (raw.ppo) {
