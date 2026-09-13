@@ -142,41 +142,52 @@ export function currentModels() { return _models; }
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-Trainer der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Vier Roboter: Unitree A1 (Quadruped), Boston Dynamics Spot (Quadruped), Unitree G1 (Humanoid, 29 Gelenke, optional GLB-Motion-Tracking), Skydio X2 (Drohne).
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Vier Roboter: Unitree A1 (Quadruped), Boston Dynamics Spot (Quadruped), Unitree G1 (Humanoid, 29 Gelenke, optional GLB-Motion-Tracking), Skydio X2 (Drohne).
 
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
 ${cfgJson}
 
-BEDEUTUNG DER FELDER
+DU BIST EIN AGENT MIT WERKZEUGEN — du darfst mehr als Einstellungen tunen:
+Du kannst in MEHREREN SCHRITTEN arbeiten: Rufe ein Werkzeug auf; die App führt es aus und schickt dir das Ergebnis als neue Nutzer-Nachricht „TOOL-ERGEBNIS: …". Danach kannst du das nächste Werkzeug aufrufen oder fertig antworten. Maximal sinnvoll: 3 Werkzeug-Schritte pro Aufgabe.
+
+WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
+1. tool="applyConfig" — Trainingskonfiguration ändern. args = {patch:{…}, resetTraining:<bool>} (gleiche Felder wie „patch" unten). Nur in einem Schritt; nutze DAS statt patch.
+2. tool="addButton" — eigenen Button in die App-Leiste legen. args = {label:"≤20 Zeichen", action:{…}}. Aktionen (deklarativ, hart validiert):
+   {type:"reset"} — Roboter zurücksetzen
+   {type:"push", dir:"auto"|"fwd"|"back"|"left"|"right", strength:0.2…4} — Roboter schubsen (Störungs-Test)
+   {type:"cmd", vx:-2…3, yaw:-3…3, ms:300…60000} — autonom fahren (m/s, rad/s, Dauer ms); endet bei Stick-Bewegung
+   {type:"mode", mode:"manuell"|"policy"} — Modus wechseln
+   {type:"clip", index:0…7} — importierte GLB-Animation wählen (nur G1 mit Import)
+   {type:"macro", steps:[Aktion oder {waitMs:50…5000}, max 6]} — Abfolge
+3. tool="removeButton" — args = {id:"…"} (IDs stehen im observe-Ergebnis).
+4. tool="mapJoystick" — Joystick-Belegung ändern. args = {maxV:0.1…3, maxW:0.1…4, invertX:<bool>, invertY:<bool>, deadzone:0…0.5, expo:0…1} (maxV/maxW = Tempofaktor, expo = Kurvenform: 0=linear, 1=feines Zentrum).
+5. tool="observe" — Zustand abfragen: Roboter, Modus, Tempo, Höhe, Training, gepseicherte Buttons (mit IDs), importierte Clips.
+
+BEDEUTUNG DER KONFIG-FELDER
 - rW.vel: Bestrafung des Geschwindigkeitsfehlers |v_fahrt − v_soll|. Höher = Policy hält Tempo genauer (zu hoch = zögerlich).
 - rW.yaw: Bestrafung des Drehfehlers. rW.up: Belohnung für Aufrechtsein. rW.alive: Grundbelohnung pro Schritt. rW.energy: Bestrafung des Aktionsaufwands (höher = sparsamere, ruhigere Bewegung).
 - cmd.vx: geforderte Zielgeschwindigkeiten [min,max] in m/s (schneller laufen = max erhöhen). cmd.yaw: geforderte Drehraten [min,max] in rad/s. Bei der Drohne: cmd.alt = geforderte Höhen [min,max] in m.
 - actSpan: Aktionsamplitude um die Ruhepose (Bewegungsumfang der Policy).
 - done: Abbruchkriterien (upMin = Aufrecht-Grenze, zMin/zMax = Körperhöhe min/max in m).
-- motionR (G1 + GLB-Animation): pose = Posen-Treue zur Referenz, height = Höhen-Treue, root = Bahn-Folgen (Abstand zur wandernden Referenz-Wurzel), yaw = Blick-Treue zur Bahn, up = Aufrecht, base = Grundbetrag, energy = Aktionsaufwand, poseScale/hScale/rootScale/yawScale = Toleranzskalen, upMin/hMin/hMax = Abbruch, rootDone = Abbruch-Abstand zur Bahn.
+- motionR (G1 + GLB-Animation): pose = Posen-Treue zur Referenz, height = Höhen-Treue, root = Bahn-Folgen, yaw = Blick-Treue, up = Aufrecht, base, energy, poseScale/hScale/rootScale/yawScale = Toleranzskalen, upMin/hMin/hMax/rootDone = Abbruch.
 - hoverR (Drohne): alt = Höhenfehler, vel = Vorwärtsfehler, tilt = Neigung, vz = Sinkflug, base, energy, zMin/upMin/xyMax = Abbruch.
-- ppo: lr = Lernrate, gamma = Diskontfaktor, lam = GAE, clip = Clip-Ratio, epochs = Epochen pro Update, mb = Minibatch-Größe, T = Rollout-Länge (wirkt beim nächsten Trainingsstart), cV = Wert-Fehlergewicht, cE = Entropie-Bonus (höher = mehr Erkundung), maxGrad = Gradient-Clip.
+- ppo: lr, gamma, lam, clip, epochs, mb, T (wirkt beim nächsten Trainingsstart), cV, cE (höher = mehr Erkundung), maxGrad.
 
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "resetTraining": <true, wenn die Änderungen so groß sind, dass die alte Policy neu lernen sollte — sonst false>,
-  "patch": {
-    "rW": {"vel":0.25,"yaw":0.06,"up":0.1,"alive":0.05,"energy":0.00015},
-    "cmd": {"vx":[-0.6,1.0],"yaw":[-1.2,1.2],"alt":[0.4,2.2]},
-    "done": {"upMin":0.45,"zMin":0.12,"zMax":1.5},
-    "actSpan": 0.55,
-    "motionR": {"pose":0.72,"height":0.2,"root":0.22,"yaw":0.06,"up":0.08,"base":0.03,"energy":0.00005,"poseScale":0.35,"hScale":0.09,"rootScale":0.35,"yawScale":0.8,"upMin":0.5,"hMin":0.55,"hMax":1.4,"rootDone":1.6},
-    "hoverR": {"alt":0.3,"vel":0.2,"tilt":0.1,"vz":0.3,"base":0.02,"energy":0.0001,"zMin":0.1,"upMin":0.4,"xyMax":12},
-    "ppo": {"lr":0.0003,"gamma":0.99,"lam":0.95,"clip":0.2,"epochs":4,"mb":256,"T":1024,"cV":0.5,"cE":0.005,"maxGrad":0.5}
-  }
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig   (optional — nur wenn du handeln willst)",
+  "args": { … zum Tool passend … },
+  "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
+  "patch": { … nur ohne tool … }
 }
 
 REGELN
+- Will der Nutzer einen Button, eine Joystick-Änderung, eine Aktion oder einen Zustandsbericht → nutze WERKZEUGE (mehrere Schritte erlaubt).
 - Nur Felder in "patch" aufnehmen, die du wirklich änderst. patch darf ganz fehlen, wenn es nur eine Frage ist.
-- Kleine Schritte: Werte höchstens um Faktor ~3 pro Antwort ändern, Physik-Grenzen der aktuellen Werte respektieren.
-- Der Nutzer will z. B. „schneller laufen" → cmd.vx-Max erhöhen, ggf. rW.energy leicht senken; „ruhiger/sanfter" → rW.energy erhöhen; „besser GLB-Tracking" → motionR.pose erhöhen; „ausgefallenere Bewegungen" → ppo.cE leicht erhöhen; „trainiert langsam/instabil" → ppo.lr senken bzw. clip verringern.
+- Kleine Schritte: Werte höchstens um Faktor ~3 pro Antwort ändern, Physik-Grenzen respektieren.
+- Beispiele: „schneller laufen" → applyConfig mit cmd.vx-Max erhöht; „Button zum Schubsen" → addButton push; „Joystick sanfter" → mapJoystick expo höher/maxV kleiner; „Was kann der Roboter gerade?" → observe.
 - Sei ehrlich bei Grenzen (Handy-CPU, offene Regler) — keine Versprechen, die die Physik nicht halten kann.
 - Antwortsprache: Deutsch.`;
 }
@@ -217,6 +228,7 @@ export function validatePatch(raw) {
   }
   if (raw.done) { out.done = {}; _clampObj(raw.done, { upMin: [0.1, 0.9], zMin: [0, 1], zMax: [0.5, 3] }, out.done); }
   if (raw.actSpan !== undefined) out.actSpan = _num(raw.actSpan, 0.05, 1.2, 0.5);
+  if (raw.push) { out.push = {}; _clampObj(raw.push, { impulse: [0.2, 6] }, out.push); }
   if (raw.motionR) { out.motionR = {}; _clampObj(raw.motionR, { pose: [0, 2], height: [0, 2], root: [0, 2], yaw: [0, 2], up: [0, 2], base: [0, 0.2], energy: [0, 0.001], poseScale: [0.1, 1], hScale: [0.02, 0.3], rootScale: [0.1, 1.5], yawScale: [0.2, 2], upMin: [0.1, 0.95], hMin: [0.2, 1.2], hMax: [0.8, 2], rootDone: [0.4, 5] }, out.motionR); }
   if (raw.hoverR) { out.hoverR = {}; _clampObj(raw.hoverR, { alt: [0, 2], vel: [0, 2], tilt: [0, 2], vz: [0, 2], base: [0, 0.2], energy: [0, 0.005], zMin: [0.02, 0.5], upMin: [0.1, 0.9], xyMax: [3, 50] }, out.hoverR); }
   if (raw.ppo) {
@@ -233,6 +245,29 @@ export function validatePatch(raw) {
   // Leere Unterobjekte entfernen
   for (const k of Object.keys(out)) if (!Object.keys(out[k]).length) delete out[k];
   return out;
+}
+
+// ── Tool-Aufruf validieren (Agent-Vollzugriff, hart geklemmt) ─
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe'];
+export function validateToolCall(parsed) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const tool = typeof parsed.tool === 'string' ? parsed.tool.trim() : '';
+  if (!TOOLS.includes(tool)) return null;
+  const args = (parsed.args && typeof parsed.args === 'object') ? parsed.args : {};
+  if (tool === 'applyConfig') {
+    return { tool, args: {
+      patch: validatePatch(args.patch),
+      resetTraining: !!args.resetTraining,
+    } };
+  }
+  if (tool === 'addButton') {
+    return { tool, args: { label: typeof args.label === 'string' ? args.label : '', action: (args.action && typeof args.action === 'object') ? args.action : null } };
+  }
+  if (tool === 'removeButton') {
+    return { tool, args: { id: typeof args.id === 'string' ? args.id : '' } };
+  }
+  if (tool === 'mapJoystick') return { tool, args };
+  return { tool, args: {} }; // observe
 }
 
 function _extractJSON(text) {
@@ -267,11 +302,16 @@ export async function askAI({ text, mode = 'fast', ctx }) {
     ? cand.content.parts.map(p => p.text || '').join('') : '';
   if (!outText) throw new Error('KI lieferte eine leere Antwort' + (cand && cand.finishReason ? ' (Grund: ' + cand.finishReason + ')' : ''));
   const parsed = _extractJSON(outText);
-  const patch = validatePatch(parsed.patch);
+  const toolCall = validateToolCall(parsed);
+  const patch = toolCall && toolCall.tool === 'applyConfig'
+    ? toolCall.args.patch
+    : validatePatch(parsed.patch);
   return {
     antwort: typeof parsed.antwort === 'string' ? parsed.antwort : outText.slice(0, 400),
-    resetTraining: !!parsed.resetTraining,
+    resetTraining: toolCall && toolCall.tool === 'applyConfig' ? toolCall.args.resetTraining : !!parsed.resetTraining,
     patch,
+    tool: toolCall ? toolCall.tool : null,
+    args: toolCall ? toolCall.args : null,
     model,
   };
 }

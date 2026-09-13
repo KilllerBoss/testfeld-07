@@ -222,6 +222,40 @@ export class RobotSim {
   baseVelWorld(out) { out[0] = this._qvel[0]; out[1] = this._qvel[1]; out[2] = this._qvel[2]; return out; }
   baseAngVelBody(out) { out[0] = this._qvel[3]; out[1] = this._qvel[4]; out[2] = this._qvel[5]; return out; }
 
+  /**
+   * SCHUBSEN: Impuls (Fx, Fy, Fz) in NEWTON·SEKUNDEN auf die Basis in
+   * WELTKOORDINATEN (Z hoch). Wirkt als Geschwindigkeitssprung Δv = J/m_ges —
+   * die Policy muss dagegen regeln (Störungs-Robustheit). Aktivierte Kraft-
+   * Felder (xfrc_applied) werden danach entfernt.
+   */
+  pushImpulse(fx, fy, fz) {
+    const m = this._mjApi;
+    const mass = this._totalMass || (this._totalMass = (() => {
+      let s = 0;
+      for (let b = 0; b < this.nbody; b++) s += this.model.body_mass[b];
+      return s > 1 ? s : 20;
+    })());
+    // Impuls → Geschwindigkeitssprung (Weltframe; Basis-Quat = Welt da freies Gelenk)
+    this._qvel[0] += fx / mass;
+    this._qvel[1] += fy / mass;
+    this._qvel[2] += fz / mass;
+    return mass;
+  }
+
+  /** Zufälliger horizontaler Schubs in Richtung dir ('auto'|'fwd'|'back'|'left'|'right') — relativ zur BLICKRICHTUNG des Roboters. */
+  pushRandom(dir = 'auto', strength = 1.5) {
+    const az = dir === 'auto' ? Math.random() * Math.PI * 2
+      : dir === 'fwd' ? 0 : dir === 'back' ? Math.PI
+        : dir === 'left' ? Math.PI / 2 : -Math.PI / 2;
+    // Blickrichtung (Yaw) der Basis aus der Quaternion (w,x,y,z)
+    const o = 4 * this.baseBody;
+    const qw = this._xquat[o], qx = this._xquat[o + 1], qy = this._xquat[o + 2], qz = this._xquat[o + 3];
+    const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
+    const a = az + yaw;
+    const j = strength * 12; // N·s — 12 N·s ≈ kräftiger Ruds (Δv ≈ 0,6 m/s bei 20 kg)
+    return this.pushImpulse(Math.cos(a) * j, Math.sin(a) * j, 0);
+  }
+
   jointPositions(out) {
     for (let a = 0; a < this.nu; a++) out[a] = this._qpos[this.actQposAdr[a]];
     return out;

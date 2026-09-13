@@ -17,8 +17,9 @@ import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
+import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.3.3';
+const VERSION = '2.4.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -50,6 +51,9 @@ const S = {
   aiMode: 'fast',    // KI-Trainer: 'fast' (Flash-Lite) | 'smart' (Flash)
   aiHistory: [],     // Chat-Verlauf für die KI
   aiBusy: false,
+  pushStrength: 1.5, // Schubs-Impuls (KI-tunbar, persistiert)
+  cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
+  aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
 };
 
 // PPO-Überschreibungen aus dem KI-Trainer (T wirkt beim nächsten Start)
@@ -217,6 +221,10 @@ function applyAIPatch(patch, opts = {}) {
   const cfg = S.sim ? S.sim.cfg : null;
   const kind = aiTaskKind();
   const touched = [];
+  if (patch.push && patch.push.impulse !== undefined) {
+    S.pushStrength = savePushStrength(patch.push.impulse);
+    touched.push('push.impulse=' + S.pushStrength.toFixed(1));
+  }
   if (cfg) {
     if (kind === 'speed') {
       if (patch.rW) for (const [k, v] of Object.entries(patch.rW)) { cfg.rW[k] = v; touched.push('rW.' + k); }
@@ -289,6 +297,149 @@ function applySavedAICfg(id) {
     if (v.done) Object.assign(cfg.done, v.done);
     if (v.actSpan !== undefined) cfg.actSpan = v.actSpan;
   } catch (e) { /* defekt → Standardwerte */ }
+}
+
+// ── KI-AGENT: Werkzeuge, Buttons, Schubsen ───────────────
+function doPush(dir = 'auto', strength = null) {
+  if (!S.sim) return 'Kein Roboter geladen';
+  const st = strength != null ? Math.min(4, Math.max(0.2, strength)) : S.pushStrength;
+  S.sim.pushRandom(dir, st);
+  controls.buzz(30);
+  ui.toast('SCHUBS! (' + dir + ', Stärke ' + st.toFixed(1) + ')');
+  log('Schubs: dir=' + dir + ' Stärke=' + st.toFixed(1) + ' (Δv≈' + (st * 12 / (S.sim._totalMass || 20)).toFixed(2) + ' m/s)', 'warn');
+  return 'Schubs ausgeführt (dir=' + dir + ', strength=' + st.toFixed(1) + ')';
+}
+
+function observeState() {
+  const sim = S.sim;
+  let up = null;
+  if (sim) {
+    const o = 4 * sim.baseBody;
+    const x = sim._xquat[o + 1], y = sim._xquat[o + 2];
+    up = 1 - 2 * (x * x + y * y);
+  }
+  return JSON.stringify({
+    robot: S.robotId,
+    mode: S.mode,
+    training: S.training,
+    speed: sim ? +sim.baseSpeed().toFixed(2) : null,
+    height: sim ? +sim.baseHeight().toFixed(2) : null,
+    upright: up !== null ? +up.toFixed(2) : null,
+    episodes: S.episodes,
+    policySaved: !!S.trainer,
+    motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
+    activeClip: S.motionClip ? S.motionClip.name : null,
+    pushStrength: S.pushStrength,
+    joystick: controls.joyMap,
+    buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
+  });
+}
+
+function executeAction(action, depth = 0) {
+  const act = action;
+  if (!act || typeof act !== 'object') return 'Ungültige Aktion';
+  switch (act.type) {
+    case 'reset':
+      resetRobot();
+      return 'Roboter zurückgesetzt';
+    case 'push':
+      return doPush(act.dir || 'auto', act.strength != null ? act.strength : null);
+    case 'cmd': {
+      if (!S.sim) return 'Kein Roboter geladen';
+      S.cruise = { vx: act.vx, yaw: act.yaw, until: performance.now() + act.ms };
+      return 'Autofahrt gestartet: vx=' + act.vx.toFixed(2) + ' m/s, yaw=' + act.yaw.toFixed(2) + ' rad/s für ' + Math.round(act.ms / 1000) + ' s (endet früher bei Stick-Bewegung)';
+    }
+    case 'mode': {
+      if (act.mode === 'policy' && !S.trainer) return 'Keine Policy vorhanden — erst Training starten';
+      S.mode = act.mode;
+      ui.setMode(S.mode);
+      if (S.sim) S.sim.reset();
+      return 'Modus: ' + act.mode.toUpperCase();
+    }
+    case 'clip': {
+      const rec = S.clips[act.index];
+      if (!rec) return 'Kein Clip an Index ' + act.index + ' (vorhanden: ' + S.clips.length + ')';
+      activateClip(rec).catch(err => log('Clip-Aktivierung fehlgeschlagen: ' + err.message, 'err'));
+      return 'Clip-Aktivierung gestartet: ' + (rec.name || act.index);
+    }
+    case 'macro': {
+      if (depth > 2) return 'Makro-Verschachtelung zu tief';
+      let t = 0;
+      const results = [];
+      for (const step of act.steps.slice(0, 6)) {
+        if (step.waitMs !== undefined) { t += step.waitMs; continue; }
+        const wait = t;
+        const sub = step;
+        setTimeout(() => executeAction(sub, depth + 1), wait);
+        results.push(sub.type + '@' + wait + 'ms');
+      }
+      return 'Makro geplant: ' + (results.join(', ') || 'nur Wartezeiten') + ' (Gesamt ' + t + ' ms)';
+    }
+    default:
+      return 'Unbekannter Aktionstyp: ' + (act.type || '?');
+  }
+}
+
+/** Führt einen validierten Agent-Tool-Aufruf aus → Ergebnis-Text. */
+function execTool(tool, args) {
+  try {
+    if (tool === 'observe') return observeState();
+    if (tool === 'applyConfig') {
+      const ok = applyAIPatch(args.patch, { resetTraining: args.resetTraining });
+      return ok ? 'Konfiguration angewendet: ' + JSON.stringify(args.patch) : 'Patch war leer — nichts geändert';
+    }
+    if (tool === 'addButton') {
+      const r = addButton({ label: args.label, action: args.action });
+      if (!r.ok) return 'Fehler: ' + r.reason;
+      S.aiButtons = r.list;
+      renderAIButtons();
+      return 'Button erstellt: id=' + r.button.id + ' label="' + r.button.label + '" action=' + JSON.stringify(r.button.action);
+    }
+    if (tool === 'removeButton') {
+      const r = removeButton(args.id);
+      if (!r.ok) return 'Fehler: ' + r.reason;
+      S.aiButtons = r.list;
+      renderAIButtons();
+      return 'Button entfernt: ' + args.id;
+    }
+    if (tool === 'mapJoystick') {
+      controls.joyMap = validateJoyMap(args);
+      saveJoyMap(controls.joyMap);
+      return 'Joystick-Map gesetzt: ' + JSON.stringify(controls.joyMap);
+    }
+    return 'Unbekanntes Werkzeug: ' + tool;
+  } catch (e) {
+    return 'Werkzeug-Fehler: ' + e.message;
+  }
+}
+
+function renderAIButtons() {
+  const bar = document.getElementById('aiButtons');
+  if (!bar) return;
+  bar.innerHTML = '';
+  bar.classList.toggle('hidden', !S.aiButtons.length);
+  for (const b of S.aiButtons) {
+    const btn = document.createElement('button');
+    btn.className = 'ai-btn';
+    btn.dataset.bid = b.id;
+    btn.textContent = b.label;
+    btn.addEventListener('click', () => {
+      controls.buzz();
+      const res = executeAction(b.action);
+      log('KI-Button "' + b.label + '": ' + res);
+    });
+    // Lang drücken (600 ms) = löschen
+    let pressT = 0;
+    btn.addEventListener('pointerdown', () => { pressT = setTimeout(() => {
+      const r = removeButton(b.id);
+      if (r.ok) { S.aiButtons = r.list; renderAIButtons(); ui.toast('KI-Button "' + b.label + '" entfernt'); controls.buzz(24); }
+    }, 600); });
+    const clear = () => clearTimeout(pressT);
+    btn.addEventListener('pointerup', clear);
+    btn.addEventListener('pointercancel', clear);
+    btn.addEventListener('pointerleave', clear);
+    bar.appendChild(btn);
+  }
 }
 
 // ── KI-Chat-UI ──────────────────────────────────────────────
@@ -379,13 +530,29 @@ async function sendAIMessage(text) {
   const sendBtn = document.getElementById('aiSend');
   sendBtn.disabled = true;
   aiPush('user', text.trim());
-  const wait = aiPush('bot', 'Denkt nach …');
+  let wait = aiPush('bot', 'Denkt nach …');
   try {
-    const ctx = aiCtx();
-    const res = await askAI({ text: text.trim(), mode: S.aiMode, ctx });
-    wait.remove();
-    renderAIAnswer(res, ctx.current);
-    S.aiHistory.push({ role: 'user', text: text.trim() }, { role: 'model', text: res.antwort });
+    let toolMsg = text.trim();
+    let toolTurns = 0;
+    while (toolTurns < 5) {
+      const ctx = aiCtx();
+      const res = await askAI({ text: toolMsg, mode: S.aiMode, ctx });
+      wait.remove();
+      if (!res.tool || toolTurns >= 4) {
+        renderAIAnswer(res, ctx.current);
+        S.aiHistory.push({ role: 'user', text: text.trim() }, { role: 'model', text: res.antwort });
+        break;
+      }
+      // ── Werkzeug ausführen und als Ergebnis zurück an die KI ──
+      aiPush('tool', '⚙ ' + res.tool + ' ' + JSON.stringify(res.args).slice(0, 160));
+      const result = execTool(res.tool, res.args);
+      aiPush('toolres', String(result).slice(0, 400));
+      log('KI-Agent: ' + res.tool + ' → ' + String(result).slice(0, 80), 'ok');
+      S.aiHistory.push({ role: 'user', text: toolMsg }, { role: 'model', text: res.antwort || ('[' + res.tool + ']') });
+      toolMsg = 'TOOL-ERGEBNIS (' + res.tool + '): ' + result + '\nAntworte jetzt kurz auf Deutsch — oder rufe das nächste Werkzeug auf.';
+      toolTurns++;
+      wait = aiPush('bot', 'Denkt nach …');
+    }
     if (S.aiHistory.length > 40) S.aiHistory = S.aiHistory.slice(-40);
     saveHistory(S.aiHistory);
     updateAIModelLabel();
@@ -505,7 +672,21 @@ function trainCtrlStep() {
 function applyGait(dtCtrl) {
   const sim = S.sim, cfg = S.sim.cfg;
   dtCtrl = cfg.ctrlDt || dtCtrl;
-  const cmd = controls.command(cfg);
+  // KI-Autofahrt (Cruise): fester Fahrbefehl, endet an Zeitgrenze oder
+  // sobald der Nutzer den Stick bewegt (Eingriff geht immer vor).
+  let cmd;
+  if (S.cruise) {
+    if (performance.now() > S.cruise.until || Math.abs(controls.stickX) > 0.15 || Math.abs(controls.stickY) > 0.15) {
+      if (S.cruise.until && performance.now() > S.cruise.until) ui.toast('Autofahrt beendet');
+      else ui.toast('Autofahrt beendet (Stick-Eingriff)');
+      S.cruise = null;
+    }
+  }
+  if (S.cruise) {
+    cmd = { vx: S.cruise.vx, yaw: S.cruise.yaw, climb: 0 };
+  } else {
+    cmd = controls.command(cfg);
+  }
   const map = {};
   S.gait.step(sim, dtCtrl, cmd, map);
   for (const name in map) {
@@ -571,6 +752,12 @@ async function boot() {
     initAITransport();
     loadGlobalAICfg();
     S.aiHistory = loadHistory();
+    // KI-Agent-Zustand: Buttons, Joystick-Map, Schubs-Stärke
+    S.aiButtons = loadButtons();
+    controls.joyMap = loadJoyMap();
+    S.pushStrength = loadPushStrength();
+    controls.onPush = (dir, strength) => doPush(dir, strength);
+    renderAIButtons();
     ui.splash('Prüfe WebAssembly …', 0.08);
     ui.splash('Lade MuJoCo-Kern (WASM) …', 0.18);
     await initEngine(log);
@@ -1081,6 +1268,12 @@ Object.defineProperty(window, '__trainrobot', {
     get hoverR() { return HOVER_R; },
     get ppoOverrides() { return PPO_OVERRIDES; },
     get aiBusy() { return S.aiBusy; },
+    get pushStrength() { return S.pushStrength; },
+    get joyMap() { return controls.joyMap; },
+    get aiButtons() { return S.aiButtons; },
+    get cruise() { return S.cruise; },
+    doPush: (dir, strength) => doPush(dir, strength),
+    executeAction: (action) => executeAction(action),
     applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
     ui,
   }),

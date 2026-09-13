@@ -11,6 +11,10 @@ export class Controls {
     this.climb = 0;       // Drohne: +1 steigen, −1 sinken
     this.resetRequest = false;
 
+    // KI-belegbare Joystick-Map (agent.js validiert + persistiert);
+    // maxV/maxW skalieren das Tempo, expo formt die Stick-Kurve.
+    this.joyMap = { maxV: 1.0, maxW: 1.0, invertX: false, invertY: false, deadzone: 0.08, expo: 0.4 };
+
     this._joyId = null;
     this._camId = null;
     this._pinch = null;
@@ -134,6 +138,13 @@ export class Controls {
       this.resetRequest = true;
       this.buzz(20);
     });
+    // SCHUBSEN: kräftiger Ruds gegen den Roboter (Störungs-Robustheit testen)
+    const pushBtn = document.getElementById('btnPush');
+    if (pushBtn) pushBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.buzz(30);
+      if (this.onPush) this.onPush('auto', null);
+    });
   }
 
   // ── Tastatur (Desktop-Entwicklung) ───────────────────────
@@ -180,11 +191,24 @@ export class Controls {
     return r;
   }
 
-  // Einheitlicher Fahrbefehl für alle Roboter
+  // Stick-Wert durch die KI-Map formen (Deadzone → Expo → Invert → Skala)
+  _mapAxis(v, invert) {
+    const jm = this.joyMap;
+    let x = Math.abs(v);
+    if (x < jm.deadzone) return 0;
+    x = (x - jm.deadzone) / (1 - jm.deadzone);           // Deadzone raus
+    x = x * (jm.expo + (1 - jm.expo) * x * x);            // Expo-Kurve (feines Zentrum)
+    return (v < 0 ? -x : x) * (invert ? -1 : 1);
+  }
+
+  // Einheitlicher Fahrbefehl für alle Roboter (inkl. KI-Map + Tempofaktor)
   command(cfg) {
+    const jm = this.joyMap;
+    const sy = this._mapAxis(this.stickY, jm.invertY);
+    const sx = this._mapAxis(this.stickX, jm.invertX);
     return {
-      vx: this.stickY * cfg.speedMax,
-      yaw: -this.stickX * cfg.yawMax,
+      vx: sy * cfg.speedMax * jm.maxV,
+      yaw: -sx * cfg.yawMax * jm.maxW,
       climb: this.climb,
     };
   }
