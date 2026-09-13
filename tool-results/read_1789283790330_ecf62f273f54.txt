@@ -1,0 +1,970 @@
+     1→// ═══════════════════════════════════════════════════════════
+     2→// retarget.js — GLB-Skelett → Unitree-G1-Gelenke.
+     3→// Methode (WELT-ORIENTIERUNGS-MATCHING — der Geist nimmt die ABSOLUTE
+     4→// Lehrer-Pose an, nicht nur die Bewegungs-Deltas):
+     5→//   1. Basis-Orientierung = Brust-Weltrotation des Lehrers (ALIGN-konjugiert,
+     6→//      Yaw-Anteil entfernt — die Blickrichtung besitzt der Root-Motion-Yaw).
+     7→//      So überträgt sich auch eine in der RUHEPOSE steckende Pose (z. B.
+     8→//      Zombie-Beuge): der G1-Geist neigt die Basis, die Hüften kompensieren.
+     9→//   2. Je Gelenk: Ziel-Lokalrotation aus den QUELL-Weltrotationen von
+    10→//      Eltern-Knochen und Kind-Knochen:  L = A·(W_eltern⁻¹ ⊗ W_kind)·A⁻¹
+    11→//      (Eltern für Beine/Arme = Brust, da die G1-Basis die Brust trägt).
+    12→//   3. 3-Achsen-Gelenke (Hüfte/Schulter) per numerischem Koordinaten-
+    13→//      Abstieg gegen die Zielrotation; 1-Achser (Knie/Knöchel/Ellbogen/
+    14→//      Taille) per Achsen-Projektion; 2-Achser (Knöchel) wie 3-Achser.
+    15→//   4. Basis-Höhe aus Hüft-Translation (cm/m-Erkennung), dann
+    16→//      Boden-Anpassung: tiefsten Fußpunkt über Geister-Vorwärtslauf
+    17→//      anheben (offline, einmalig beim Import) — MIT Basis-Nick.
+    18→// Ergebnis: Referenz-Timeline q_ref (nu je Frame) + h_ref + baseQ (n×4).
+    19→// ═══════════════════════════════════════════════════════════
+    20→
+    21→import { GlbClip, quatMul, quatRot as rotVec, quatRotInv } from './glb.js';
+    22→
+    23→// Universeller Knochen-Resolver:
+    24→//   1) Alias-Tabelle (normalisiert, ohne Sonderzeichen) — Mixamo mit/ohne
+    25→//      Präfix, Cartwheel (forge fbx_to_glb), Unity, Unreal, VRM.
+    26→//   2) Heuristik-Pass über alle Knotennamen mit Seitenerkennung
+    27→//      (left/right bzw. l/r-Suffix) und Rollen-Priorität — erkennt auch
+    28→//      exotische Namen wie 'UpperLeg_L.001' oder 'thigh proxy L'.
+    29→// Verglichen wird IMMER über normName (nur [a-z0-9]).
+    30→const BONE_ALIASES = {
+    31→  hips: ['mixamorig:hips', 'hips', 'hip', 'pelvis', 'j_bip_c_hips', 'root', 'bip01_pelvis'],
+    32→  spine: ['mixamorig:spine', 'spine', 'j_bip_c_spine', 'chest_lower'],
+    33→  leftUpLeg: ['mixamorig:leftupleg', 'leftupleg', 'upper_leg_l', 'upperleg_l', 'thigh_l', 'leftthigh', 'left_upleg', 'j_bip_l_hip', 'bip01_l_thigh', 'upperleg_l1'],
+    34→  leftLeg: ['mixamorig:leftleg', 'leftleg', 'lower_leg_l', 'lowerleg_l', 'shin_l', 'leftshin', 'calf_l', 'left_calf', 'j_bip_l_knee', 'bip01_l_calf'],
+    35→  leftFoot: ['mixamorig:leftfoot', 'leftfoot', 'foot_l', 'leftankle', 'left_ankle', 'ankle_l', 'j_bip_l_ankle', 'bip01_l_foot'],
+    36→  rightUpLeg: ['mixamorig:rightupleg', 'rightupleg', 'upper_leg_r', 'upperleg_r', 'thigh_r', 'rightthigh', 'right_upleg', 'j_bip_r_hip', 'bip01_r_thigh'],
+    37→  rightLeg: ['mixamorig:rightleg', 'rightleg', 'lower_leg_r', 'lowerleg_r', 'shin_r', 'rightshin', 'calf_r', 'right_calf', 'j_bip_r_knee', 'bip01_r_calf'],
+    38→  rightFoot: ['mixamorig:rightfoot', 'rightfoot', 'foot_r', 'rightankle', 'right_ankle', 'ankle_r', 'j_bip_r_ankle', 'bip01_r_foot'],
+    39→  leftArm: ['mixamorig:leftarm', 'leftarm', 'upper_arm_l', 'upperarm_l', 'leftshoulder', 'left_shoulder', 'j_bip_l_shoulder', 'bip01_l_upperarm', 'clavicle_l'],
+    40→  leftForeArm: ['mixamorig:leftforearm', 'leftforearm', 'lower_arm_l', 'lowerarm_l', 'leftelbow', 'left_elbow', 'j_bip_l_elbow', 'bip01_l_forearm'],
+    41→  rightArm: ['mixamorig:rightarm', 'rightarm', 'upper_arm_r', 'upperarm_r', 'rightshoulder', 'right_shoulder', 'j_bip_r_shoulder', 'bip01_r_upperarm', 'clavicle_r'],
+    42→  rightForeArm: ['mixamorig:rightforearm', 'rightforearm', 'lower_arm_r', 'lowerarm_r', 'rightelbow', 'right_elbow', 'j_bip_r_elbow', 'bip01_r_forearm'],
+    43→  head: ['mixamorig:head', 'head', 'neck', 'neck_01', 'j_bip_c_head', 'bip01_head'],
+    44→};
+    45→const ROLE_ORDER = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm', 'head'];
+    46→// Rollen für den Lehrer-Ghost (Original-Figur) — Reihenfolge = srcPos-Layout
+    47→export const GHOST_ROLES = ['hips', 'spine', 'head', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+    48→// Hilfsknochen-Namen, die KEIN echter Gelenk-Kandidat sind (assimp-Zerlegung,
+    49→// Endblätter, IK-Hilfen) — in der Heuristik übersprungen.
+    50→const BAD_NAME = /leaf|twist|roll|proxy|ik$|_ik|target|aim|effector|\$/;
+    51→
+    52→// Heuristik: Rollen-Muster (Prioritätsreihenfolge! längere Spezifität zuerst)
+    53→// Je Eintrag: [Rolle, Regex über den ROH-Namen (lowercase), Seite]
+    54→const SIDE_L = /(left|\bl([._\- ]|$|\d)|_l([._\- ]|$)|\.l$| l$)/;
+    55→const SIDE_R = /(right|\br([._\- ]|$|\d)|_r([._\- ]|$)|\.r$| r$)/;
+    56→const HEURISTICS = [
+    57→  ['leftForeArm', /(forearm|lowerarm|elbow|frontarm)/, SIDE_L],
+    58→  ['rightForeArm', /(forearm|lowerarm|elbow|frontarm)/, SIDE_R],
+    59→  ['leftArm', /(arm|shoulder|upperarm|clavicle|collar)/, SIDE_L],
+    60→  ['rightArm', /(arm|shoulder|upperarm|clavicle|collar)/, SIDE_R],
+    61→  ['leftFoot', /(foot|ankle)/, SIDE_L],
+    62→  ['rightFoot', /(foot|ankle)/, SIDE_R],
+    63→  ['leftLeg', /(knee|shin|calf|lowerleg)/, SIDE_L],
+    64→  ['rightLeg', /(knee|shin|calf|lowerleg)/, SIDE_R],
+    65→  ['leftUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_L],
+    66→  ['rightUpLeg', /(upleg|upperleg|thigh|hip)/, SIDE_R],
+    67→  ['spine', /(spine|chest|torso|upperbody)/, null],
+    68→  ['head', /(head|neck|kopf)/, null],
+    69→  ['hips', /(hips|pelvis|root)/, null],
+    70→];
+    71→
+    72→export function resolveBones(clip) {
+    73→  const found = {};
+    74→  // 1) Alias-Tabelle
+    75→  for (const role of ROLE_ORDER) {
+    76→    for (const a of BONE_ALIASES[role]) {
+    77→      const idx = clip.bestNodeFor(a);
+    78→      if (idx !== undefined) { found[role] = idx; break; }
+    79→    }
+    80→  }
+    81→  // 2) Heuristik für noch Fehlende — animierte Knoten bevorzugen
+    82→  const used = new Set(Object.values(found));
+    83→  for (const [role, re, sideRe] of HEURISTICS) {
+    84→    if (found[role] !== undefined) continue;
+    85→    let best = undefined, bestScore = -1;
+    86→    for (let i = 0; i < clip.nodes.length; i++) {
+    87→      const n = clip.nodes[i];
+    88→      if (!n.name) continue;
+    89→      const low = n.name.toLowerCase();
+    90→      if (BAD_NAME.test(low)) continue;
+    91→      if (!re.test(low)) continue;
+    92→      if (sideRe && !sideRe.test(low)) continue;
+    93→      if (used.has(i)) continue;
+    94→      // 'forearm' darf nicht 'arm' klauen — HEURISTICS-Reihenfolge regelt das
+    95→      const animated = clip.rotationTracks.has(i) ? 1 : 0;
+    96→      const score = animated * 2 + (n.name.length < 24 ? 1 : 0);
+    97→      if (score > bestScore) { bestScore = score; best = i; }
+    98→    }
+    99→    if (best !== undefined) { found[role] = best; used.add(best); }
+   100→  }
+   101→  return found;
+   102→}
+   103→
+   104→// --- Quaternion-Werkzeuge (x,y,z,w) ---
+   105→function quatFromAxisAngle(axis, ang, out) {
+   106→  const s = Math.sin(ang / 2);
+   107→  out[0] = axis[0] * s; out[1] = axis[1] * s; out[2] = axis[2] * s; out[3] = Math.cos(ang / 2);
+   108→  return out;
+   109→}
+   110→function quatConj(q, out) { out[0] = -q[0]; out[1] = -q[1]; out[2] = -q[2]; out[3] = q[3]; return out; }
+   111→function quatMul2(a, b, out) {
+   112→  const ax = a[0], ay = a[1], az = a[2], aw = a[3];
+   113→  const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+   114→  out[0] = aw * bx + ax * bw + ay * bz - az * by;
+   115→  out[1] = aw * by - ax * bz + ay * bw + az * bx;
+   116→  out[2] = aw * bz + ax * by - ay * bx + az * bw;
+   117→  out[3] = aw * bw - ax * bx - ay * by - az * bz;
+   118→  return out;
+   119→}
+   120→function quatLogAxis(q, out) {
+   121→  // Axis-Angle aus Quaternion
+   122→  const w = Math.min(1, Math.max(-1, q[3]));
+   123→  const ang = 2 * Math.acos(w);
+   124→  const s = Math.sqrt(Math.max(1e-12, 1 - w * w));
+   125→  out[0] = q[0] / s; out[1] = q[1] / s; out[2] = q[2] / s;
+   126→  return ang;
+   127→}
+   128→function quatFromTwoVecs(a, b, out) {
+   129→  // Minimale Rotation, die Richtung a → Richtung b dreht (twist-frei).
+   130→  const cx = a[1] * b[2] - a[2] * b[1], cy = a[2] * b[0] - a[0] * b[2], cz = a[0] * b[1] - a[1] * b[0];
+   131→  const cl = Math.hypot(cx, cy, cz);
+   132→  const d = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+   133→  const s = Math.sqrt(Math.max(0, 0.5 * (1 + d))); // cos(ang/2)
+   134→  if (cl < 1e-9 || s < 1e-6) {
+   135→    if (d > 0) { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; return out; }
+   136→    // 180°: beliebige senkrechte Achse
+   137→    let px = 1, py = 0, pz = 0;
+   138→    if (Math.abs(a[0]) > 0.9) { px = 0; py = 1; }
+   139→    const ax = a[1] * pz - a[2] * py, ay = a[2] * px - a[0] * pz, az = a[0] * py - a[1] * px;
+   140→    const l = Math.hypot(ax, ay, az) || 1;
+   141→    out[0] = ax / l; out[1] = ay / l; out[2] = az / l; out[3] = 0;
+   142→    return out;
+   143→  }
+   144→  out[0] = cx / (2 * s); out[1] = cy / (2 * s); out[2] = cz / (2 * s); out[3] = s;
+   145→  const n = Math.hypot(out[0], out[1], out[2], out[3]) || 1;
+   146→  out[0] /= n; out[1] /= n; out[2] /= n; out[3] /= n;
+   147→  return out;
+   148→}
+   149→function rotVecByQuat(q, v, out) {
+   150→  // v' = q ⊗ v ⊗ q* (Standard-Sandwich, KONJUGIERTER zweiter Faktor —
+   151→  // die alte Version multiplizierte mit q selbst → gespiegelte Achsen)
+   152→  const x = q[0], y = q[1], z = q[2], w = q[3];
+   153→  const vx = v[0], vy = v[1], vz = v[2];
+   154→  const tx = 2 * (y * vz - z * vy);
+   155→  const ty = 2 * (z * vx - x * vz);
+   156→  const tz = 2 * (x * vy - y * vx);
+   157→  out[0] = vx + w * tx + (y * tz - z * ty);
+   158→  out[1] = vy + w * ty + (z * tx - x * tz);
+   159→  out[2] = vz + w * tz + (x * ty - y * tx);
+   160→  return out;
+   161→}
+   162→
+   163→// Welt-Achse eines MuJoCo-Gelenks (im Keyframe, d. h. Ruhepose)
+   164→function jointWorldAxis(sim, jid, out) {
+   165→  const mod = sim.model;
+   166→  const bid = mod.jnt_bodyid[jid];
+   167→  // jnt_axis ist im Rahmen des Kind-Körpers lokal
+   168→  const ax = [mod.jnt_axis[3 * jid], mod.jnt_axis[3 * jid + 1], mod.jnt_axis[3 * jid + 2]];
+   169→  // MuJoCo xquat ist (w,x,y,z) → in [x,y,z,w] drehen für rotVecByQuat!
+   170→  const q = [sim._xquat[4 * bid + 1], sim._xquat[4 * bid + 2], sim._xquat[4 * bid + 3], sim._xquat[4 * bid]];
+   171→  rotVecByQuat(q, ax, out);
+   172→  return out;
+   173→}
+   174→
+   175→/**
+   176→ * Retargetet einen GLB-Clip auf die G1-Gelenke.
+   177→ * @param clip GlbClip
+   178→ * @param sim  RobotSim des G1 (Keyframe-Pose aktiv)
+   179→ * @param log  Fortschritts-Logger
+   180→ * @returns MotionClip { name, fps, n, nu, q: Float32Array(n*nu), h: Float32Array(n), mapped: [Namen] }
+   181→ */
+   182→export function retargetToG1(clip, sim, log = () => {}) {
+   183→  const bones = resolveBones(clip);
+   184→  const need = ['hips', 'leftUpLeg', 'leftLeg', 'rightUpLeg', 'rightLeg'];
+   185→  const missing = need.filter(k => bones[k] === undefined);
+   186→  if (missing.length) {
+   187→    const names = clip.nodes.map(n => n.name).filter(Boolean).slice(0, 12).join(', ');
+   188→    throw new Error('Skelett nicht erkannt (' + missing.join(', ') + ' fehlt). Gefundene Knoten: ' + names + ' …');
+   189→  }
+   190→  const roleNames = ROLE_ORDER.filter(r => bones[r] !== undefined);
+   191→  log(`Knochen erkannt: ${roleNames.length}/${ROLE_ORDER.length} (${roleNames.map(r => clip.nodes[bones[r]].name).join(', ')})`);
+   192→
+   193→  // Namen der gelösten Knochen für sampleWorld (normalisiert kompatibel)
+   194→  const wanted = roleNames.map(r => clip.nodes[bones[r]].name);
+   195→  // Lehrer-Ghost: Rollen in fester Reihenfolge (nur vorhandene)
+   196→  const ghostRoles = GHOST_ROLES.filter(r => bones[r] !== undefined);
+   197→
+   198→  const nu = sim.nu;
+   199→  const A = sim.actByName;
+   200→  // Gelenk-Weltachsen im Keyframe sammeln
+   201→  const axisOf = {};
+   202→  for (const name of sim.actName) {
+   203→    const aid = A[name];
+   204→    const jid = sim.actJoint[aid];
+   205→    axisOf[name] = jointWorldAxis(sim, jid, [0, 0, 0]);
+   206→  }
+   207→  const clampA = (name, v) => {
+   208→    const a = A[name];
+   209→    return Math.min(sim.actRange[2 * a + 1], Math.max(sim.actRange[2 * a], v));
+   210→  };
+   211→
+   212→  // Achsen-Mapping GLB (Y-hoch, +Z-Blick) → MuJoCo (Z-hoch, +X-Blick):
+   213→  // X_glb→Y_mjc (lateral), Y_glb→Z_mjc (hoch), Z_glb→X_mjc (vorwärts)
+   214→  // = Rotation 120° um die Raumdiagonale (1,1,1): Quaternion [0.5,0.5,0.5,0.5]
+   215→  const ALIGN = [0.5, 0.5, 0.5, 0.5];
+   216→  const ALIGN_INV = [-0.5, -0.5, -0.5, 0.5];
+   217→
+   218→  // „Brust“ = nächster Vorfahre der Arme — deren WELTrotation enthält die
+   219→  // komplette Oberkörperbeugung (Wirbelsäulen-Kette akkumuliert). Die G1-
+   220→  // Basis trägt diese Orientierung (inkl. Ruhepose-Beugung wie beim Zombie).
+   221→  const armNode = bones.leftArm !== undefined ? bones.leftArm
+   222→    : (bones.rightArm !== undefined ? bones.rightArm : undefined);
+   223→  let chestIdx = armNode !== undefined ? clip.parentOf.get(armNode) : undefined;
+   224→  if (chestIdx === undefined || chestIdx === bones.hips) chestIdx = bones.spine;
+   225→  if (chestIdx === undefined) chestIdx = bones.hips;
+   226→
+   227→  const fps = Math.min(30, Math.max(15, clip.fpsHint));
+   228→  const n = Math.max(2, Math.round(clip.duration * fps));
+   229→  const q = new Float32Array(n * nu);
+   230→  const h = new Float32Array(n);
+   231→
+   232→  const worldMap = new Map();
+   233→  const conjTmp = [0, 0, 0, 1];
+   234→  const axisTmp = [0, 0, 0];
+   235→  const qTmp = [0, 0, 0, 1];
+   236→  const qTmp2 = [0, 0, 0, 1];
+   237→  const qId = [0, 0, 0, 1];
+   238→  const tA = [0, 0, 0, 1], tB = [0, 0, 0, 1];
+   239→
+   240→  // ── Ruhewelt-Rotationen der Quell-Knochen (Kalibrierungs-Referenz) ──
+   241→  // WICHTIG: auch matrix-basierte Nodes (assimp _$AssimpFbx$_ PreRotation!)
+   242→  // einbeziehen, sonst ist die Ruhelage falsch.
+   243→  const localRestRot = (idx) => {
+   244→    const n = clip.nodes[idx];
+   245→    if (n.rotation) return n.rotation.slice();
+   246→    if (n.matrix) return clip._decompMatrix(idx).q.slice();
+   247→    return [0, 0, 0, 1];
+   248→  };
+   249→  const restQ = new Map();
+   250→  const computeRest = (idx) => {
+   251→    if (restQ.has(idx)) return restQ.get(idx);
+   252→    const local = localRestRot(idx);
+   253→    const p = clip.parentOf.get(idx);
+   254→    const w = p === undefined ? local : quatMul2(computeRest(p), local, [0, 0, 0, 1]);
+   255→    restQ.set(idx, w);
+   256→    return w;
+   257→  };
+   258→  const calRoles = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+   259→  for (const r of calRoles) if (bones[r] !== undefined) computeRest(bones[r]);
+   260→  computeRest(chestIdx);
+   261→
+   262→  // ── G1-KALIBRIERUNG: Körper-Orientierungen in der NULL-Pose ──
+   263→  // Knochen-Frames verschiedener Rigs sind beliebig konventioniert — direkt
+   264→  // verglichen werden dürfen nur die jeweiligen RUHELAGEN. CAL[seite][glied]
+   265→  // = (alignierte Quell-Ruhe-Weltrotation)⁻¹ ⊗ G1-Körper-Nullpose-Quat.
+   266→  // Damit gilt: Quell-Ruhepose ↔ G1-Nullpose EXAKT, Animation relativ dazu.
+   267→  const bodyOfAct = (name) => sim.model.jnt_bodyid[sim.actJoint[sim.actByName[name]]];
+   268→  const ghost0 = sim.makeGhostData();
+   269→  sim._mjApi.mj_resetData(sim.model, ghost0);
+   270→  sim._mjApi.mj_forward(sim.model, ghost0);
+   271→  // MuJoCo xquat ist (w,x,y,z) → in [x,y,z,w] drehen (Projekt-Konvention)
+   272→  const zeroQuat = (b) => [ghost0.xquat[4 * b + 1], ghost0.xquat[4 * b + 2], ghost0.xquat[4 * b + 3], ghost0.xquat[4 * b]];
+   273→  const makeCal = (srcIdx, g1Body) => {
+   274→    const ar = quatMul2(ALIGN, computeRest(srcIdx), [0, 0, 0, 1]);
+   275→    const aligned = quatMul2(ar, ALIGN_INV, [0, 0, 0, 1]);
+   276→    return quatMul2(quatConj(aligned, [0, 0, 0, 1]), zeroQuat(g1Body), [0, 0, 0, 1]);
+   277→  };
+   278→  const CAL = {};
+   279→  for (const side of ['left', 'right']) {
+   280→    CAL[side] = {
+   281→      thigh: makeCal(bones[side + 'UpLeg'], bodyOfAct(side + '_hip_pitch_joint')),
+   282→      shin: makeCal(bones[side + 'Leg'], bodyOfAct(side + '_knee_joint')),
+   283→      foot: bones[side + 'Foot'] !== undefined ? makeCal(bones[side + 'Foot'], bodyOfAct(side + '_ankle_pitch_joint')) : qId,
+   284→      arm: bones[side + 'Arm'] !== undefined ? makeCal(bones[side + 'Arm'], sim.model.body_parentid[bodyOfAct(side + '_elbow_joint')]) : qId,
+   285→      fore: bones[side + 'ForeArm'] !== undefined ? makeCal(bones[side + 'ForeArm'], bodyOfAct(side + '_elbow_joint')) : qId,
+   286→    };
+   287→  }
+   288→
+   289→  // Alignierte Ziel-Weltrotation eines Quell-Knochens (animiert): A·W·A⁻¹
+   290→  const alignedOf = (idx, out) => {
+   291→    const w = worldMap.get(idx);
+   292→    if (!w) { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; return out; }
+   293→    quatMul2(ALIGN, w, qTmp); quatMul2(qTmp, ALIGN_INV, out);
+   294→    return out;
+   295→  };
+   296→
+   297→  // ── NEU (v2.3.4): Gelenke per IK am GEIST-FK lösen ────────────────
+   298→  // Die alte Algebra (Triaden-/CAL-Konjugation + Achsen-Projektion) konjugierte
+   299→  // die Lehrer-Ziele mit der RUHEPOSE-Differenz (T-Pose ↔ G1-Nullpose) — der
+   300→  // Ruheoffset floss DOPPELT ein: Arme bekamen den „eingebauten“ Knick (+50…75°
+   301→  // Richtungsmessung), Beine blieben streckbar gerade, obwohl der Lehrer die
+   302→  // Oberschenkel anhebt. Jetzt: Ziele sind KNOCHENRICHTUNGEN des Lehrers
+   303→  // (konventionsfrei aus Weltpositionen, ALIGN-Rahmen) bzw. Fuß-Quats; die
+   304→  // Gelenkwinkel löst ein Jacobian-Transposed-IK direkt am ECHTEN MuJoCo-FK.
+   305→  // Damit sind Nullpose-/Achsenkonventionen des G1 per Konstruktion korrekt.
+   306→  //
+   307→  // Zero-Pose-Referenzen (qpos0-FK): Körperrichtungen + Körper-Quats
+   308→  const pos0Of = (b) => [ghost0.xpos[3 * b], ghost0.xpos[3 * b + 1], ghost0.xpos[3 * b + 2]];
+   309→  const childBodyOf = (b) => {
+   310→    for (let x = 1; x < sim.nbody; x++) if (sim.model.body_parentid[x] === b) return x;
+   311→    return -1;
+   312→  };
+   313→  const dirBetween0 = (b1, b2) => {
+   314→    const p = pos0Of(b1), c = pos0Of(b2);
+   315→    const d = [c[0] - p[0], c[1] - p[1], c[2] - p[2]];
+   316→    const l = Math.hypot(d[0], d[1], d[2]) || 1;
+   317→    return [d[0] / l, d[1] / l, d[2] / l];
+   318→  };
+   319→  const bidOfAct = (name) => sim.model.jnt_bodyid[sim.actJoint[sim.actByName[name]]];
+   320→  const G1B = {}; // Geist-Körper je Seite
+   321→  const G1D0 = {}; // Nullposen-Richtungen je Seite
+   322→  const G1X0 = {}; // Nullposen-Körperquats je Seite [x,y,z,w]
+   323→  for (const side of ['left', 'right']) {
+   324→    const elbow = bidOfAct(side + '_elbow_joint');
+   325→    const ankle = bidOfAct(side + '_ankle_pitch_joint');
+   326→    const hip = bidOfAct(side + '_hip_pitch_joint');
+   327→    const knee = bidOfAct(side + '_knee_joint');
+   328→    const upperArm = sim.model.body_parentid[elbow];
+   329→    G1B[side] = { hip, knee, ankle, elbow, upperArm, wrist: childBodyOf(elbow) };
+   330→    G1D0[side] = {
+   331→      thigh: dirBetween0(hip, knee),
+   332→      shin: dirBetween0(knee, ankle),
+   333→      arm: dirBetween0(upperArm, elbow),
+   334→      fore: G1B[side].wrist > 0 ? dirBetween0(elbow, G1B[side].wrist) : null,
+   335→    };
+   336→    G1X0[side] = { thigh: zeroQuat(hip), arm: zeroQuat(upperArm), foot: zeroQuat(ankle) };
+   337→  }
+   338→
+   339→  // Distale Partner für Lehrer-Richtungen: Hand (Unterarm) bzw. Fuß-Ende
+   340→  const localT = (idx) => {
+   341→    const nd = clip.nodes[idx];
+   342→    if (nd.translation) return nd.translation;
+   343→    if (nd.matrix) return clip._decompMatrix(idx).t;
+   344→    return [0, 0, 0];
+   345→  };
+   346→  const distalOf = (idx) => {
+   347→    let best, bestLen = -1;
+   348→    for (const [c, p] of clip.parentOf.entries()) {
+   349→      if (p !== idx) continue;
+   350→      const t = localT(c);
+   351→      const l = Math.hypot(t[0], t[1], t[2]);
+   352→      if (l > bestLen) { bestLen = l; best = c; }
+   353→    }
+   354→    return best;
+   355→  };
+   356→  const limbEnd = {}; // je Seite: { fore, shin }
+   357→  for (const side of ['left', 'right']) {
+   358→    limbEnd[side] = {
+   359→      fore: bones[side + 'ForeArm'] !== undefined ? distalOf(bones[side + 'ForeArm']) : undefined,
+   360→      shin: bones[side + 'Foot'] !== undefined ? bones[side + 'Foot'] : (bones[side + 'Leg'] !== undefined ? distalOf(bones[side + 'Leg']) : undefined),
+   361→    };
+   362→  }
+   363→  // distale Richtungs-Partner mit sampeln
+   364→  for (const side of ['left', 'right']) {
+   365→    for (const k of ['fore', 'shin']) {
+   366→      const e = limbEnd[side][k];
+   367→      if (e !== undefined && !wanted.includes(clip.nodes[e].name)) wanted.push(clip.nodes[e].name);
+   368→    }
+   369→  }
+   370→  // IK-Ziele je Frame: Lehrer-KNOCHENRICHTUNGEN (MJC-Rahmen, Einheitsvektoren)
+   371→  // Slots: 0 OS-L, 1 SB-L, 2 OA-L, 3 UA-L, 4 OS-R, 5 SB-R, 6 OA-R, 7 UA-R
+   372→  const dSrc = new Float32Array(n * 8 * 3).fill(NaN);
+   373→  // alignierte Lehrer-Fuß-Weltquats (L/R) für die Knöchel-Orientierung
+   374→  const footW = new Float32Array(n * 2 * 4).fill(NaN);
+   375→
+   376→  const triadQ = [0, 0, 0, 1]; // wird je Frame aus KnochenPOSITIONEN gebaut
+   377→  // Einachser (nur noch Taille): Projektion des Ziel-Achsenwinkels auf die Gelenkachse
+   378→  const project1 = (jointName, dq) => {
+   379→    const ang = quatLogAxis(dq, axisTmp);
+   380→    const a = axisOf[jointName];
+   381→    return clampA(jointName, ang * (axisTmp[0] * a[0] + axisTmp[1] * a[1] + axisTmp[2] * a[2]));
+   382→  };
+   383→
+   384→  let hipsRestH = 0;
+   385→  // Hüft-WELTHöhe bei Frame 0 (volle FK — erfasst auch assimp-Zwischenknoten;
+   386→  // dort sitzt die echte Höhe am animierten Sub-Knoten, die lokale
+   387→  // Ruhetranslation des Knochens ist oft 0)
+   388→  const hipsP0 = (() => {
+   389→    const q0 = new Map(), p0 = new Map();
+   390→    clip.sampleWorldFull(0, wanted, q0, p0);
+   391→    return p0.get(bones.hips) || [0, 0, 90];
+   392→  })();
+   393→  hipsRestH = Math.max(0.1, hipsP0[1]);
+   394→  const scale = hipsRestH > 3 ? 0.01 : 1.0; // Mixamo cm → m
+   395→  const g1StandH = sim._xpos[3 * sim.baseBody + 2];
+   396→  const hScale = g1StandH / Math.max(0.2, hipsRestH * scale);
+   397→
+   398→  const rawH = new Float32Array(n);
+   399→  // Triaden-Yaw je Frame (dieselbe Größe, die baseQ herausdreht — die
+   400→  // IK-Ziele werden damit KONJUGIERT, sodass Lehrer-Ziele und Geist-Basis
+   401→  // garantiert im selben ent-yawten Rahmen liegen)
+   402→  const triadYaw = new Float32Array(n);
+   403→  // Basis-Orientierung je Frame (Brust-Weltrotation, ALIGN-konjugiert,
+   404→  // Yaw-Anteil entfernt — die Blickrichtung besitzt der Root-Motion-Yaw).
+   405→  // Trägt die ABSOLUTE Oberkörper-Pose (auch Ruhepose-Beugung wie beim
+   406→  // Zombie) — die Hüften kompensieren, damit die Füße unten bleiben.
+   407→  const baseQ = new Float32Array(n * 4);
+   408→  // Root-Motion: Bahn des Hüftpunkts (MuJoCo-Rahmen, relativ zu Frame 0)
+   409→  // + Blickrichtung (Yaw) — der Referenz-Geist läuft damit WIRKLICH durchs Feld.
+   410→  const root = new Float32Array(n * 2);
+   411→  const yaw = new Float32Array(n);
+   412→  const rawYaw = new Float32Array(n);
+   413→  // Lehrer-Ghost: Weltpositionen aller Rollenknochen je Frame (MuJoCo-Rahmen, m)
+   414→  const srcPos = new Float32Array(n * ghostRoles.length * 3);
+   415→  const srcJoints = ghostRoles.slice();
+   416→  const worldPos = new Map();
+   417→  const FWD_GLB = [0, 0, 1]; // GLB: +Z ist Blickrichtung (Annahme wie Achsen-Mapping)
+   418→  const fwdTmp = [0, 0, 0];
+   419→  const alignedQ = [0, 0, 0, 1];
+   420→  let sx0 = 0, sy0 = 0;
+   421→  for (let f = 0; f < n; f++) {
+   422→    const t = f / fps;
+   423→    clip.sampleWorldFull(t, wanted, worldMap, worldPos);
+   424→    const off = f * nu;
+   425→    // ── Basis-Triade aus KnochenPOSITIONEN (konventionsfrei) ──
+   426→    // up  = Richtung Hüfte→Brust — die VISUELLE Torso-Achse (erfasst die
+   427→    //       komplette Beugung, auch eine in der Ruhepose steckende)
+   428→    // fwd = Blick der Hüfte (GLB +Z rotiert mit W_hips), orthogonal auf up
+   429→    {
+   430→      const hp3 = worldPos.get(bones.hips), cp3 = worldPos.get(chestIdx) || hp3;
+   431→      let ux = 0, uy = 0, uz = 1; // MJC hoch (Fallback aufrecht)
+   432→      if (hp3 && cp3) {
+   433→        const g = rotVec(ALIGN, [cp3[0] - hp3[0], cp3[1] - hp3[1], cp3[2] - hp3[2]], [0, 0, 0]);
+   434→        const len = Math.hypot(g[0], g[1], g[2]);
+   435→        if (len > 1e-9) { ux = g[0] / len; uy = g[1] / len; uz = g[2] / len; }
+   436→      }
+   437→      const wHipsQ = worldMap.get(bones.hips) || qId;
+   438→      const fG = rotVec(ALIGN, rotVec(wHipsQ, FWD_GLB, [0, 0, 0]), [0, 0, 0]);
+   439→      const dd = fG[0] * ux + fG[1] * uy + fG[2] * uz;
+   440→      let fx = fG[0] - dd * ux, fy = fG[1] - dd * uy, fz = fG[2] - dd * uz;
+   441→      let fl = Math.hypot(fx, fy, fz);
+   442→      if (fl < 1e-6) { fx = 1 - ux * ux; fy = -ux * uy; fz = -ux * uz; fl = Math.hypot(fx, fy, fz) || 1; }
+   443→      fx /= fl; fy /= fl; fz /= fl;
+   444→      const lx = uy * fz - uz * fy, ly = uz * fx - ux * fz, lz = ux * fy - uy * fx; // Y = Z×X
+   445→      mat3ToQuat(fx, fy, fz, lx, ly, lz, ux, uy, uz, triadQ);
+   446→    }
+   447→    // Taille: Verdrehung Becken↔Brust (Yaw-Anteil) — die BEUGUNG selbst
+   448→    // trägt die Basis-Orientierung, nicht die Taille (G1 hat nur waist_yaw)
+   449→    quatConj(worldMap.get(bones.hips) || qId, conjTmp);
+   450→    quatMul2(conjTmp, worldMap.get(chestIdx) || qId, alignedQ);
+   451→    quatMul2(ALIGN, alignedQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
+   452→    const waistName = 'waist_yaw_joint';
+   453→    q[off + A[waistName]] = project1(waistName, alignedQ);
+   454→    // ── IK-Ziele sammeln: Lehrer-Richtungen (Positions-Differenzen sind
+   455→    // konventionsfrei!) + Fuß-Quats; die Gelenke selbst löst Pass 2 ──
+   456→    const storeDir = (aIdx, bIdx, slot) => {
+   457→      const a = worldPos.get(aIdx), b = worldPos.get(bIdx);
+   458→      if (!a || !b) return;
+   459→      const g = rotVec(ALIGN, [b[0] - a[0], b[1] - a[1], b[2] - a[2]], [0, 0, 0]);
+   460→      const l = Math.hypot(g[0], g[1], g[2]);
+   461→      if (l < 1e-9) return;
+   462→      const o = (f * 8 + slot) * 3;
+   463→      dSrc[o] = g[0] / l; dSrc[o + 1] = g[1] / l; dSrc[o + 2] = g[2] / l;
+   464→    };
+   465→    for (const side of ['left', 'right']) {
+   466→      const li = side === 'left' ? 0 : 4;
+   467→      // Oberschenkel = upLeg→KNIE (NICHT →Fuß! Mit gebeugtem Knie zeigt die
+   468→      // Ganze-Bein-Richtung nach hinten, obwohl der Oberschenkel nach vorn
+   469→      // zeigt — der 27-42°-„Restfehler" war genau dieser Messfehler)
+   470→      storeDir(bones[side + 'UpLeg'], bones[side + 'Leg'], li);
+   471→      storeDir(bones[side + 'Leg'], limbEnd[side].shin, li + 1);
+   472→      if (bones[side + 'Arm'] !== undefined && bones[side + 'ForeArm'] !== undefined) {
+   473→        storeDir(bones[side + 'Arm'], bones[side + 'ForeArm'], li + 2);
+   474→        if (limbEnd[side].fore !== undefined) storeDir(bones[side + 'ForeArm'], limbEnd[side].fore, li + 3);
+   475→      }
+   476→      if (bones[side + 'Foot'] !== undefined) {
+   477→        alignedOf(bones[side + 'Foot'], tA);
+   478→        const o4 = (f * 2 + (side === 'left' ? 0 : 1)) * 4;
+   479→        footW[o4] = tA[0]; footW[o4 + 1] = tA[1]; footW[o4 + 2] = tA[2]; footW[o4 + 3] = tA[3];
+   480→      }
+   481→    }
+   482→    // Basis-Orientierung für die ANZEIGE: Triade mit herausgedrehtem Yaw
+   483→    // (base = yawQ⁻¹ ⊗ q) — es bleibt Nick+Roll, die Blickrichtung kommt
+   484→    // aus dem Root-Motion-Yaw (kein Doppel-Yaw beim Loop-Rebase).
+   485→    {
+   486→      const qx = triadQ[0], qy = triadQ[1], qz = triadQ[2], qw = triadQ[3];
+   487→      const yawC = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
+   488→      triadYaw[f] = yawC;
+   489→      const cy2 = Math.cos(-yawC / 2), sy2 = Math.sin(-yawC / 2);
+   490→      baseQ[4 * f]     = cy2 * qx + sy2 * qy;
+   491→      baseQ[4 * f + 1] = cy2 * qy - sy2 * qx;
+   492→      baseQ[4 * f + 2] = cy2 * qz - sy2 * qw;
+   493→      baseQ[4 * f + 3] = cy2 * qw + sy2 * qz;
+   494→    }
+   495→    // Basis-Höhe, Root-Bahn + Yaw aus der Hüft-WELTposition (volle FK)
+   496→    const hp = worldPos.get(bones.hips) || hipsP0;
+   497→    rawH[f] = Math.min(1.15, Math.max(0.4, hp[1] * scale * hScale));
+   498→    const wx = hp[2] * scale, wy = hp[0] * scale; // GLB(Z,X) → MuJoCo(X,Y)
+   499→    if (f === 0) { sx0 = wx; sy0 = wy; }
+   500→    root[2 * f] = wx - sx0;
+   501→    root[2 * f + 1] = wy - sy0;
+   502→    rotVec(worldMap.get(bones.hips) || qId, FWD_GLB, fwdTmp);
+   503→    rawYaw[f] = Math.atan2(fwdTmp[0], fwdTmp[1]); // MuJoCo: x=Z_glb, y=X_glb
+   504→    // Lehrer-Ghost-Positionen (GLB Y-up → MuJoCo Z-up, skaliert auf m)
+   505→    for (let gi = 0; gi < ghostRoles.length; gi++) {
+   506→      const p = worldPos.get(bones[ghostRoles[gi]]);
+   507→      const o3 = (f * ghostRoles.length + gi) * 3;
+   508→      if (!p) { srcPos[o3] = srcPos[o3 + 1] = srcPos[o3 + 2] = NaN; continue; }
+   509→      srcPos[o3] = p[2] * scale; srcPos[o3 + 1] = p[0] * scale; srcPos[o3 + 2] = p[1] * scale;
+   510→    }
+   511→  }
+   512→
+   513→  // Yaw: Bei Locomotion (Bahn bewegt sich) ist die BEWEGUNGSRICHTUNG der
+   514→  // stabile Blick — die Hüft-Vorwärtsachse kippt beim Laufen stark mit
+   515→  // (Beckenrotation/Neigung). Bei Stillstand (Idle) liefert die Hüft-
+   516→  // Rotation die Blickrichtung. Danach unwrap + glätten + relativ zu Frame 0.
+   517→  {
+   518→    const SPEED_MIN = 0.15; // m/s — darunter gilt „keine Bewegung"
+   519→    const dirYaw = new Float32Array(n);
+   520→    let lastY = null;
+   521→    for (let f = 0; f < n; f++) {
+   522→      const p0 = Math.max(0, f - 1), p1 = Math.min(n - 1, f + 1);
+   523→      const dx = root[2 * p1] - root[2 * p0], dy = root[2 * p1 + 1] - root[2 * p0 + 1];
+   524→      const dt = Math.max(1e-6, (p1 - p0) / fps);
+   525→      if (Math.hypot(dx, dy) / dt > SPEED_MIN) { lastY = Math.atan2(dy, dx); dirYaw[f] = lastY; }
+   526→      else dirYaw[f] = lastY !== null ? lastY : rawYaw[f];
+   527→    }
+   528→    for (let f = 1; f < n; f++) {
+   529→      let d = dirYaw[f] - dirYaw[f - 1];
+   530→      while (d > Math.PI) d -= 2 * Math.PI;
+   531→      while (d < -Math.PI) d += 2 * Math.PI;
+   532→      dirYaw[f] = dirYaw[f - 1] + d;
+   533→    }
+   534→    smooth(dirYaw, 5);
+   535→    const y0 = dirYaw[0];
+   536→    for (let f = 0; f < n; f++) {
+   537→      let d = dirYaw[f] - y0;
+   538→      while (d > Math.PI) d -= 2 * Math.PI;
+   539→      while (d < -Math.PI) d += 2 * Math.PI;
+   540→      yaw[f] = d;
+   541→    }
+   542→  }
+   543→
+   544→  // ── PASS 2: Gelenk-IK am Geist-FK (Hüfte/Knie/Knöchel/Schulter/Ellbogen) ──
+   545→  // Ziele pro Kette: Oberschenkel/Oberarm = ORIENTIERUNG
+   546→  //   y0⁻¹ ⊗ minMap(Nullpose-Richtung → Lehrer-Richtung) ⊗ Nullpose-Quat,
+   547→  // Unterschenkel/Unterarm = RICHTUNG, Knöchel = Fuß-Orientierung (y0⁻¹⊗W'⊗CAL).
+   548→  // y0 = Frame-0-Blick der Triade (gleiche Konstante wie in baseQ) — so passen
+   549→  // absolute Lehrer-Ziele und Geist-Basis zusammen; der Pfad-Yaw kommt im
+   550→  // Display via setGhostPose hinzu, hier wird konsistent mit Yaw 0 gerechnet.
+   551→  // GELÖST wird per KOORDINATEN-ABSTIEG mit FK-Messung (das J-T-Verfahren
+   552→  // lief bei ~100°-Startfehlern in Verdreh-Täler: Hüften liefen ins Yaw/Roll-
+   553→  // Limit). Abstieg ist monoton und warm-startet aus dem Vorgängerframe.
+   554→  {
+   555→    // Je-Frame-Konjugation: exakt derselbe Yaw, den baseQ herausdreht —
+   556→    // so liegen Lehrer-Limb-Ziele und Geist-Basis garantiert im selben Rahmen.
+   557→    const ghost = sim.makeGhostData();
+   558→    const gqOf = (b, out) => { // Körper-Weltquat (w,x,y,z) → [x,y,z,w]
+   559→      out[0] = ghost.xquat[4 * b + 1]; out[1] = ghost.xquat[4 * b + 2];
+   560→      out[2] = ghost.xquat[4 * b + 3]; out[3] = ghost.xquat[4 * b];
+   561→      return out;
+   562→    };
+   563→    const gposOf = (b, out) => {
+   564→      out[0] = ghost.xpos[3 * b]; out[1] = ghost.xpos[3 * b + 1]; out[2] = ghost.xpos[3 * b + 2];
+   565→      return out;
+   566→    };
+   567→    const dirFromTo = (a, b, out) => {
+   568→      const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+   569→      const l = Math.hypot(dx, dy, dz);
+   570→      if (l < 1e-9) { out[0] = 0; out[1] = 0; out[2] = 1; return out; }
+   571→      out[0] = dx / l; out[1] = dy / l; out[2] = dz / l;
+   572→      return out;
+   573→    };
+   574→    const angBetween = (u, v) => {
+   575→      const d = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2]));
+   576→      return Math.acos(d);
+   577→    };
+   578→    // Orientierungs-Fehlerwinkel Ziel-Quat vs. Körper-Quat (rad)
+   579→    const oriErrOf = (goal, dispBody) => {
+   580→      gqOf(dispBody, qTmp);
+   581→      quatConj(qTmp, conjTmp);
+   582→      quatMul2(goal, conjTmp, qTmp2);
+   583→      return Math.abs(quatLogAxis(qTmp2, axisTmp)) * Math.hypot(axisTmp[0], axisTmp[1], axisTmp[2]);
+   584→    };
+   585→
+   586→    // Ziele pro Frame + Seite vorbereiten (unabhängig von den Gelenken).
+   587→    // Oberschenkel/Oberarm = reine RICHTUNGEN (die Twist um die Knochenachse
+   588→    // ist visuell irrelevant und erzeugte sonst Hüft-/Schulter-Verdrehungen
+   589→    // bis ins Gelenklimit — der Twist bleibt naturbelassen beim Warm-Start).
+   590→    const mkGoals = (f, side) => {
+   591→      const li = side === 'left' ? 0 : 4;
+   592→      const g = { hasThigh: false, hasShin: false, hasFoot: false, hasArm: false, hasFore: false,
+   593→        dThigh: [0, 0, 0], dShin: [0, 0, 0], dArm: [0, 0, 0], dFore: [0, 0, 0] };
+   594→      const oT = (f * 8 + li) * 3, oS = (f * 8 + li + 1) * 3;
+   595→      const oA = (f * 8 + li + 2) * 3, oF = (f * 8 + li + 3) * 3;
+   596→      const t1 = [0, 0, 0, 1], t2 = [0, 0, 0, 1];
+   597→      const yq = [0, 0, Math.sin(-triadYaw[f] / 2), Math.cos(-triadYaw[f] / 2)]; // rotZ(-triadYaw)
+   598→      if (Number.isFinite(dSrc[oT])) {
+   599→        rotVec(yq, [dSrc[oT], dSrc[oT + 1], dSrc[oT + 2]], g.dThigh);
+   600→        g.hasThigh = true;
+   601→      }
+   602→      if (Number.isFinite(dSrc[oS])) {
+   603→        rotVec(yq, [dSrc[oS], dSrc[oS + 1], dSrc[oS + 2]], g.dShin);
+   604→        g.hasShin = true;
+   605→      }
+   606→      const o4 = (f * 2 + (side === 'left' ? 0 : 1)) * 4;
+   607→      if (Number.isFinite(footW[o4])) {
+   608→        t1[0] = footW[o4]; t1[1] = footW[o4 + 1]; t1[2] = footW[o4 + 2]; t1[3] = footW[o4 + 3];
+   609→        quatMul2(yq, t1, t2); quatMul2(t2, CAL[side].foot, t1);
+   610→        g.qFoot = t1.slice(); g.hasFoot = true;
+   611→      }
+   612→      if (Number.isFinite(dSrc[oA])) {
+   613→        rotVec(yq, [dSrc[oA], dSrc[oA + 1], dSrc[oA + 2]], g.dArm);
+   614→        g.hasArm = true;
+   615→      }
+   616→      if (Number.isFinite(dSrc[oF]) && G1D0[side].fore) {
+   617→        rotVec(yq, [dSrc[oF], dSrc[oF + 1], dSrc[oF + 2]], g.dFore);
+   618→        g.hasFore = true;
+   619→      }
+   620→      return g;
+   621→    };
+   622→
+   623→    const bq4 = [0, 0, 0, 1];
+   624→    const dDisp = [0, 0, 0];
+   625→    const pA = [0, 0, 0], pB = [0, 0, 0];
+   626→    const dBase = [0, 0, 0], tInv = [0, 0, 0, 1];
+   627→    // Analytischer Seed (Minimal-Twist): Zielrichtung in den BASIS-Rahmen
+   628→    // drehen, die minimale Rotation von der Nullpose-Richtung dorthin als
+   629→    // Rotationsvektor auf die Nullpose-Achsen (yaw≈Z, roll≈X, pitch≈Y)
+   630→    // projizieren. Ohne Seed wandert der gierige Abstieg bei großen Winkeln
+   631→    // (Zombie: ~105° Hüftbeugung) in verdrehte Äquivalentlösungen (90°-Yaw,
+   632→    // Roll am Limit) — der Seed hält den Twist naturbelassen.
+   633→    const seedChain = (off2, d0, dGoalW, jNames) => {
+   634→      quatConj(bq4, tInv);
+   635→      rotVec(tInv, dGoalW, dBase);
+   636→      quatFromTwoVecs(d0, dBase, qTmp);
+   637→      const ang = quatLogAxis(qTmp, axisTmp);
+   638→      const rv = [axisTmp[0] * ang, axisTmp[1] * ang, axisTmp[2] * ang];
+   639→      // jNames = [yaw, roll, pitch] — Achsen Z, X, Y (Nullpose, ≈Rumpfframe)
+   640→      const seed = [rv[2], rv[0], rv[1]];
+   641→      if (typeof process !== 'undefined' && process.env.RETARGET_DEBUG) {
+   642→        console.log(`[SEED] d0=(${d0.map(v => v.toFixed(2))}) dGoalW=(${dGoalW.map(v => v.toFixed(2))}) dBase=(${dBase.map(v => v.toFixed(2))}) ` +
+   643→          `seed(yaw/roll/pitch)=${seed.map(v => v.toFixed(2)).join('/')} baseQ=(${[bq4[0], bq4[1], bq4[2], bq4[3]].map(v => v.toFixed(2)).join(',')})`);
+   644→      }
+   645→      for (let j = 0; j < 3; j++) q[off2 + A[jNames[j]]] = clampA(jNames[j], seed[j]);
+   646→    };
+   647→    // Koordinaten-Abstieg: entries = [{name, aid, anti?}]. „anti“ ist ein
+   648→    // gekoppelter Folgegelenk-Zug, der die NEGATIVE Deltasumme erhält:
+   649→    // Hüfte +Δ mit Knie −Δ dreht den OBERSCHENKEL bei raumfester SCHIENE —
+   650→ // so kann der Abstieg die Hüftrichtung verbessern, ohne die Schiene zu
+   651→    // verlieren, und der Gelenk-Twist bleibt naturbelassen (Yaw-Züge mit
+   652→    // Anti sind richtungsneutral und wandern nicht weg).
+   653→    const descend = (off2, errFn, entries, sweeps) => {
+   654→      let e = errFn();
+   655→      if (e < 0.02) return e; // < 1,2° — nichts zu tun (FK-Budget sparen)
+   656→      for (let sw = 0; sw < sweeps; sw++) {
+   657→        let improved = false;
+   658→        for (const en of entries) {
+   659→          for (const step of [0.3, 0.1, 0.03]) {
+   660→            let hit = false;
+   661→            for (const s of [1, -1]) {
+   662→              const old = q[off2 + en.aid];
+   663→              q[off2 + en.aid] = clampA(en.name, old + s * step);
+   664→              let oldAnti = null, antiMoved = true;
+   665→              if (en.anti !== undefined) {
+   666→                oldAnti = q[off2 + en.anti];
+   667→                q[off2 + en.anti] = clampA(en.antiName, oldAnti - s * step);
+   668→                // Klemmt das Folgegelenk (bewegt sich nicht voll), verwirf den
+   669→                // Zug KOMPLETT: Sonst entartet der Anti-Zug zum nackten
+   670→                // proximale Zug (Twist-Drift + unbemerkter Schienenschaden).
+   671→                antiMoved = Math.abs(q[off2 + en.anti] - oldAnti) > 0.499 * step;
+   672→              }
+   673→              const e2 = errFn();
+   674→              if (antiMoved && e2 < e - 1e-5) { e = e2; improved = hit = true; break; }
+   675→              q[off2 + en.aid] = old;
+   676→              if (oldAnti !== null) q[off2 + en.anti] = oldAnti;
+   677→            }
+   678→            if (hit) break;
+   679→          }
+   680→          if (e < 0.02) return e; // früh genug — Restspiel fractioniert nicht
+   681→        }
+   682→        if (!improved) break;
+   683→      }
+   684→      return e;
+   685→    };
+   686→
+   687→    for (let f = 0; f < n; f++) {
+   688→      const off2 = f * nu;
+   689→      bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+   690→      for (const side of ['left', 'right']) {
+   691→        const bb = G1B[side];
+   692→        const G = mkGoals(f, side);
+   693→        bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+   694→        // ENTKOPPELT lösen (ein Ziel je Kette — gekoppelte Mischfehler erzeugen
+   695→        // raue Local Minima, in denen der Abstieg stecken bleibt):
+   696→        // 1) Hüfte: Oberschenkel-Richtung   2) Knie: Schien-Richtung
+   697→        // 3) Knöchel: Fuß-Orientierung      4) Schulter: Oberarm-Richtung
+   698→        // 5) Ellbogen: Unterarm-Richtung
+   699→        // Hüfte/Schulter erhalten je einen Minimal-Twist-Seed (s. o.).
+   700→        {
+   701→          const hipNames = [side + '_hip_yaw_joint', side + '_hip_roll_joint', side + '_hip_pitch_joint'];
+   702→          if (G.hasThigh) seedChain(off2, G1D0[side].thigh, G.dThigh, hipNames);
+   703→          // ALTERNIEREND: Hüfte (nur Oberschenkel-Ziel) ↔ Knie (nur Schien-Ziel),
+   704→          // 2 Runden. Ein kombinierter Fehler funktioniert NICHT: Mit festem
+   705→          // Knie dreht eine Hüftbewegung Oberschenkel UND Schiene gleichmäßig →
+   706→          // 1,0·Δ − 0,8·Δ > 0 → die Hüfte friert ein. Getrennte Teilprobleme
+   707→          // sind je wohlkonditioniert und konvergieren im Wechsel zum Optimum.
+   708→          const hipEntries = [
+   709→            { name: side + '_hip_yaw_joint', aid: A[side + '_hip_yaw_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
+   710→            { name: side + '_hip_roll_joint', aid: A[side + '_hip_roll_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
+   711→            { name: side + '_hip_pitch_joint', aid: A[side + '_hip_pitch_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
+   712→          ];
+   713→          const kneeEntries = [side + '_knee_joint'].map(nm => ({ name: nm, aid: A[nm] }));
+   714→          // REINER Oberschenkel-Fehler für die Hüft-Züge: Die Anti-Züge (mit
+   715→          // Clamp-Rejekt) halten die Schiene raumfix, sodass die Hüfte die
+   716→          // Richtung optimal anfahren kann, ohne die Schiene zubeeinflussen.
+   717→          const thighErr = G.hasThigh ? () => {
+   718→            sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   719→            gposOf(bb.hip, pA); gposOf(bb.knee, pB);
+   720→            dirFromTo(pA, pB, dDisp);
+   721→            return angBetween(dDisp, G.dThigh);
+   722→          } : () => 0;
+   723→          const shinErr = G.hasShin ? () => {
+   724→            sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   725→            gposOf(bb.knee, pA); gposOf(bb.ankle, pB);
+   726→            dirFromTo(pA, pB, dDisp);
+   727→            return angBetween(dDisp, G.dShin);
+   728→          } : () => 0;
+   729→          // Kombiniert (nur für die Rettungsrunde)
+   730→          const legErr = (G.hasThigh || G.hasShin) ? () => {
+   731→            sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   732→            let e = 0;
+   733→            if (G.hasThigh) {
+   734→              gposOf(bb.hip, pA); gposOf(bb.knee, pB);
+   735→              dirFromTo(pA, pB, dDisp);
+   736→              e += angBetween(dDisp, G.dThigh);
+   737→            }
+   738→            if (G.hasShin) {
+   739→              gposOf(bb.knee, pA); gposOf(bb.ankle, pB);
+   740→              dirFromTo(pA, pB, dDisp);
+   741→              e += 0.8 * angBetween(dDisp, G.dShin);
+   742→            }
+   743→            return e;
+   744→          } : () => 0;
+   745→          for (let round = 0; round < 2; round++) {
+   746→            descend(off2, thighErr, hipEntries, 6);
+   747→            descend(off2, shinErr, kneeEntries, 6);
+   748→          }
+   749→          // Rettungsrunde: kombinierter Fehler — wenn das Knie freie Range hat,
+   750→          // halten die Anti-Züge die Schiene fix (kein Trade-off); klemmt es,
+   751→          // balanciert der kombinierte Fehler Oberschenkel gegen Schiene.
+   752→          descend(off2, legErr, hipEntries, 5);
+   753→          descend(off2, shinErr, kneeEntries, 6);
+   754→        }
+   755→        if (G.hasFoot) {
+   756→          const entries = [side + '_ankle_pitch_joint', side + '_ankle_roll_joint']
+   757→            .map(nm => ({ name: nm, aid: A[nm] }));
+   758→          const errFn = () => {
+   759→            sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   760→            return oriErrOf(G.qFoot, bb.ankle);
+   761→          };
+   762→          descend(off2, errFn, entries, 8);
+   763→        }
+   764→        if (bones[side + 'Arm'] !== undefined) {
+   765→          {
+   766→            const shNames = [side + '_shoulder_pitch_joint', side + '_shoulder_roll_joint', side + '_shoulder_yaw_joint'];
+   767→            if (G.hasArm) {
+   768→              // Seed: [pitch, roll, yaw] — Rotvektor (X, Y, Z) → pitch=X, roll=Y, yaw=Z
+   769→              quatConj(bq4, tInv);
+   770→              rotVec(tInv, G.dArm, dBase);
+   771→              quatFromTwoVecs(G1D0[side].arm, dBase, qTmp);
+   772→              const ang = quatLogAxis(qTmp, axisTmp);
+   773→              const rvS = [axisTmp[0] * ang, axisTmp[1] * ang, axisTmp[2] * ang];
+   774→              const seedS = [rvS[0], rvS[1], rvS[2]]; // pitch←X, roll←Y, yaw←Z
+   775→              for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = clampA(shNames[j], seedS[j]);
+   776→            }
+   777→            // Arm ALTERNIEREND: Schulter (nur Oberarm-Ziel) ↔ Ellbogen
+   778→            // (nur Unterarm-Ziel), 2 Runden — gleiche Begründung wie beim Bein
+   779→            // (kombinierter Fehler = Barriere für die proximale Kette).
+   780→            const shEntries = [
+   781→              { name: side + '_shoulder_pitch_joint', aid: A[side + '_shoulder_pitch_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
+   782→              { name: side + '_shoulder_roll_joint', aid: A[side + '_shoulder_roll_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
+   783→              { name: side + '_shoulder_yaw_joint', aid: A[side + '_shoulder_yaw_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
+   784→            ];
+   785→            const elEntries = [side + '_elbow_joint'].map(nm => ({ name: nm, aid: A[nm] }));
+   786→            // Reiner Oberarm-Fehler für die Schulter-Züge (Anti + Clamp-Rejekt
+   787→            // schützen den Unterarm — gleiche Logik wie beim Bein)
+   788→            const armDirErr = G.hasArm ? () => {
+   789→              sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   790→              gposOf(bb.upperArm, pA); gposOf(bb.elbow, pB);
+   791→              dirFromTo(pA, pB, dDisp);
+   792→              return angBetween(dDisp, G.dArm);
+   793→            } : () => 0;
+   794→            const foreDirErr = G.hasFore ? () => {
+   795→              sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   796→              gposOf(bb.elbow, pA); gposOf(bb.wrist, pB);
+   797→              dirFromTo(pA, pB, dDisp);
+   798→              return angBetween(dDisp, G.dFore);
+   799→            } : () => 0;
+   800→            // Kombiniert (nur für die Rettungsrunde)
+   801→            const armErr = (G.hasArm || G.hasFore) ? () => {
+   802→              sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   803→              let e = 0;
+   804→              if (G.hasArm) {
+   805→                gposOf(bb.upperArm, pA); gposOf(bb.elbow, pB);
+   806→                dirFromTo(pA, pB, dDisp);
+   807→                e += angBetween(dDisp, G.dArm);
+   808→              }
+   809→              if (G.hasFore) {
+   810→                gposOf(bb.elbow, pA); gposOf(bb.wrist, pB);
+   811→                dirFromTo(pA, pB, dDisp);
+   812→                e += 0.8 * angBetween(dDisp, G.dFore);
+   813→              }
+   814→              return e;
+   815→            } : () => 0;
+   816→            for (let round = 0; round < 2; round++) {
+   817→              descend(off2, armDirErr, shEntries, 6);
+   818→              descend(off2, foreDirErr, elEntries, 6);
+   819→            }
+   820→            // Rettungsrunde (klemmt der Ellbogen, darf die Schulter auffangen)
+   821→            descend(off2, armErr, shEntries, 5);
+   822→            descend(off2, foreDirErr, elEntries, 6);
+   823→          }
+   824→        }
+   825→        if (f === 0 && typeof process !== 'undefined' && process.env.RETARGET_DEBUG) {
+   826→          sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
+   827→          const dbg = (a, b, goalDir) => {
+   828→            gposOf(a, pA); gposOf(b, pB);
+   829→            dirFromTo(pA, pB, dDisp);
+   830→            return (angBetween(dDisp, goalDir) * 180 / Math.PI).toFixed(1);
+   831→          };
+   832→          const hj = [side + '_hip_yaw_joint', side + '_hip_roll_joint', side + '_hip_pitch_joint'];
+   833→          console.log(`[IK-DEBUG f0 ${side}] OS=${G.hasThigh ? dbg(bb.hip, bb.knee, G.dThigh) : '-'}° ` +
+   834→            `SB=${G.hasShin ? dbg(bb.knee, bb.ankle, G.dShin) : '-'}° ` +
+   835→            `OA=${G.hasArm ? dbg(bb.upperArm, bb.elbow, G.dArm) : '-'}° ` +
+   836→            `UA=${G.hasFore ? dbg(bb.elbow, bb.wrist, G.dFore) : '-'}° ` +
+   837→            `q=${hj.map(nm => q[off2 + A[nm]].toFixed(2)).join('/')} ` +
+   838→            `knee=${q[off2 + A[side + '_knee_joint']].toFixed(2)} ` +
+   839→            `dThigh=${G.hasThigh ? G.dThigh.map(v => v.toFixed(2)).join(',') : '-'} ` +
+   840→            `triadYaw=${(triadYaw[f] * 180 / Math.PI).toFixed(0)}°`);
+   841→        }
+   842→      }
+   843→    }
+   844→  }
+   845→
+   846→  // ── Boden-Anpassung (Fuß erden): tiefsten Fußpunkt pro Frame via Geist ──
+   847→  // WICHTIG: MIT Basis-Orientierung (baseQ) — bei gebeugtem Lehrer (Zombie)
+   848→  // hängen die Füße sonst falsch und die Höhe würde verkalkt. Die Tiefe je
+   849→  // Fuß-Geom wird ECHT aus den Mesh-Vertices/Kugel-Radien bestimmt (einmalig).
+   850→  const ghost = sim.makeGhostData();
+   851→  const bq4 = [0, 0, 0, 1];
+   852→  const footGeoms = sim.footGeoms || (sim.footGeoms = findFootGeoms(sim));
+   853→  for (let f = 0; f < n; f++) {
+   854→    const off = f * nu;
+   855→    bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+   856→    sim.setGhostPose(ghost, q, off, rawH[f], 0, 0, 0, bq4);
+   857→    let lowest = 0;
+   858→    // Füße: unterster Punkt aller Fuß-Geoms (Welt-z = Körper-hoch + Tiefen-Offset)
+   859→    for (const fg of footGeoms) {
+   860→      const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
+   861→      if (z < lowest) lowest = z;
+   862→    }
+   863→    h[f] = Math.min(1.15, Math.max(0.4, rawH[f] - lowest));
+   864→  }
+   865→  // Höhe glätten (Burgen vermeiden)…
+   866→  smooth(h, 5);
+   867→  // …und DANACH exakt erden: mit der GEGLÄTTETEN Höhe erneut messen und den
+   868→  // Rest-Auftrieb abziehen (das Glätten hebt den tiefsten Fuß sonst cm-weise an).
+   869→  // Echtes Minimum (auch positiv!) — sonst bleibt ein cm-Hover stehen.
+   870→  for (let f = 0; f < n; f++) {
+   871→    const off = f * nu;
+   872→    bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+   873→    sim.setGhostPose(ghost, q, off, h[f], 0, 0, 0, bq4);
+   874→    let lowest = Infinity;
+   875→    for (const fg of footGeoms) {
+   876→      const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
+   877→      if (z < lowest) lowest = z;
+   878→    }
+   879→    if (!Number.isFinite(lowest)) lowest = 0;
+   880→    h[f] = Math.min(1.15, Math.max(0.4, h[f] - lowest));
+   881→  }
+   882→
+   883→  return {
+   884→    name: clip.name || 'clip',
+   885→    fps, n, nu,
+   886→    q, h,
+   887→    root, yaw, srcPos, srcJoints,
+   888→    baseQ, // Basis-Orientierung je Frame (n×4, xyzw) — Lehrer-Nick/Roll für den Geist
+   889→    scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
+   890→    mergedFrom: clip.mergedFrom || 0,
+   891→    mapped: roleNames,
+   892→    duration: clip.duration,
+   893→  };
+   894→}
+   895→
+   896→// Fuß-Geoms mit ECHTER Tiefe: unterster Punkt je Geom im KÖRPER-Frame
+   897→// (Meshes: unterste Vertebra inkl. geom_quat; Kugel/Kapsel/Zylinder/Box: Formel)
+   898→function findFootGeoms(sim) {
+   899→  const out = [];
+   900→  const m = sim.model;
+   901→  for (let g = 0; g < sim.ngeom; g++) {
+   902→    const b = m.geom_bodyid[g];
+   903→    const name = mjName(sim, b);
+   904→    if (!name || !/ankle|foot/i.test(name)) continue;
+   905→    const type = m.geom_type[g];
+   906→    const pz = m.geom_pos[3 * g + 2];
+   907→    let lowZ = pz;
+   908→    if (type === 7) { // Mesh: unterste Vertebra (geom_quat einrechnen)
+   909→      const qx = m.geom_quat[4 * g + 1], qy = m.geom_quat[4 * g + 2], qz = m.geom_quat[4 * g + 3], qw = m.geom_quat[4 * g];
+   910→      const dId = m.geom_dataid[g], vAdr = m.mesh_vertadr[dId], vNum = m.mesh_vertnum[dId];
+   911→      let minVz = 0;
+   912→      for (let i = 0; i < vNum; i++) {
+   913→        const vx = m.mesh_vert[3 * (vAdr + i)], vy = m.mesh_vert[3 * (vAdr + i) + 1], vz = m.mesh_vert[3 * (vAdr + i) + 2];
+   914→        const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx);
+   915→        const z = vz + qw * tz + (qx * ty - qy * tx); // z von q⊗v⊗q*
+   916→        if (z < minVz) minVz = z;
+   917→      }
+   918→      lowZ = pz + minVz;
+   919→    } else if (type === 2) lowZ = pz - m.geom_size[3 * g];                          // Kugel
+   920→    else if (type === 3) lowZ = pz - (m.geom_size[3 * g] + m.geom_size[3 * g + 1]); // Kapsel (Z-Achse)
+   921→    else if (type === 5) lowZ = pz - m.geom_size[3 * g + 1];                        // Zylinder
+   922→    else if (type === 6) lowZ = pz - m.geom_size[3 * g + 2];                        // Box
+   923→    out.push({ body: b, lowZ });
+   924→  }
+   925→  return out;
+   926→}
+   927→
+   928→// Rotationsmatrix (Spalten X=fwd, Y=left, Z=up) → Quaternion [x,y,z,w]
+   929→// (Shepperd-Methode — für die konventionsfreie Basis-Triade)
+   930→function mat3ToQuat(xx, xy, xz, yx, yy, yz, zx, zy, zz, out) {
+   931→  const m00 = xx, m01 = yx, m02 = zx;
+   932→  const m10 = xy, m11 = yy, m12 = zy;
+   933→  const m20 = xz, m21 = yz, m22 = zz;
+   934→  const tr = m00 + m11 + m22;
+   935→  let qx = 0, qy = 0, qz = 0, qw = 1, S;
+   936→  if (tr > 0) {
+   937→    S = Math.sqrt(tr + 1) * 2; qw = 0.25 * S;
+   938→    qx = (m21 - m12) / S; qy = (m02 - m20) / S; qz = (m10 - m01) / S;
+   939→  } else if (m00 > m11 && m00 > m22) {
+   940→    S = Math.sqrt(1 + m00 - m11 - m22) * 2; qw = (m21 - m12) / S; qx = 0.25 * S;
+   941→    qy = (m01 + m10) / S; qz = (m02 + m20) / S;
+   942→  } else if (m11 > m22) {
+   943→    S = Math.sqrt(1 + m11 - m00 - m22) * 2; qw = (m02 - m20) / S; qy = 0.25 * S;
+   944→    qx = (m01 + m10) / S; qz = (m12 + m21) / S;
+   945→  } else {
+   946→    S = Math.sqrt(1 + m22 - m00 - m11) * 2; qw = (m10 - m01) / S; qz = 0.25 * S;
+   947→    qx = (m02 + m20) / S; qy = (m12 + m21) / S;
+   948→  }
+   949→  const n = Math.hypot(qx, qy, qz, qw) || 1;
+   950→  out[0] = qx / n; out[1] = qy / n; out[2] = qz / n; out[3] = qw / n;
+   951→  return out;
+   952→}
+   953→function mjName(sim, b) {
+   954→  try { return sim._mjApi.mj_id2name(sim.model, 1, b); } catch (e) { return null; } // mjOBJ_BODY=1
+   955→}
+   956→
+   957→function smooth(arr, win) {
+   958→  const n = arr.length;
+   959→  const out = new Float32Array(n);
+   960→  for (let i = 0; i < n; i++) {
+   961→    let s = 0, c = 0;
+   962→    for (let k = -win; k <= win; k++) {
+   963→      const j = i + k;
+   964→      if (j >= 0 && j < n) { s += arr[j]; c++; }
+   965→    }
+   966→    out[i] = s / c;
+   967→  }
+   968→  arr.set(out);
+   969→}
+   970→
