@@ -1,5 +1,6 @@
 // motion_ctrl_test.mjs — v2.6.0-Verifikation der Motion-Task-Änderungen:
-//   1) obsDim = 3·nu + 18 (Kommando vx/wz + 4 Trigger-Kanäle für Buttons)
+//   1) obsDim = 3·nu + 27 (v2.7.0: +9 Sensorik — Gyro 3, projizierte Gravitation 3,
+//      Basis-Höhe 1, Fußkontakte 2; v2.6.0: +4 Trigger-Kanäle für Buttons)
 //   2) ctrlMode 'none': Kommandos/Trigger bleiben 0, Ziel = Referenzbahn
 //   3) ctrlMode 'joy': sampleCmd würfelt, Wurzel-Ziel integriert (vx, wz),
 //      Phasen-Faktor bleibt in [0.4, 1.7]
@@ -40,6 +41,9 @@ function makeSim() {
     baseQuat(out) { out[0] = 1; out[1] = out[2] = out[3] = 0; return out; },
     basePos(out) { out[0] = 0; out[1] = 0; out[2] = 0.79; return out; },
     baseVelWorld(out) { out[0] = out[1] = out[2] = 0; return out; },
+    gyroBody(out) { out[0] = 0.01; out[1] = -0.02; out[2] = 0.03; return out; },
+    projectedGravity(out) { out[0] = 0; out[1] = 0; out[2] = -1; return out; },
+    footContacts(out) { out[0] = 1; out[1] = 0; return out; },
     placeBase() {},
   };
   s._q = q; s._dq = dq;
@@ -58,7 +62,7 @@ const cfg = { nu, actSpan: 0.4 };
 // ── 1) obsDim ──
 {
   const t = makeMotionTask(cfg, makeClip(false), sim);
-  check('obsDim = 3·nu + 18 (v2.6.0: +4 Trigger)', t.obsDim === 3 * nu + 18);
+  check('obsDim = 3·nu + 27 (v2.7.0: +9 Sensorik, +4 Trigger)', t.obsDim === 3 * nu + 27);
 }
 
 // ── 2) 'none': Kommandos 0, Beobachtung vollständig, Reward endlich ──
@@ -71,8 +75,8 @@ const cfg = { nu, actSpan: 0.4 };
   for (let k = 0; k < 120; k++) {
     const used = t.observe(sim, obs);
     if (used !== t.obsDim) { ok = false; break; }
-    // Reihenfolge: … lead, sin, cos, cmd.vx, cmd.wz, trg0-3, lastAct(nu)
-    const c0 = t.obsDim - nu - 6;
+    // Reihenfolge: … lead, sin, cos, cmd(2), trg(4), GYRO(3), GRAV(3), HÖHE(1), KONTAKTE(2), lastAct(nu)
+    const c0 = t.obsDim - nu - 15; // Kommandos+Trigger+Sensorik vor den letzten Aktionen
     for (let i = 0; i < 6; i++) if (obs[c0 + i] !== 0) { ok = false; break; } // Kommandos+Trigger 0
     if (!ok) break;
     t.advance(0.02);
@@ -98,8 +102,8 @@ const cfg = { nu, actSpan: 0.4 };
     if (Math.hypot(t._tx - x0, t._ty - y0) > 0.01) txMoved = true;
     const used = t.observe(sim, obs);
     if (used !== t.obsDim) { holdOk = false; break; }
-    // Führung-Kanal: cmd.vx liegt bei obsDim−nu−6 (in joy ist lead gleich)
-    if (Math.abs(obs[t.obsDim - nu - 6] - t.cmd.vx) > 1e-6) { holdOk = false; break; }
+    // Führung-Kanal: cmd.vx liegt bei obsDim−nu−15 (in joy ist lead gleich)
+    if (Math.abs(obs[t.obsDim - nu - 15] - t.cmd.vx) > 1e-6) { holdOk = false; break; }
   }
   check("'joy': Zufalls-Kommandos erscheinen (vx≠0 oder wz≠0)", cmdSeen);
   check("'joy': Haltezeit ≤ 4 s", holdOk);
@@ -176,7 +180,7 @@ const cfg = { nu, actSpan: 0.4 };
   for (let k = 0; k < 300; k++) { t.advance(0.02); t.observe(sim, obs); }
   check("'btn': Trigger-Kanal fällt nach Haltezeit auf ~0", t.trg[1] < 0.05);
   const used = t.observe(sim, obs);
-  check("'btn': Trigger-Kanäle liegen im obs (Positionen korrekt)", used === t.obsDim && Math.abs(obs[t.obsDim - nu - 4] - t.trg[0]) < 1e-6);
+  check("'btn': Trigger-Kanäle liegen im obs (Positionen korrekt, vor Sensorik)", used === t.obsDim && Math.abs(obs[t.obsDim - nu - 13] - t.trg[0]) < 1e-6);
   // d) Reward: aktiver Trigger dämpft Posen-Anteil + zahlt Bewegungs-Bonus
   t.reset(null, sim);
   const r0 = t.reward(sim).r; // kein Trigger

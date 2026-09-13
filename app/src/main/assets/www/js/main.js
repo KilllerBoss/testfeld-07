@@ -4,8 +4,9 @@
 // Roboterwechsel. Kein Fallback: Fehler werden hart angezeigt.
 // ═══════════════════════════════════════════════════════════
 
-import { initEngine, fetchModelIntoFS, removeModelFromFS, RobotSim, setModelProgress, mj } from './engine.js';
+import { initEngine, fetchModelIntoFS, removeModelFromFS, hasModelInFS, RobotSim, setModelProgress, mj, writeWorldFile } from './engine.js';
 import { ROBOT_ORDER, getRobot, HOVER_R } from './robots.js';
+import { buildWorldXML, WORLDS, getWorld } from './worlds.js';
 import { Renderer3D } from './render3d.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -19,7 +20,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.6.1';
+const VERSION = '2.7.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -55,7 +56,17 @@ const S = {
   animTraining: true, // GLB-Animation im Training an/aus (aus = nur Gleichgewicht)
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
+  world: loadWorldState(), // v2.7.0: aktuelle Welt {id, seed} — prozedural generiert
 };
+
+// v2.7.0 — Welt-Auswahl (persistiert): Preset-Welten + Zufallsgenerator
+function loadWorldState() {
+  try {
+    const w = JSON.parse(localStorage.getItem('tr_world_v1') || 'null');
+    if (w && typeof w.id === 'string') return { id: w.id, seed: (w.seed | 0) || 1 };
+  } catch (e) { /* defekt → Standard */ }
+  return { id: 'testfeld', seed: 1 };
+}
 
 // PPO-Überschreibungen aus dem KI-Trainer (T wirkt beim nächsten Start)
 const PPO_OVERRIDES = {};
@@ -76,8 +87,16 @@ async function loadRobot(id, first = false) {
 
     log(`Kompiliere ${cfg.dir} (${cfg.longName}) …`);
     const t0 = performance.now();
-    await fetchModelIntoFS('models/' + cfg.dir);
-    const sim = new RobotSim(cfg, cfg.scene);
+    // v2.7.0: Dateien nur EINMAL laden — bei Roboter-/Weltwechseln sind sie
+    // noch im Emscripten-FS (Re-Fetch kostete RAM und konnte den Heap
+    // wachsen lassen → Freezes).
+    if (hasModelInFS(cfg.dir)) log(`Modelldateien ${cfg.dir} bereits geladen — wiederverwendet`);
+    else await fetchModelIntoFS('models/' + cfg.dir);
+    // v2.7.0 — WELT GENERIEREN: prozedurale MJCF (skaliert auf die
+    // Robotergröße), in den Modellordner schreiben und kompilieren.
+    const worldXml = buildWorldXML(cfg, S.world.id, S.world.seed);
+    writeWorldFile(cfg.dir, 'welt_live.xml', worldXml);
+    const sim = new RobotSim(cfg, 'welt_live.xml');
     const ms = Math.round(performance.now() - t0);
 
     // Alte Simulation freigeben
@@ -114,10 +133,18 @@ async function loadRobot(id, first = false) {
     // KI-Anpassungen für diese Aufgabe wieder aufschalten (Belohnungen etc.)
     applySavedAICfg(id);
 
-    // Gespeicherte Policy für DIESE Aufgabenart laden (falls vorhanden)
+    // Gespeicherte Policy für DIESE Aufgabenart laden (falls vorhanden).
+    // v2.7.0: Bei Weltwechsel (gleicher Roboter) bleibt das TRAINING im
+    // Speicher erhalten (obsDim passt weiter) — nur Roboterwechsel lädt neu.
+    const keepTrainer = (S.robotId === id) ? S.trainer : null;
     S.trainer = null;
-    const saved = loadPolicy(id);
-    if (saved) { S.trainer = saved; }
+    if (keepTrainer && S.task && keepTrainer.obsDim === S.task.obsDim && keepTrainer.actDim === S.task.actDim) {
+      S.trainer = keepTrainer;
+      log('Training fortgeführt (Weltwechsel — Netz bleibt erhalten)', 'ok');
+    } else {
+      const saved = loadPolicy(id);
+      if (saved) { S.trainer = saved; }
+    }
 
     // Welt & Optik
     r3d.buildFromModel(sim);
@@ -153,32 +180,47 @@ function countMeshes(sim) {
 }
 
 // ── Policy persistieren ─────────────────────────────────────
+// v2.7.0 — PRO-CLIP-KEYS: Motion-Policies werden pro GLB-Clip gespeichert
+// (tr_policy_<robot>_motion_<clipId>) statt in EINEM geteilten Key. Vorher
+// übernahm der nächste Clip die Policy des vorherigen (Überschreiben) und
+// beim Deaktivieren „verschwand“ das Gelernte — jetzt behält JEDER Clip
+// seine eigene Policy. Der Legacy-Key wird beim Laden als Fallback gelesen.
 function policyKey(id) {
+  if (S.task && S.task.kind === 'motion') {
+    return 'tr_policy_' + id + '_motion_' + (S.activeRecId || 'none');
+  }
+  return 'tr_policy_' + id + '_speed';
+}
+function legacyPolicyKey(id) {
   const kind = S.task && S.task.kind === 'motion' ? 'motion' : 'speed';
   return 'tr_policy_' + id + '_' + kind;
 }
+function policyExistsForClip(recId) {
+  try { return !!localStorage.getItem('tr_policy_g1_motion_' + recId); } catch (e) { return false; }
+}
 function loadPolicy(id) {
   try {
-    const raw = localStorage.getItem(policyKey(id));
+    let raw = localStorage.getItem(policyKey(id));
+    if (!raw && S.task && S.task.kind === 'motion') raw = localStorage.getItem(legacyPolicyKey(id));
     if (!raw) return null;
     const p = PPO.fromJSON(JSON.parse(raw));
     // Format-Wache: Policy muss zur AKTUELLEN Aufgabe passen (Motion hat
-    // seit Root-Folgen einen anderen Beobachtungsraum als Speed; v2.5.0
-    // kam +2 Kommando-Kanäle hinzu)
+    // seit Root-Folgen einen anderen Beobachtungsraum als Speed; v2.7.0
+    // kam +9 Sensorik-Kanäle hinzu)
     if (S.task && (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim)) {
-      log(`Alte Policy verworfen: Beobachtungsraum ${p.obsDim} ≠ ${S.task.obsDim} (v2.5.0: +2 Steuerungs-Kanäle) — neu trainieren`, 'warn');
+      log(`Alte Policy verworfen: Beobachtungsraum ${p.obsDim} ≠ ${S.task.obsDim} (v2.7.0: +9 Sensorik — Gyro, Gravitation, Höhe, Fußkontakte, Takt) — neu trainieren`, 'warn');
       return null;
     }
     return p;
   } catch (e) { return null; }
 }
-function savePolicy(id) {
+function savePolicy(id, opts = {}) {
   if (!S.trainer) { ui.toast('Keine Policy zum Speichern', true); return; }
   try {
     localStorage.setItem(policyKey(id), JSON.stringify(S.trainer.toJSON()));
-    ui.toast('Policy gespeichert');
+    if (!opts.silent) ui.toast('Policy gespeichert');
     ui.policyAvailable(true);
-    log(`Policy gespeichert (${id}, ${S.trainer.stepCount} Schritte)`, 'ok');
+    log(`Policy gespeichert (${id}${S.activeRecId ? ' · Clip ' + S.activeRecId.slice(0, 18) : ''}, ${S.trainer.stepCount} Schritte)`, 'ok');
   } catch (e) {
     ui.toast('Speichern fehlgeschlagen: ' + e.message, true);
   }
@@ -323,6 +365,85 @@ function doPush(dir = 'auto', strength = null) {
   return 'Schubs ausgeführt (dir=' + dir + ', strength=' + st.toFixed(1) + ')';
 }
 
+// ── v2.7.0: Roboterleiste + Weltleiste ──────────────────────
+// Roboter dynamisch aus ROBOT_ORDER (neue Modelle erscheinen automatisch)
+function renderRobotBar() {
+  const bar = document.getElementById('robotBar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  for (const id of ROBOT_ORDER) {
+    const cfg = getRobot(id);
+    const chip = document.createElement('button');
+    chip.className = 'robot-chip';
+    chip.dataset.robot = id;
+    const dot = document.createElement('span');
+    dot.className = 'rc-dot';
+    dot.style.background = cfg.color;
+    const nm = document.createElement('span');
+    nm.className = 'rc-name';
+    nm.textContent = cfg.name.replace('UNITREE ', '').replace('SKYDIO ', '');
+    const sub = document.createElement('span');
+    sub.className = 'rc-sub';
+    sub.textContent = cfg.sub.split(' · ')[0];
+    chip.append(dot, nm, sub);
+    chip.addEventListener('click', () => {
+      if (id === S.robotId || S.switching) return;
+      controls.buzz(10);
+      loadRobot(id);
+    });
+    bar.appendChild(chip);
+  }
+  ui.setRobotActive(S.robotId);
+}
+
+// Weltleiste: Preset-Welten + Zufall + Neu-Würfeln-Button
+function renderWorldBar() {
+  const bar = document.getElementById('worldBar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'world-label';
+  label.textContent = 'WELT';
+  bar.appendChild(label);
+  for (const w of WORLDS) {
+    const chip = document.createElement('button');
+    chip.className = 'world-chip' + (S.world.id === w.id ? ' active' : '');
+    chip.dataset.world = w.id;
+    chip.textContent = w.name.toUpperCase();
+    chip.title = w.desc;
+    chip.addEventListener('click', () => {
+      if (S.world.id === w.id || S.switching) return;
+      controls.buzz();
+      setWorld(w.id, S.world.seed);
+    });
+    bar.appendChild(chip);
+  }
+  const dice = document.createElement('button');
+  dice.className = 'world-dice' + (S.world.id === 'zufall' ? '' : ' hidden');
+  dice.id = 'worldDice';
+  dice.title = 'Neue Zufallswelt (neuer Seed)';
+  dice.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="7" cy="7" r="1.1" fill="currentColor"/><circle cx="17" cy="17" r="1.1" fill="currentColor"/></svg>NEU';
+  dice.addEventListener('click', () => {
+    if (S.world.id !== 'zufall' || S.switching) return;
+    controls.buzz();
+    setWorld('zufall', (Math.random() * 2147483647) | 0);
+  });
+  bar.appendChild(dice);
+}
+
+// Welt wechseln / neu würfeln: Roboter in der neuen Welt neu kompilieren.
+// Das Training bleibt im Speicher erhalten (obsDim unverändert) —
+// Policies bleiben gespeichert.
+async function setWorld(id, seed) {
+  S.world = { id, seed: seed || 1 };
+  try { localStorage.setItem('tr_world_v1', JSON.stringify(S.world)); } catch (e) { /* voll */ }
+  const w = getWorld(id);
+  log('Welt: ' + w.name + (id === 'zufall' ? ' (Seed ' + S.world.seed + ')' : '') + ' — ' + w.desc);
+  renderWorldBar();
+  await loadRobot(S.robotId);
+  ui.toast('Welt: ' + w.name + (id === 'zufall' ? ' · Seed ' + S.world.seed : ''));
+}
+
 function observeState() {
   const sim = S.sim;
   let up = null;
@@ -347,6 +468,8 @@ function observeState() {
       : null,
     clipButtons: (S.activeRecId && S.clips.find(r => r.id === S.activeRecId)?.buttons) || [],
     pushStrength: S.pushStrength,
+    world: S.world,
+    sensors: 'Gyro, projizierte Gravitation, Basis-Höhe, Fußkontakte, Phasen-Takt in der Beobachtung (v2.7.0)',
     joystick: controls.joyMap,
     buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
   });
@@ -822,7 +945,7 @@ async function boot() {
 
     ui.splash('Bereit.', 1);
     setTimeout(() => { ui.splashDone(); }, 250);
-    log('Bereit. Vier Roboter, ungebunden, gleiche Steuerung.', 'ok');
+    log('Bereit. Sechs Roboter · ' + WORLDS.length + ' Welten · Sensorik aktiv — gleiche Steuerung.', 'ok');
     requestAnimationFrame(loop);
   } catch (err) {
     console.error(err);
@@ -987,6 +1110,10 @@ function wireUI() {
     });
   }
 
+  // ── v2.7.0: Roboterleiste dynamisch (6 Modelle) ─────────
+  renderRobotBar();
+  renderWorldBar();
+
   document.getElementById('modeManuell').addEventListener('click', () => {
     S.mode = 'manuell';
     ui.setMode(S.mode);
@@ -1019,9 +1146,12 @@ function wireUI() {
     ui.drawChart();
     log('Training zurückgesetzt (Netz neu, Norm neu)', 'warn');
   });
-  for (const b of document.querySelectorAll('.speed-chip')) {
+  // v2.7.0 FIX: Nur Chips mit data-speed sind Tempo-Chips — die Steuerungs-
+  // Chips (Keine/Joystick/Buttons) teilen die Klasse .speed-chip und setzten
+  // versehentlich speedMode=undefined → Training lief nur 1 Schritt/Frame!
+  for (const b of document.querySelectorAll('.speed-chip[data-speed]')) {
     b.addEventListener('click', () => {
-      for (const x of document.querySelectorAll('.speed-chip')) x.classList.remove('active');
+      for (const x of document.querySelectorAll('.speed-chip[data-speed]')) x.classList.remove('active');
       b.classList.add('active');
       S.speedMode = b.dataset.speed;
       controls.buzz();
@@ -1330,6 +1460,15 @@ async function refreshClipList() {
     meta.className = 'glb-clip-meta';
     const m = rec.motion;
     meta.textContent = (m.duration || 0).toFixed(1) + 's · ' + m.n + 'F';
+    // v2.7.0: Policy-Badge — zeigt, dass dieser Clip ein gespeichertes
+    // Training hat (bleibt auch nach Deaktivieren/Neustart erhalten)
+    if (policyExistsForClip(rec.id)) {
+      const badge = document.createElement('span');
+      badge.className = 'glb-clip-badge';
+      badge.textContent = 'Policy';
+      badge.title = 'Gespeicherte Policy vorhanden (wird beim Aktivieren geladen)';
+      row.appendChild(badge);
+    }
     const use = document.createElement('button');
     use.className = 'btn small';
     if (active) {
@@ -1348,6 +1487,9 @@ async function refreshClipList() {
       await deleteClip(rec.id);
       if (active) deactivateClip();
       await refreshClipList();
+      // v2.7.0: Die Policy des gelöschten Clips bleibt bewusst gespeichert —
+      // ein versehentliches Entfernen zerstört kein Training.
+      ui.toast('Clip entfernt — seine Policy bleibt gespeichert');
     });
     row.append(name, meta, use, del);
     list.appendChild(row);
@@ -1424,6 +1566,13 @@ async function activateClip(rec) {
 
 function deactivateClip() {
   stopTraining(true);
+  // v2.7.0: Policy des Clips AUTOMATISCH SPEICHERN (solange die Aufgabe
+  // noch Motion ist und activeRecId gesetzt) — Deaktivieren ist KEIN
+  // Verlust mehr: beim Reaktivieren wird das Netz wieder geladen.
+  if (S.trainer && S.task && S.task.kind === 'motion' && S.activeRecId) {
+    savePolicy(S.robotId, { silent: true });
+    log('Policy des Clips automatisch gespeichert — bleibt erhalten');
+  }
   S.motionClip = null;
   S.srcScene = null;
   S.activeRecId = null;
@@ -1466,6 +1615,7 @@ Object.defineProperty(window, '__trainrobot', {
     get joyMap() { return controls.joyMap; },
     get aiButtons() { return S.aiButtons; },
     get cruise() { return S.cruise; },
+    get switching() { return S.switching; },
     doPush: (dir, strength) => doPush(dir, strength),
     setTrigger: (i) => S.task && S.task.kind === 'motion' ? S.task.setTrigger(i) : false,
     executeAction: (action) => executeAction(action),

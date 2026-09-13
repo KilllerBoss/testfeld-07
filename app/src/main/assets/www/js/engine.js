@@ -77,7 +77,24 @@ export async function fetchModelIntoFS(baseDir) {
 let onProgress = null;
 export function setModelProgress(fn) { onProgress = fn; }
 
+/**
+ * v2.7.0 — Generierte Welt-XML in den Modellordner schreiben (VFS).
+ * Die Welt ist prozedural erzeugt (worlds.js) und includiert das Roboter-
+ * XML relativ — deshalb muss sie IM SELBEN Ordner liegen wie das Modell.
+ */
+export function writeWorldFile(dirName, fileName, xml) {
+  const m = mj();
+  const path = '/models/' + dirName + '/' + fileName;
+  m.FS.writeFile(path, new TextEncoder().encode(xml));
+  return path;
+}
+
 // Modellordner aus dem FS entfernen (RAM-Hygiene beim Roboterwechsel)
+/** v2.7.0: Ist das Modell bereits im Emscripten-FS? (Doppel-Ladungen sparen) */
+export function hasModelInFS(dirName) {
+  return this_manifests.has(dirName);
+}
+
 export function removeModelFromFS(dirName) {
   const m = mj();
   const root = '/models/' + dirName;
@@ -86,6 +103,8 @@ export function removeModelFromFS(dirName) {
   for (const rel of manifest) {
     try { m.FS.unlink(root + '/' + rel); } catch (e) { /* schon weg */ }
   }
+  // v2.7.0: generierte Welt-Datei auch räumen (nicht im Manifest)
+  try { m.FS.unlink(root + '/welt_live.xml'); } catch (e) { /* schon weg */ }
   // Ordner räumen (tiefer zuerst)
   const dirs = new Set(['/models']);
   for (const rel of manifest) {
@@ -141,14 +160,14 @@ export class RobotSim {
     if (this.baseBody < 0) throw new Error(`Kein freier Basiskörper in ${this.cfg.name}`);
 
     // Keyframe
-    this.keyId = -1;
+    this.keyId = 0;
     const nkey = mod.nkey;
     for (let k = 0; k < nkey; k++) {
       // key-Namen über mj_name2id? Keyframes haben eigenen Namensraum (mjOBJ_KEY=10? -> nutzen mjtObj: 9?)
       // Zuverlässig: key_name via mj_id2name geht nicht für keys in älteren Bindings -> Name-Index aus cfg.keyname prüfen:
     }
-    // Keyframes: Namen sind in Menagerie bekannt ('home'/'stand'/'hover') -> Index 0 verwenden, aber Name loggen
-    this.keyId = 0;
+    // Keyframes: Index aus cfg (v2.7.0 — z. B. Microduck STAND = Index 1), sonst 0
+    this.keyId = this.cfg.keyIndex || 0;
 
     // Aktuator → Gelenk → qpos/dof Adressen
     this.actJoint = new Int32Array(this.nu);
@@ -172,6 +191,36 @@ export class RobotSim {
     // Namensbasierte Aktuator-Suche
     this.actByName = {};
     for (let a = 0; a < this.nu; a++) this.actByName[this.actName[a]] = a;
+
+    // ── v2.7.0 SENSORIK ────────────────────────────────────
+    // Sensoren nach TYP auflösen (mjSENS_GYRO=3, mjSENS_ACCELEROMETER=1):
+    // echte IMU-Werte aus sensordata statt gerechneter Zustandsgrößen.
+    this._gyroAdr = -1; this._accelAdr = -1;
+    try {
+      for (let s = 0; s < mod.nsensor; s++) {
+        const t = mod.sensor_type[s];
+        if (t === 3 && this._gyroAdr < 0) this._gyroAdr = mod.sensor_adr[s];
+        else if (t === 1 && this._accelAdr < 0) this._accelAdr = mod.sensor_adr[s];
+      }
+    } catch (e) { /* keine Sensor-Views */ }
+
+    // Fuß-Geoms auflösen (cfg.footBodies = Body-Namen) → Kontakt-Erkennung
+    this.nFeet = 0;
+    this._geomFoot = null;
+    if (Array.isArray(this.cfg.footBodies) && this.cfg.footBodies.length) {
+      this.nFeet = this.cfg.footBodies.length;
+      this._geomFoot = new Int32Array(this.ngeom).fill(-1);
+      this._footIds = [];
+      for (let f = 0; f < this.nFeet; f++) {
+        const bid = m.mj_name2id(mod, mjOBJ.BODY, this.cfg.footBodies[f]);
+        if (bid < 0) continue;
+        this._footIds.push(bid);
+        for (let g = 0; g < mod.body_geomnum[bid]; g++) {
+          const gid = mod.body_geomadr[bid] + g;
+          if (mod.geom_contype[gid] !== 0) this._geomFoot[gid] = f;
+        }
+      }
+    }
 
     // Keyframe-Reglerwerte (Referenzpose für Training + Gait)
     this.keyCtrl = new Float64Array(this.nu);
@@ -221,6 +270,69 @@ export class RobotSim {
   baseQuat(out) { const o = 4 * this.baseBody; out[0] = this._xquat[o]; out[1] = this._xquat[o + 1]; out[2] = this._xquat[o + 2]; out[3] = this._xquat[o + 3]; return out; }
   baseVelWorld(out) { out[0] = this._qvel[0]; out[1] = this._qvel[1]; out[2] = this._qvel[2]; return out; }
   baseAngVelBody(out) { out[0] = this._qvel[3]; out[1] = this._qvel[4]; out[2] = this._qvel[5]; return out; }
+
+  // ── v2.7.0 SENSORIK (echte Sensordaten für die Beobachtungen) ──
+
+  /**
+   * GYRO (3, Körperform): bevorzugt aus dem echten IMU-Sensor
+   * (sensordata), Fallback qvel[3:6] — beide sind Körperform
+   * (empirisch gegen den Gyro-Sensor verifiziert, Probe A/B/C).
+   */
+  gyroBody(out) {
+    if (this._gyroAdr >= 0) {
+      const sd = this.data.sensordata;
+      out[0] = sd[this._gyroAdr]; out[1] = sd[this._gyroAdr + 1]; out[2] = sd[this._gyroAdr + 2];
+    } else {
+      out[0] = this._qvel[3]; out[1] = this._qvel[4]; out[2] = this._qvel[5];
+    }
+    return out;
+  }
+
+  /**
+   * ACCELEROMETER (3, Körperform): echte IMU-Beschleunigung
+   * (stehend ≈ (0,0,+9,81) — Proper Acceleration). null, wenn kein
+   * Sensor im Modell (Beobachtungsplatz bleibt dann 0).
+   */
+  accelBody(out) {
+    if (this._accelAdr < 0) { out[0] = out[1] = out[2] = 0; return out; }
+    const sd = this.data.sensordata;
+    out[0] = sd[this._accelAdr]; out[1] = sd[this._accelAdr + 1]; out[2] = sd[this._accelAdr + 2];
+    return out;
+  }
+
+  /**
+   * PROJIZIERTE GRAVITATION (3, normiert): R⁳·(0,0,-1) aus der Basis-
+   * Quaternion. Aufrecht = (0,0,-1). Entspricht dem fusionierten
+   * Gravitationsvektor, den reale IMU-Estimator liefern.
+   */
+  projectedGravity(out) {
+    const o = 4 * this.baseBody;
+    const w = this._xquat[o], x = this._xquat[o + 1], y = this._xquat[o + 2], z = this._xquat[o + 3];
+    out[0] = -2 * (x * z + w * y);
+    out[1] = -2 * (y * z - w * x);
+    out[2] = -(1 - 2 * (x * x + y * y));
+    return out;
+  }
+
+  /**
+   * FUSSKONTAKTE (nFeet binär 0/1): echter Kontaktmonitor — ein Kontakt
+   * zählt, wenn einer der Kollisionsgeoms des Fußes an einem Kontakt-
+   * Punkt beteiligt ist (Boden ODER Hindernis).
+   */
+  footContacts(out) {
+    if (!this._geomFoot) { out[0] = out[1] = 0; return out; }
+    for (let f = 0; f < this.nFeet; f++) out[f] = 0;
+    const ncon = this.data.ncon;
+    const contact = this.data.contact;
+    for (let i = 0; i < ncon; i++) {
+      const c = contact.get(i);
+      const f1 = this._geomFoot[c.geom1];
+      if (f1 >= 0) out[f1] = 1;
+      const f2 = this._geomFoot[c.geom2];
+      if (f2 >= 0) out[f2] = 1;
+    }
+    return out;
+  }
 
   /**
    * SCHUBSEN: Impuls (Fx, Fy, Fz) in NEWTON·SEKUNDEN auf die Basis in

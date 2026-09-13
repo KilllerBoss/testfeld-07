@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "joeynyc/awesome-microduck: A curated list of software",
+    "snippet": "Microduck , the open-source biped robot from Pollen Robotics . RL training environments on mjlab. URDF and xacro generated from the public model, Staged  ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://blog.adafruit.com",
+    "name": "RL training environments for Microduck",
+    "snippet": "Sep 1, 2026 — Pollen Robotics has published microduck_rl on GitHub , a set of reinforcement learning training environments for Microduck, a bipedal robot ... Read more",
+    "host_name": "blog.adafruit.com",
+    "rank": 1,
+    "date": "Sep 1, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://pollen-robotics.com",
+    "name": "Meet Microduck",
+    "snippet": "Aug 27, 2026 — It is an ideal platform for developers who want to train physical behaviors , experiment with reinforcement learning, and test how AI moves from ... Read more",
+    "host_name": "pollen-robotics.com",
+    "rank": 2,
+    "date": "Aug 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co",
+    "name": "Fix broken and redirected repo links · pollen-robotics",
+    "snippet": "Aug 28, 2026 — Fix broken and redirected repo links ; 34. + [ pollen - robotics / microduck ](https:// github .com/ pollen - robotics / microduck ) ; 35. + and [ ... Read more",
+    "host_name": "huggingface.co",
+    "rank": 3,
+    "date": "Aug 28, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://thenewstack.io",
+    "name": "This duck will teach you reinforcement learning",
+    "snippet": "Aug 27, 2026 — Hugging Face's Pollen Robotics opened pre-orders for Microduck , a $399 open source biped you train with reinforcement learning in a physics ...",
+    "host_name": "thenewstack.io",
+    "rank": 4,
+    "date": "Aug 27, 2026",
+    "favicon": ""
+  }
+]

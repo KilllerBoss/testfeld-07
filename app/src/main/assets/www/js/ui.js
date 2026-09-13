@@ -58,7 +58,7 @@ export class UI {
     const s = this.$('splash');
     s.classList.add('gone');
     setTimeout(() => s.remove(), 600);
-    for (const id of ['topbar', 'robotBar', 'modeBar', 'statusLine', 'controls']) {
+    for (const id of ['topbar', 'robotBar', 'modeBar', 'worldBar', 'statusLine', 'controls']) {
       this.$(id).classList.remove('hidden');
     }
   }

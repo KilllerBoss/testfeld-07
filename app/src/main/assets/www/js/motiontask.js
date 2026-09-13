@@ -21,6 +21,13 @@
 //   Familie), danach zurück zur Referenz. Beobachtungsraum: 3·nu + 18
 //   (+4 Trigger-Kanäle, geglättet 0..1) — Policies von ≤ v2.5.0 werden
 //   verworfen (obsDim-Wache in main.js loadPolicy).
+// v2.7.0 — SENSORIK: Beobachtungsraum 3·nu + 27 (+9: GYRO 3 aus dem
+//   echten IMU, projizierte Gravitation 3, Basis-Höhe 1, FUSSKONTAKTE 2).
+//   Der Roboter „fühlt" jetzt seinen Körper wie ein realer: Drehrate,
+//   Schwerkraft-Sinn, Höhe und Fußkontakt — die Policy
+//   kann dadurch Gleichgewicht/Störungen physikalisch begreifen statt
+//   nur Positions-Fehler zu korrigieren. Policies von ≤ v2.6.x werden
+//   verworfen (obsDim-Wache).
 // v2.5.0 — ANIMATION AN/AUS: animOn=false schaltet das Posen-Tracking ab
 //   (Referenz = Keyframe-Stand) — so lernt der Roboter NUR GLEICHGEWICHT,
 //   denn die GLB-Animationen besitzen selbst kein physikalisches
@@ -78,7 +85,7 @@ export function makeMotionTask(cfg, clip, sim) {
     cmd: { vx: 0, wz: 0 },   // aktuelles Kommando (Training: gewürfelt, Policy: Stick)
     _cmdHold: 0,             // Rest-Haltezeit des Kommandos (s)
     _tx: 0, _ty: 0, _tyaw: 0, // Kommando-integriertes Wurzel-Ziel
-    obsDim: 3 * nu + 18, // v2.6.0: +4 Trigger-Kanäle (Buttons)
+    obsDim: 3 * nu + 27, // v2.7.0: +9 Sensorik (Gyro 3, Gravitation 3, Höhe 1, Kontakte 2)
     actDim: nu,
     phase: 0,
     lastAct: new Float64Array(nu),
@@ -229,6 +236,16 @@ export function makeMotionTask(cfg, clip, sim) {
       out[o++] = this.trg[1];
       out[o++] = this.trg[2];
       out[o++] = this.trg[3];
+      // ── v2.7.0 SENSORBLOCK (voller Roboter-Wahrnehmung) ──
+      sim.gyroBody(this._gy || (this._gy = new Float64Array(3)));
+      out[o++] = this._gy[0]; out[o++] = this._gy[1]; out[o++] = this._gy[2];
+      sim.projectedGravity(this._pg || (this._pg = new Float64Array(3)));
+      out[o++] = this._pg[0]; out[o++] = this._pg[1]; out[o++] = this._pg[2];
+      sim.basePos(this._sp || (this._sp = new Float64Array(3)));
+      out[o++] = this._sp[2];
+      sim.footContacts(this._fc || (this._fc = new Float64Array(2)));
+      out[o++] = this._fc[0] ? 1 : 0;
+      out[o++] = this._fc[1] ? 1 : 0;
       for (let i = 0; i < nu; i++) out[o++] = this.lastAct[i];
       return o;
     },
@@ -253,6 +270,15 @@ export function makeMotionTask(cfg, clip, sim) {
       out[o++] = Math.cos(2 * Math.PI * phase);
       out[o++] = 0; out[o++] = 0; // Kommando-Kanäle (BC ohne Führung)
       out[o++] = 0; out[o++] = 0; out[o++] = 0; out[o++] = 0; // Trigger (v2.6.0)
+      // Sensorblock (v2.7.0) aus GEISTER-Zustand: Gyro 0 (kinematisch),
+      // Gravitation aus der Basis-Orientierung des Lehrers, Höhe = Referenz,
+      // Kontakte 0 (Geist ist nur Pose, keine Physik)
+      out[o++] = 0; out[o++] = 0; out[o++] = 0;
+      out[o++] = -2 * (x * z + w * y);
+      out[o++] = -2 * (y * z - w * x);
+      out[o++] = -(1 - 2 * (x * x + y * y));
+      out[o++] = this._href[0];
+      out[o++] = 0; out[o++] = 0;
       for (let i = 0; i < nu; i++) out[o++] = 0;
       return o;
     },

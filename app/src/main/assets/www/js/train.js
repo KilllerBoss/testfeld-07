@@ -193,6 +193,12 @@ export class PPO {
     if (!this.buf) this._allocBuffer();
     const b = this.buf, T = this.h.T;
     if (b.ptr >= T) return false;
+    // v2.7.0 NaN-Wache: nicht-endliche Transitionen NIE in den Puffer
+    // schreiben (Physik-Explosion nach Sturz) — ein einziger NaN-Wert
+    // würde sonst GAE + Update + Policy komplett vergiften.
+    for (let i = 0; i < this.obsDim; i++) if (!Number.isFinite(x[i])) return false;
+    for (let i = 0; i < this.actDim; i++) if (!Number.isFinite(act[i])) return false;
+    if (!Number.isFinite(logp) || !Number.isFinite(rew) || !Number.isFinite(val)) return false;
     b.obs.set(x, b.ptr * this.obsDim);
     b.act.set(act, b.ptr * this.actDim);
     b.logp[b.ptr] = logp; b.rew[b.ptr] = rew;
@@ -205,6 +211,9 @@ export class PPO {
   // GAE(λ) + PPO-Update. Liefert Kennzahlen.
   finishAndUpdate(lastVal) {
     const b = this.buf, T = this.h.T, h = this.h;
+    // v2.7.0: nicht-endlicher Endwert (Physik-Explosion beim letzten
+    // Schritt) darf den Batch nicht vergiften — neutral bewerten.
+    if (!Number.isFinite(lastVal)) lastVal = 0;
     // Advantage: GAE rückwärts
     let gae = 0;
     for (let t = T - 1; t >= 0; t--) {
@@ -214,6 +223,15 @@ export class PPO {
       gae = delta + h.gamma * h.lam * nextNonTerm * gae;
       b.adv[t] = gae;
       b.ret[t] = gae + b.val[t];
+    }
+    // v2.7.0: Defensive Wache — sollte GAE trotz allem nicht-endlich sein,
+    // wird der Batch verworfen statt die Policy zu töten.
+    let gaeOk = true;
+    for (let t = 0; t < T; t++) if (!Number.isFinite(b.adv[t])) { gaeOk = false; break; }
+    if (!gaeOk) {
+      this.buf = null;
+      this.updateCount++;
+      return { piLoss: 0, vLoss: 0, entropy: 0, clipFrac: 0, meanStd: 0, batchVerworfen: true };
     }
     // Advantages normalisieren
     let mean = 0; for (let t = 0; t < T; t++) mean += b.adv[t]; mean /= T;
@@ -264,7 +282,8 @@ export class PPO {
           }
           net.forward(x);
 
-          // Verhältnis & Clipped-Surrogate
+          // Verhältnis & Clipped-Surrogate — Ratio-Exponent geklemmt,
+          // damit extreme Log-Verhältnisse nicht überlaufen (v2.7.0)
           const logpOld = b.logp[t];
           const A_ = b.adv[t];
           let logpNew = 0;
@@ -273,7 +292,7 @@ export class PPO {
             const d = (a - net.mu[i]) / stds[i];
             logpNew += -0.5 * d * d - Math.log(stds[i]) - 0.5 * LOG2PI;
           }
-          const ratio = Math.exp(logpNew - logpOld);
+          const ratio = Math.exp(Math.max(-50, Math.min(50, logpNew - logpOld)));
           const sLoss = -Math.min(ratio * A_, Math.max(1 - h.clip, Math.min(1 + h.clip, ratio)) * A_);
           piLossSum += sLoss / (h.epochs * T);
           const outside = A_ >= 0 ? ratio > 1 + h.clip : ratio < 1 - h.clip;
@@ -288,6 +307,9 @@ export class PPO {
           for (let i = 0; i < A; i++) entSum += (net.logStd[i] + 0.5 * LOG2PI + 0.5) / (h.epochs * T * A);
 
           dH2.fill(0);
+          dH1.fill(0); // v2.7.0 FIX: Rückführungs-Ebene PRO SAMPLE nullen —
+                       // davor akkumulierte dH1 über alle Samples/Epochen
+                       // (verfälschte W1/b1-Gradientenrichtungen)
 
           // Kopf: Aktionsmittelwert
           for (let i = 0; i < A; i++) {

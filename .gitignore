@@ -3,3 +3,8 @@ build/
 local.properties
 *.keystore
 !trainrobot.keystore
+# Recherche-Klone + flüchtige Diagnose (v2.7.0)
+tool-results/microduck_src/
+tool-results/microduck_rl_src/
+tool-results/menagerie_go2/
+tool-results/read_*.txt

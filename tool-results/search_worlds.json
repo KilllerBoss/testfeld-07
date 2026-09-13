@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://github.com/unitreerobotics/unitree_mujoco",
+    "name": "unitreerobotics/unitree_mujoco - GitHub",
+    "snippet": "Terrain Generation Tool. We provide a tool to parametrically create simple terrains in the mujoco simulator, including stairs, rough ground, and height maps.",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/deepmind/mujoco/blob/main/doc/overview.rst",
+    "name": "mujoco/doc/overview.rst at main - GitHub",
+    "snippet": "MuJoCo stands for Multi-Joint dynamics with Contact. It is a general purpose physics engine that aims to facilitate research and development in robotics, ...",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://mujoco.readthedocs.io/en/latest/modeling.html",
+    "name": "Modeling - MuJoCo Documentation",
+    "snippet": "MuJoCo's native model format is MJCF, an XML-based language designed to describe complex dynamical systems. This chapter is the primary MJCF modeling guide.",
+    "host_name": "mujoco.readthedocs.io",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/google-deepmind/mujoco_menagerie",
+    "name": "GitHub - google-deepmind/mujoco_menagerie: A collection of high",
+    "snippet": "Menagerie is a collection of high-quality models for the MuJoCo physics engine, curated by Google DeepMind. You can download prebuilt binaries for MuJoCo from ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/coolbeevip/mujoco-skills",
+    "name": "A practical MuJoCo skill for AI agents to reliably create, inspect, and",
+    "snippet": "7 days ago · Use $mujoco to create a Unitree Go1 quadruped obstacle-crossing scene with a Go1, a ground plane, low steps, and several obstacles. Save it ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/wuji-technology/mujoco-sim",
+    "name": "wuji-technology/mujoco-sim - GitHub",
+    "snippet": "This repository provides a minimal example for loading and controlling the Wuji Hand in MuJoCo simulator. Loads MJCF models from the description submodule",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/jangjaepil/unitree_mujoco",
+    "name": "GitHub - jangjaepil/unitree_mujoco",
+    "snippet": "Terrain Generation Tool. We provide a tool to parametrically create simple terrains in the mujoco simulator, including stairs, rough ground, and height maps.",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://arxiv.org/html/2502.08844v1",
+    "name": "MuJoCo Playground - arXiv",
+    "snippet": "Feb 12, 2025 · We introduce MuJoCo Playground, a fully open-source framework for robot learning designed for rapid iteration and deployment of sim-to-real ...",
+    "host_name": "arxiv.org",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]

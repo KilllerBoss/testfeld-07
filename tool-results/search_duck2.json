@@ -1,0 +1,38 @@
+[
+  {
+    "url": "https://mashable.com",
+    "name": "Hugging Face launches Microduck, a $399 open-source",
+    "snippet": "Microduck, a 9.8-inch-tall bipedal robot that waddles, sits, kicks a ball, picks up objects with its beak, and gets back on its feet after falling over.",
+    "host_name": "mashable.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://finance.yahoo.com",
+    "name": "Hugging Face Unveils $400 Singing, Skating Duck-Like",
+    "snippet": "Aug 27, 2026 — Hugging Face Inc. unveiled a singing $400 bipedal robot . It will go on sale later this year, The robot is manufactured in China with Shenzhen- ...",
+    "host_name": "finance.yahoo.com",
+    "rank": 1,
+    "date": "Aug 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.cnbc.com",
+    "name": "Hugging Face's new duck robot is selling fast. A Chinese",
+    "snippet": "Sep 1, 2026 — Microduck is a programmable robot launched last week by Hugging Face's … reveal its open source robotics system on Wednesday. start at $549,",
+    "host_name": "www.cnbc.com",
+    "rank": 2,
+    "date": "Sep 1, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co",
+    "name": "Pollen Robotics",
+    "snippet": "Tiny biped for reinforcement learning . Microduck. A 25 cm biped with 15 motors that walks, grasps with its beak and gets back up on its own - and learns new ... Read more",
+    "host_name": "huggingface.co",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  }
+]

@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://arxiv.org",
+    "name": "Learning Bipedal Locomotion on Gear-Driven Humanoid",
+    "snippet": "Apr 11, 2025 — In this paper, we propose the use of foot-mounted inertial measurement units (IMUs) for learning bipedal locomotion on a gear-driven humanoid ... Read more",
+    "host_name": "arxiv.org",
+    "rank": 0,
+    "date": "Apr 11, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.researchgate.net",
+    "name": "(PDF) Cat-Like Jumping and Landing of Legged Robots in",
+    "snippet": "In this article, we show that learned policies can be applied to solve legged locomotion control tasks with extensive flight phases , joint velocity .",
+    "host_name": "www.researchgate.net",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.roboticsproceedings.org",
+    "name": "Consistent Fusion of Leg Kinematics and IMU",
+    "snippet": "by M Bloesch · Cited by 561 — Abstract—This paper introduces a state estimation framework for legged robots that allows estimating the full pose of the. Read more 8 pages",
+    "host_name": "www.roboticsproceedings.org",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://raw.githubusercontent.com",
+    "name": "Action Space Design in Reinforcement Learning for Robot",
+    "snippet": "We examine action space selection considering a wheeled- legged robot , RL aims to maximize cumulative rewards over time , which might involve deliberately ... 12 pages",
+    "host_name": "raw.githubusercontent.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://lamarr-institute.org",
+    "name": "Action Space Design – Reinforcement Learning for Robot",
+    "snippet": "Apr 9, 2025 — For instance, a wheeled robot may use a wheel velocity action space , while a legged robot typically uses joint positions , and manipulators may ... Read more",
+    "host_name": "lamarr-institute.org",
+    "rank": 4,
+    "date": "Apr 9, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://ieeexplore.ieee.org",
+    "name": "Intelligent Control of Multilegged Robot Smooth Motion",
+    "snippet": "by Y Zhao · 2023 · Cited by 151 — The Jacobian matrix shown transforms the joint velocity into the positional velocity of the body.",
+    "host_name": "ieeexplore.ieee.org",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://digitalcommons.mtu.edu",
+    "name": "BENCHMARKING MODEL PREDICTIVE CONTROL AND",
+    "snippet": "by S Akki · 2023 — Each figure provides a comprehensive visual analysis through plots of position versus time , velocity versus time , control torque versus time , and force versus  ...",
+    "host_name": "digitalcommons.mtu.edu",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://proceedings.mlr.press",
+    "name": "Learning Locomotion Skills from MPC in Sensor Space",
+    "snippet": "by M Khadiv · 2023 · Cited by 12 — Abstract. Nonlinear model predictive control (NMPC) is one the most powerful tools for generating control policies for legged locomotion. Read more",
+    "host_name": "proceedings.mlr.press",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]

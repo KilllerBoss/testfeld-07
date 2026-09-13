@@ -57,6 +57,7 @@
   <worldbody>
     <light name="spotlight" mode="targetbodycom" target="body" pos="3 0 4" cutoff="30"/>
     <body name="body" childclass="spot" pos="0 0 .75">
+      <site name="imu" pos="0 0 0.02" size="0.01"/>
       <light name="tracking" mode="trackcom" pos="0 0 2"/>
       <freejoint name="freejoint"/>
       <inertial pos="0.0063944 -9.81216e-05 0.000911379" mass="32.86" diaginertia="0.13144 0.13144 0.13144"/>
@@ -176,4 +177,8 @@
     <key name="home" qpos="0 0 0.46 1 0 0 0 0 1.04 -1.8 0 1.04 -1.8 0 1.04 -1.8 0 1.04 -1.8"
       ctrl="0 1.04 -1.8 0 1.04 -1.8 0 1.04 -1.8 0 1.04 -1.8"/>
   </keyframe>
+  <sensor>
+    <gyro name="gyro" site="imu"/>
+    <accelerometer name="accel" site="imu"/>
+  </sensor>
 </mujoco>

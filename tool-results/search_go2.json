@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "google-deepmind/mujoco_menagerie: A collection of high-",
+    "snippet": "Menagerie is a collection of high-quality models for the MuJoCo physics engine , curated by Google DeepMind. MJCF XML file. Menagerie models are also available ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://mujoco.readthedocs.io",
+    "name": "Model Gallery - MuJoCo Documentation",
+    "snippet": "Menagerie is a collection of high-quality simulation models for MuJoCo, curated by Google DeepMind. For more information, visit the Menagerie repository.",
+    "host_name": "mujoco.readthedocs.io",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://robotics.growbotics.ai",
+    "name": "MuJoCo Menagerie - Open Source Robotics",
+    "snippet": "Jul 14, 2026 — Men agerie provides verified, quality-graded MJCF models with clear provenance, so simulation work starts from physics that can be trusted. Read more",
+    "host_name": "robotics.growbotics.ai",
+    "rank": 2,
+    "date": "Jul 14, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://sourceforge.net",
+    "name": "Menagerie download",
+    "snippet": "MuJoCo Menagerie , developed by Google DeepMind, is a curated collection of high-quality simulation models designed for use with the MuJoCo physics engine. Read more",
+    "host_name": "sourceforge.net",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://simulately.wiki",
+    "name": "Robot Models",
+    "snippet": "The journey of a model in MuJoCo commences with its creation in one of two human-readable XML file formats: MJCF ( MuJoCo XML format)",
+    "host_name": "simulately.wiki",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  }
+]

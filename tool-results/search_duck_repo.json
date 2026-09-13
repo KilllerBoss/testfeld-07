@@ -1,0 +1,29 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "joeynyc/awesome-microduck: A curated list of software",
+    "snippet": "... Microduck, the open-source biped robot from Pollen Robotics and Hugging Face. Three stylised biped duck robots. Microduck is a 25 cm, ~800 g walking duck ... Read more",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co",
+    "name": "Fix broken and redirected repo links · pollen-robotics",
+    "snippet": "Aug 28, 2026 — Policies and MJCF model from. 34. + [ pollen - robotics / microduck ](https:// github .com/ pollen - robotics / microduck ). 35. + and [ pollen - ... Read more",
+    "host_name": "huggingface.co",
+    "rank": 1,
+    "date": "Aug 28, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://pollen-robotics.com",
+    "name": "Meet Microduck",
+    "snippet": "Aug 27, 2026 — Its open-source software stack covers robot control, simulation, reinforcement learning, and sim-to-real deployment . The software is available ... Read more",
+    "host_name": "pollen-robotics.com",
+    "rank": 2,
+    "date": "Aug 27, 2026",
+    "favicon": ""
+  }
+]

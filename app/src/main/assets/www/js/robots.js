@@ -1,7 +1,11 @@
 // ═══════════════════════════════════════════════════════════
-// robots.js — Die vier Menagerie-Roboter: gleichberechtigt, ungebunden,
+// robots.js — Die Roboter: gleichberechtigt, ungebunden,
 // mit einheitlicher Steuerung (Stick = fahren/drehen, Drohne zusätzlich Höhe)
-// und Trainingsaufgaben (PPO). Modelle: Google DeepMind MuJoCo Menagerie.
+// und Trainingsaufgaben (PPO). Modelle: MuJoCo Menagerie + Microduck
+// (Pollen Robotics / Hugging Face, Apache-2.0).
+// v2.7.0 — SENSORIK: Alle Laufroboter sehen GYRO (IMU), projizierte
+//   Gravitation, Basis-Höhe, FUSSKONTAKTE (Kontaktmonitor) und eine
+//   PHASEN-UHR (sin/cos — Zeitgefühl für Rhythmus) in der Beobachtung.
 // ═══════════════════════════════════════════════════════════
 
 import { clamp } from './math.js';
@@ -140,11 +144,55 @@ function makeFlight(cfg) {
   };
 }
 
+// Watschel-Gang für Microduck (Biped, 14 Servos, kp=0.55): Basis = STAND-
+// Keyframe, kleine Oszillationen um Hüfte/Sprunggelenk + Seitwärts-Wippen.
+// Ehrlich wie beim G1: offene Positions-Regler watscheln nur kurze Strecken —
+// echtes Laufwerk lernt die Policy im Training (dafür ist Trainrobot da).
+// Vorzeichen sind je Seite gespiegelt (mirrored frames, wie im STAND-Keyframe:
+// links hip_pitch −0,458 / rechts +0,458).
+function makeWaddle(cfg) {
+  return {
+    ph: 0,
+    _ref: null,
+    step(sim, dt, cmd, out) {
+      const c = cfg.waddle;
+      const vx = cmd.vx, yaw = cmd.yaw;
+      const moving = Math.abs(vx) > 0.02 || Math.abs(yaw) > 0.1;
+      const f = moving ? c.f0 : 0;
+      this.ph = moving ? (this.ph + 2 * Math.PI * f * dt) : 0;
+      const ph = this.ph, mov = moving ? 1 : 0;
+      if (!this._ref) { this._ref = new Float64Array(sim.nu); this._ref.set(sim.keyCtrl); }
+      const ref = this._ref;
+      const ai = (n) => sim.actByName[n];
+      // Basis: komplette STAND-Pose (auch Kopf/Hals), dann Oszillationen
+      for (let a = 0; a < sim.nu; a++) out[sim.actName[a]] = ref[a];
+      const frac = clamp(vx / cfg.speedMax, -1, 1);
+      const A = c.aPitch * Math.max(0.35, Math.abs(frac)) * mov;
+      for (const [side, p0] of [['left', 0], ['right', Math.PI]]) {
+        const s1 = Math.sin(ph + p0);
+        const swing = c.swingSign * (side === 'left' ? 1 : -1) * A * s1;
+        const kn = c.kneeSign * (side === 'left' ? 1 : -1) * c.aKnee * Math.max(0, Math.sin(ph + p0 + 0.6)) * mov;
+        const sway = c.swaySign * (side === 'left' ? 1 : -1) * c.aSway * Math.sin(ph) * mov;
+        const yawT = c.turnYaw * yaw * (side === 'left' ? 1 : -1) * mov;
+        out[ai(side + '_hip_pitch')] = ref[ai(side + '_hip_pitch')] + swing;
+        out[ai(side + '_knee')] = ref[ai(side + '_knee')] + kn;
+        out[ai(side + '_ankle')] = ref[ai(side + '_ankle')] - swing * 0.85;
+        out[ai(side + '_hip_roll')] = ref[ai(side + '_hip_roll')] + sway;
+        out[ai(side + '_hip_yaw')] = ref[ai(side + '_hip_yaw')] + yawT;
+      }
+    }
+  };
+}
+
 // ── Trainingsaufgabe: Geschwindigkeits-Tracking (Laufroboter) ──
 function makeTrackTask(cfg) {
   const J = cfg.jointResidual;
+  // v2.7.0 Sensorblock: gyro(3) + projizierte Gravitation(3) + Höhe(1)
+  // + Fußkontakte(F) + Phasen-Uhr(2) — „voller Roboter“-Wahrnehmung
+  const nFeet = Array.isArray(cfg.footBodies) ? cfg.footBodies.length : 0;
+  const sensDim = 9 + nFeet;
   return {
-    obsDim: 3 * cfg.nu + 8,
+    obsDim: 3 * cfg.nu + 8 + sensDim,
     actDim: cfg.nu,
     reset(rng, sim) {
       this.cmd = { vx: 0, yaw: 0 };
@@ -154,6 +202,7 @@ function makeTrackTask(cfg) {
       this.up = new Float64Array(3);
       this.vb = new Float64Array(3);
       this._ref = new Float64Array(cfg.nu);
+      this._tick = 0; // Phasen-Uhr
       // Referenzpose = Keyframe-Reglerwerte (home/stand)
       for (let a = 0; a < cfg.nu; a++) this._ref[a] = sim.actCenter[a] * 0 + (sim.keyCtrl ? sim.keyCtrl[a] : 0);
     },
@@ -189,6 +238,22 @@ function makeTrackTask(cfg) {
       out[o++] = this.cmd.vx; out[o++] = this.cmd.yaw;
       // letzte Aktion
       for (let i = 0; i < cfg.nu; i++) out[o++] = this.lastAct[i];
+      // ── v2.7.0 SENSORBLOCK ──
+      sim.gyroBody(this._gy || (this._gy = new Float64Array(3)));
+      out[o++] = this._gy[0]; out[o++] = this._gy[1]; out[o++] = this._gy[2];
+      sim.projectedGravity(this._pg || (this._pg = new Float64Array(3)));
+      out[o++] = this._pg[0]; out[o++] = this._pg[1]; out[o++] = this._pg[2];
+      sim.basePos(this._hp || (this._hp = new Float64Array(3)));
+      out[o++] = this._hp[2];
+      if (nFeet) {
+        sim.footContacts(this._fc || (this._fc = new Float64Array(nFeet)));
+        for (let f = 0; f < nFeet; f++) out[o++] = this._fc[f] ? 1 : 0;
+      }
+      // Phasen-Uhr (Zeitgefühl): Takt der eigenen Gangart, sin/cos kodiert
+      this._tick = (this._tick || 0) + 1;
+      const ph = (this._tick * 0.02 * (cfg.gaitFreq || 1.2)) % 1;
+      out[o++] = Math.sin(2 * Math.PI * ph);
+      out[o++] = Math.cos(2 * Math.PI * ph);
       return o;
     },
     reward(sim) {
@@ -290,11 +355,13 @@ function makeHoverTask(cfg) {
 
 const ROBOTS = {
   a1: {
-    id: 'a1', dir: 'unitree_a1', scene: 'testfeld.xml', keyName: 'home', keyIndex: 0,
+    id: 'a1', dir: 'unitree_a1', scene: 'testfeld.xml', modelXml: 'a1.xml', keyName: 'home', keyIndex: 0,
     name: 'UNITREE A1', sub: 'Quadruped · 12 Akt.', longName: 'Unitree A1 (Menagerie)',
     color: '#ff9d21', dist: 2.4, zTarget: 0.30,
     speedMax: 1.2, yawMax: 1.6, timestep: 0.002,
     nActuators: 12,
+    footBodies: ['FR_calf', 'FL_calf', 'RR_calf', 'RL_calf'],
+    gaitFreq: 1.3,
     legs: [
       { hip: 'FR_hip', thigh: 'FR_thigh', calf: 'FR_calf', phase: Math.PI, lr: +1, side: +1 },
       { hip: 'FL_hip', thigh: 'FL_thigh', calf: 'FL_calf', phase: 0, lr: -1, side: -1 },
@@ -310,11 +377,13 @@ const ROBOTS = {
     done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
   },
   spot: {
-    id: 'spot', dir: 'boston_dynamics_spot', scene: 'testfeld.xml', keyName: 'home', keyIndex: 0,
+    id: 'spot', dir: 'boston_dynamics_spot', scene: 'testfeld.xml', modelXml: 'spot.xml', keyName: 'home', keyIndex: 0,
     name: 'SPOT', sub: 'Quadruped · 12 Akt.', longName: 'Boston Dynamics Spot (Menagerie)',
     color: '#ffd21e', dist: 2.8, zTarget: 0.46,
     speedMax: 1.0, yawMax: 1.4, timestep: 0.002,
     nActuators: 12,
+    footBodies: ['fr_lleg', 'fl_lleg', 'hr_lleg', 'hl_lleg'],
+    gaitFreq: 1.3,
     legs: [
       { hip: 'fr_hx', thigh: 'fr_hy', calf: 'fr_kn', phase: Math.PI, lr: +1, side: +1 },
       { hip: 'fl_hx', thigh: 'fl_hy', calf: 'fl_kn', phase: 0, lr: -1, side: -1 },
@@ -330,11 +399,13 @@ const ROBOTS = {
     done: { upMin: 0.45, zMin: 0.2, zMax: 1.8 },
   },
   g1: {
-    id: 'g1', dir: 'unitree_g1', scene: 'testfeld.xml', keyName: 'stand', keyIndex: 0,
+    id: 'g1', dir: 'unitree_g1', scene: 'testfeld.xml', modelXml: 'g1.xml', keyName: 'stand', keyIndex: 0,
     name: 'UNITREE G1', sub: 'Humanoid · 29 Akt.', longName: 'Unitree G1 (Menagerie)',
     color: '#38d6e0', dist: 3.4, zTarget: 0.75,
     speedMax: 0.5, yawMax: 1.0, timestep: 0.002,
     nActuators: 29,
+    footBodies: ['left_ankle_roll_link', 'right_ankle_roll_link'],
+    gaitFreq: 1.0,
     march: {
       hipPitch0: -0.15, knee0: 0.30, aKnee: 0.35, aSwing: 0.18,
       f0: 0.9, fv: 0.4, sway: 0.02, turnYaw: 0.18, push: 0.15,
@@ -351,7 +422,7 @@ const ROBOTS = {
     done: { upMin: 0.6, zMin: 0.35, zMax: 1.6 },
   },
   x2: {
-    id: 'x2', dir: 'skydio_x2', scene: 'testfeld.xml', keyName: 'hover', keyIndex: 0,
+    id: 'x2', dir: 'skydio_x2', scene: 'testfeld.xml', modelXml: 'x2.xml', keyName: 'hover', keyIndex: 0,
     name: 'SKYDIO X2', sub: 'Quadrocopter · 4 Rotoren', longName: 'Skydio X2 (Menagerie)',
     color: '#b6f09c', dist: 3.2, zTarget: 0.6,
     speedMax: 2.5, yawMax: 2.0, timestep: 0.01, ctrlDt: 0.01,
@@ -362,7 +433,49 @@ const ROBOTS = {
     nu: 4, actSpan: 4.0, jointResidual: 1.0,
     cmd: { vx: [-1.0, 1.5], alt: [0.4, 2.2] },
   },
+  go2: {
+    id: 'go2', dir: 'unitree_go2', scene: 'testfeld.xml', modelXml: 'go2.xml', keyName: 'home', keyIndex: 0,
+    name: 'UNITREE GO2', sub: 'Quadruped · 12 Akt.', longName: 'Unitree Go2 (Menagerie)',
+    color: '#7bd3ff', dist: 2.6, zTarget: 0.32,
+    speedMax: 1.4, yawMax: 1.6, timestep: 0.002,
+    nActuators: 12,
+    footBodies: ['FR_calf', 'FL_calf', 'RR_calf', 'RL_calf'],
+    gaitFreq: 1.3,
+    legs: [
+      { hip: 'FR_hip', thigh: 'FR_thigh', calf: 'FR_calf', phase: Math.PI, lr: +1, side: +1 },
+      { hip: 'FL_hip', thigh: 'FL_thigh', calf: 'FL_calf', phase: 0, lr: -1, side: -1 },
+      { hip: 'RR_hip', thigh: 'RR_thigh', calf: 'RR_calf', phase: 0, lr: +1, side: +1 },
+      { hip: 'RL_hip', thigh: 'RL_thigh', calf: 'RL_calf', phase: Math.PI, lr: -1, side: -1 },
+    ],
+    trot: { thigh0: 0.9, calf0: -1.8, hip0: 0, f0: 1.2, fv: 1.3, fy: 0.8, aSwing: 0.35, aLift: 0.42, aTurn: 0.2, aHip: 0.1, turnBias: 0.12 },
+    gait: makeTrot,
+    task: makeTrackTask,
+    nu: 12, actSpan: 0.55, jointResidual: 1.0,
+    cmd: { vx: [-0.6, 1.1], yaw: [-1.2, 1.2] },
+    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015 },
+    done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
+  },
+  duck: {
+    id: 'duck', dir: 'pollen_microduck', scene: 'testfeld.xml', modelXml: 'microduck.xml', keyName: 'STAND', keyIndex: 1,
+    name: 'MICRODUCK', sub: 'Biped · 14 Akt.', longName: 'Microduck (Pollen Robotics · Hugging Face)',
+    color: '#ffe066', dist: 1.3, zTarget: 0.12,
+    speedMax: 0.25, yawMax: 1.0, timestep: 0.002,
+    nActuators: 14,
+    footBodies: ['ankle_left', 'ankle_right'],
+    gaitFreq: 2.2,
+    waddle: {
+      f0: 2.2, aPitch: 0.22, aKnee: 0.18, aSway: 0.10, turnYaw: 0.25,
+      swingSign: -1, kneeSign: -1, swaySign: 1,
+      act(side, part) { return side + '_' + part; },
+    },
+    gait: makeWaddle,
+    task: makeTrackTask,
+    nu: 14, actSpan: 0.35, jointResidual: 1.0,
+    cmd: { vx: [-0.15, 0.3], yaw: [-0.8, 0.8] },
+    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002 },
+    done: { upMin: 0.45, zMin: 0.045, zMax: 0.45 },
+  },
 };
 
-export const ROBOT_ORDER = ['a1', 'spot', 'g1', 'x2'];
+export const ROBOT_ORDER = ['a1', 'spot', 'g1', 'go2', 'duck', 'x2'];
 export function getRobot(id) { return ROBOTS[id]; }

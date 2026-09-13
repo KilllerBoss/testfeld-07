@@ -127,7 +127,9 @@ html, body {
   background: var(--panel); border: 1px solid var(--line-soft);
   border-radius: 999px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   max-width: calc(100vw - 24px);
+  overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
 }
+#robotBar::-webkit-scrollbar { display: none; }
 .robot-chip {
   display: flex; align-items: center; gap: 7px;
   border: none; background: transparent; color: var(--text-dim);
@@ -137,6 +139,7 @@ html, body {
 .robot-chip:active { transform: scale(0.94); }
 .robot-chip.active { background: rgba(255, 157, 33, 0.14); color: var(--amber); }
 .robot-chip.loading { opacity: 0.45; }
+.robot-chip { flex: 0 0 auto; }
 .rc-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 10px currentColor; }
 .rc-a1 { background: #ff9d21; color: #ff9d21; }
 .rc-spot { background: #ffd21e; color: #ffd21e; }
@@ -144,6 +147,36 @@ html, body {
 .rc-x2 { background: #b6f09c; color: #b6f09c; }
 .rc-name { font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.08em; }
 .rc-sub { font-size: 9px; letter-spacing: 0.04em; opacity: 0.75; }
+
+/* ── Modus-Leiste ───────────────────────────────────────── */
+/* ── Welt-Leiste (v2.7.0: Presets + Zufall) ───────────────── */
+#worldBar {
+  position: fixed; top: calc(var(--sa-t) + 168px);
+  left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: 999px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  max-width: calc(100vw - 24px);
+  overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
+}
+#worldBar::-webkit-scrollbar { display: none; }
+.world-label { font-family: var(--mono); font-size: 8px; letter-spacing: 0.2em; color: var(--text-dim); opacity: 0.7; padding: 0 4px 0 9px; flex: 0 0 auto; }
+.world-chip {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; font-weight: 700;
+  padding: 8px 11px; border-radius: 999px; border: none;
+  background: transparent; color: var(--text-dim); white-space: nowrap; flex: 0 0 auto;
+  transition: background .15s ease, color .15s ease, transform .08s ease;
+}
+.world-chip:active { transform: scale(0.94); }
+.world-chip.active { background: rgba(56, 214, 224, 0.14); color: #38d6e0; }
+.world-dice {
+  display: flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+  padding: 7px 11px; border-radius: 999px; border: 1px solid rgba(56, 214, 224, 0.35);
+  background: rgba(56, 214, 224, 0.08); color: #38d6e0; white-space: nowrap; flex: 0 0 auto;
+}
+.world-dice svg { width: 13px; height: 13px; }
+.world-dice.hidden { display: none; }
 
 /* ── Modus-Leiste ───────────────────────────────────────── */
 #modeBar {
@@ -388,6 +421,7 @@ html, body {
 @media (orientation: landscape) and (max-height: 480px) {
   #robotBar { top: calc(var(--sa-t) + 56px); }
   #modeBar { top: calc(var(--sa-t) + 106px); }
+  #worldBar { top: calc(var(--sa-t) + 150px); }
   #joyZone { width: 120px; height: 120px; }
   .train-grid { grid-template-columns: repeat(8, 1fr); }
   #rewardChart { height: 120px; }
@@ -410,6 +444,12 @@ html, body {
 }
 .glb-clip.active { border-color: var(--amber-dim); background: rgba(255, 157, 33, 0.08); }
 .glb-clip-name { font-family: var(--mono); font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glb-clip-badge {
+  font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: 0.08em;
+  padding: 3px 7px; border-radius: 999px; flex: 0 0 auto;
+  background: rgba(56, 214, 224, 0.12); color: #38d6e0;
+  border: 1px solid rgba(56, 214, 224, 0.3);
+}
 .glb-clip-meta { font-family: var(--mono); font-size: 9px; color: var(--text-dim); }
 .glb-clip .btn.small { min-width: 46px; padding: 7px 8px; font-size: 10px; flex: 0 0 auto; }
 /* Steuerungs-Wahl + Animation-Toggle (v2.5.0) */

@@ -51,21 +51,8 @@
     </div>
   </header>
 
-  <!-- Roboter-Auswahl: alle frei, ungebunden -->
-  <nav id="robotBar" class="ui hidden" aria-label="Roboter">
-    <button class="robot-chip" data-robot="a1">
-      <span class="rc-dot rc-a1"></span><span class="rc-name">A1</span><span class="rc-sub">Unitree</span>
-    </button>
-    <button class="robot-chip" data-robot="spot">
-      <span class="rc-dot rc-spot"></span><span class="rc-name">SPOT</span><span class="rc-sub">Boston Dynamics</span>
-    </button>
-    <button class="robot-chip" data-robot="g1">
-      <span class="rc-dot rc-g1"></span><span class="rc-name">G1</span><span class="rc-sub">Unitree</span>
-    </button>
-    <button class="robot-chip" data-robot="x2">
-      <span class="rc-dot rc-x2"></span><span class="rc-name">X2</span><span class="rc-sub">Skydio</span>
-    </button>
-  </nav>
+  <!-- Roboter-Auswahl: dynamisch aus robots.js befüllt (v2.7.0, 6 Modelle) -->
+  <nav id="robotBar" class="ui hidden" aria-label="Roboter"></nav>
 
   <!-- Modus-Umschalter -->
   <nav id="modeBar" class="ui hidden" aria-label="Modus">
@@ -73,6 +60,9 @@
     <button id="modePolicy" class="mode-chip">POLICY</button>
     <span id="policyHint" class="policy-hint hidden">keine Policy gespeichert</span>
   </nav>
+
+  <!-- Welt-Auswahl (v2.7.0: Presets + Zufallsgenerator, prozedural skaliert) -->
+  <nav id="worldBar" class="ui hidden" aria-label="Welt"></nav>
 
   <!-- Statuszeile -->
   <div id="statusLine" class="ui hidden">

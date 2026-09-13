@@ -1,0 +1,56 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "google-deepmind/mujoco_menagerie: A collection of high-",
+    "snippet": "Menagerie is a collection of high-quality models for the MuJoCo physics engine, curated by Google DeepMind. A physics simulator is only as good as the model ... Read more",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://mujoco.readthedocs.io",
+    "name": "Model Gallery - MuJoCo Documentation",
+    "snippet": "The goal of MuJoCo Menagerie is to provide the community with a curated collection of well-designed models that work well right out of the box. For more ... Read more",
+    "host_name": "mujoco.readthedocs.io",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://sourceforge.net",
+    "name": "Menagerie download",
+    "snippet": "MuJoCo Menagerie ... Each model directory contains its 3D assets , MJCF XML definitions, licensing information, and example scenes for visualization and testing. Read more",
+    "host_name": "sourceforge.net",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://robotics.growbotics.ai",
+    "name": "MuJoCo Menagerie - Open Source Robotics",
+    "snippet": "Jul 14, 2026 — MuJoCo Menagerie is Google DeepMind's curated collection of high-quality MJCF models : arms, humanoids, quadrupeds, hands, ...",
+    "host_name": "robotics.growbotics.ai",
+    "rank": 3,
+    "date": "Jul 14, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://arxiv.org",
+    "name": "MuJoCo Playground",
+    "snippet": "Feb 12, 2025 — Playground directly utilizes MuJoCo Menagerie [68] which offers a suite of robot assets and configurations tailored to run in MuJoCo . II-A ... Read more",
+    "host_name": "arxiv.org",
+    "rank": 4,
+    "date": "Feb 12, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://forums.developer.nvidia.com",
+    "name": "Manipulator Converted From Mujoco Menagerie Falls",
+    "snippet": "Oct 30, 2024 — I am trying to convert the ViperX 300 6DOF arm from the Mujoco menagerie to a USD Articulation object to use for a manipulation task in IsaacLab ... Read more",
+    "host_name": "forums.developer.nvidia.com",
+    "rank": 5,
+    "date": "Oct 30, 2024",
+    "favicon": ""
+  }
+]
