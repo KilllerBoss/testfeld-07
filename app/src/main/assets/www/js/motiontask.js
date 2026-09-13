@@ -205,8 +205,12 @@ export function makeMotionTask(cfg, clip, sim) {
       this.phase += dt * this.clip.fps / this.clip.n;
       this.phase %= 1;
       // Schleifen-Sprung: die Bahn läuft von der ENDPOSITION weiter
-      // (Endlosgehen über die Arena statt Teleport zurück zum Start)
-      if (this.phase < old && hasRoot && clip.n > 1) {
+      // (Endlosgehen über die Arena statt Teleport zurück zum Start).
+      // NUR bei echten Bewegungs-Clips (locomotion) — bei Idles würde der
+      // winzige Yaw-/Positions-Unterschied Ende↔Anfang JEDE Schleife
+      // akkumulieren: der Geist drehte sich über Minuten komplett um
+      // bzw. wanderte davon (v2.4.1-Fix).
+      if (this.phase < old && hasRoot && clip.n > 1 && clip.locomotion !== false) {
         const m = clip.n - 1;
         this._loopX += clip.root[2 * m] - clip.root[0];
         this._loopY += clip.root[2 * m + 1] - clip.root[1];

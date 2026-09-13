@@ -19,7 +19,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.4.0';
+const VERSION = '2.4.1';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();

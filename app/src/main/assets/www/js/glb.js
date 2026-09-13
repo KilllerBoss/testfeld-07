@@ -64,6 +64,7 @@ export class GlbClip {
     this.rotationTracks = new Map();  // nodeIdx → {times, quats (n*4)}
     this.translationTracks = new Map();
     this._decoded = new Map();        // animIndex → {rotationTracks, translationTracks}
+    this._signMemo = new Map();       // nodeIdx → Vorzeichen-Kontinuität (Quaternion-Doppelbladchung!)
     this.useAnimation(animIndex);
   }
 
@@ -73,6 +74,7 @@ export class GlbClip {
     this.animIndex = animIndex;
     this.anim = this.gltf.animations[animIndex];
     this.name = this.animations[animIndex].name;
+    this._signMemo = new Map(); // neue Kanäle → Vorzeichen-Gedächtnis zurücksetzen
     if (this._decoded.has(animIndex)) {
       const d = this._decoded.get(animIndex);
       this.rotationTracks = d.rotationTracks;
@@ -293,6 +295,17 @@ export class GlbClip {
     // Normalisieren
     const n = Math.hypot(out[0], out[1], out[2], out[3]) || 1;
     out[0] /= n; out[1] /= n; out[2] /= n; out[3] /= n;
+    // Sign-Kanonisierung (v2.4.1): q und −q beschreiben DIESELBE Rotation,
+    // aber Exporte (UE/Blender/assimp) flippen Vorzeichen je Keyframe.
+    // Ohne Kanonisierung kippen ΔQ-/Log-/Projektions-Rechnungen im Retarget
+    // um ±180° („der Geist zuckt und kickt“). Wir erzwingen stetiges
+    // Vorzeichen je KNOTEN über die Sampling-Folge:
+    const memo = this._signMemo.get(nodeIdx);
+    if (memo !== undefined) {
+      const dot = memo[0] * out[0] + memo[1] * out[1] + memo[2] * out[2] + memo[3] * out[3];
+      if (dot < 0) { out[0] = -out[0]; out[1] = -out[1]; out[2] = -out[2]; out[3] = -out[3]; }
+    }
+    this._signMemo.set(nodeIdx, [out[0], out[1], out[2], out[3]]);
     return out;
   }
 

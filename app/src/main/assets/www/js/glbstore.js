@@ -70,6 +70,7 @@ export function packMotion(motion) {
   if (motion.srcPos) out.srcPos = Array.from(motion.srcPos);
   if (motion.srcJoints) out.srcJoints = motion.srcJoints.slice();
   if (motion.baseQ) out.baseQ = Array.from(motion.baseQ);
+  if (motion.locomotion !== undefined) out.locomotion = !!motion.locomotion;
   return out;
 }
 
@@ -80,6 +81,7 @@ export function unpackMotion(rec) {
     name: rec.name, fps: rec.fps, n: rec.n, nu: rec.nu,
     q, h, duration: rec.duration, mapped: rec.mapped || [],
     mergedFrom: rec.mergedFrom || 0,
+    locomotion: rec.locomotion !== false, // alte Datensätze: Rebase wie bisher an
   };
   // Alte Datensätze (vor Root-Motion) bleiben lauffähig — Felder optional
   if (rec.root && rec.yaw && rec.root.length === 2 * rec.n && rec.yaw.length === rec.n) {

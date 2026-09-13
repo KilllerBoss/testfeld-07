@@ -499,8 +499,16 @@ export function retargetToG1(clip, sim, log = () => {}) {
     if (f === 0) { sx0 = wx; sy0 = wy; }
     root[2 * f] = wx - sx0;
     root[2 * f + 1] = wy - sy0;
-    rotVec(worldMap.get(bones.hips) || qId, FWD_GLB, fwdTmp);
-    rawYaw[f] = Math.atan2(fwdTmp[0], fwdTmp[1]); // MuJoCo: x=Z_glb, y=X_glb
+    // BUGFIX v2.4.1: der Blick-Vektor muss WIRKLICH in den MuJoCo-Rahmen
+    // rotiert werden (ALIGN-Sandwich) — die alte Zeile ließ ihn im GLB-Frame
+    // und atan2(sway_x, 0) sprang bei jedem Hüft-Sway-Nulldurchgang zwischen
+    // +90° und −90° → der Geist drehte sich komplette 180°-Runden!
+    rotVec(ALIGN, rotVec(worldMap.get(bones.hips) || qId, FWD_GLB, fwdTmp), fwdTmp);
+    rawYaw[f] = Math.atan2(fwdTmp[0], fwdTmp[1]); // MuJoCo: atan2(x, y) — Blick der Hüfte
+    if (typeof process !== 'undefined' && process.env.RETARGET_SERIES && (f === 20 || f === 21)) {
+      const wq = worldMap.get(bones.hips);
+      console.log(`[RT f=${f}] hips=[${wq ? wq.map(v => v.toFixed(4)).join(',') : 'FEHLT'}] fwd=[${fwdTmp.map(v => v.toFixed(4)).join(',')}] rawYaw=${(rawYaw[f] * 180 / Math.PI).toFixed(2)}° scale=${scale} hipsIdx=${bones.hips}`);
+    }
     // Lehrer-Ghost-Positionen (GLB Y-up → MuJoCo Z-up, skaliert auf m)
     for (let gi = 0; gi < ghostRoles.length; gi++) {
       const p = worldPos.get(bones[ghostRoles[gi]]);
@@ -514,15 +522,23 @@ export function retargetToG1(clip, sim, log = () => {}) {
   // stabile Blick — die Hüft-Vorwärtsachse kippt beim Laufen stark mit
   // (Beckenrotation/Neigung). Bei Stillstand (Idle) liefert die Hüft-
   // Rotation die Blickrichtung. Danach unwrap + glätten + relativ zu Frame 0.
+  // HYSTERESE (v2.4.1): die Quellen werden erst WECHSELND benutzt, wenn die
+  // Geschwindigkeit eine Schwelle klar über-/unterschreitet — sonst flattert
+  // die Blickrichtung an der Grenze; während Pausen wird die letzte
+  // Bewegungsrichtung GEHALTEN (Gehpause ≠ Drehung).
   {
-    const SPEED_MIN = 0.15; // m/s — darunter gilt „keine Bewegung"
+    const SPEED_MIN = 0.15; // m/s — darüber gilt „Bewegung"
     const dirYaw = new Float32Array(n);
     let lastY = null;
+    let moving = false;
     for (let f = 0; f < n; f++) {
       const p0 = Math.max(0, f - 1), p1 = Math.min(n - 1, f + 1);
       const dx = root[2 * p1] - root[2 * p0], dy = root[2 * p1 + 1] - root[2 * p0 + 1];
       const dt = Math.max(1e-6, (p1 - p0) / fps);
-      if (Math.hypot(dx, dy) / dt > SPEED_MIN) { lastY = Math.atan2(dy, dx); dirYaw[f] = lastY; }
+      const sp = Math.hypot(dx, dy) / dt;
+      if (!moving && sp > SPEED_MIN) moving = true;
+      else if (moving && sp < SPEED_MIN * 0.55) moving = false;
+      if (moving) { lastY = Math.atan2(dy, dx); dirYaw[f] = lastY; }
       else dirYaw[f] = lastY !== null ? lastY : rawYaw[f];
     }
     for (let f = 1; f < n; f++) {
@@ -539,6 +555,9 @@ export function retargetToG1(clip, sim, log = () => {}) {
       while (d < -Math.PI) d += 2 * Math.PI;
       yaw[f] = d;
     }
+    // Sicherheitsnetz: einzelne Rest-Sprünge (> 1,2 rad/Frame — echtes
+    // Drehen schafft max. ~3 rad/s) linear überbrücken
+    bridgeAngles(yaw, n, 1.2);
   }
 
   // ── PASS 2: Gelenk-IK am Geist-FK (Hüfte/Knie/Knöchel/Schulter/Ellbogen) ──
@@ -684,8 +703,21 @@ export function retargetToG1(clip, sim, log = () => {}) {
       return e;
     };
 
+    // WARM-START (v2.4.1-Fix für „Zucken/Kicken“): Der GANZE Gelenk-Row des
+    // Frames startet aus der LÖSUNG des Vorgängerframes (statt Knie/Ellbogen/
+    // Knöchel aus NULLEN) — genau die Null-Starts ließen den Abstieg bei
+    // nahezu statischen Zielen (Idle!) in wechselnde Basin springen (Ellbogen-
+    // Zuckung 0,49 rad/Frame). Hüfte/Schulter werden JEDE Frame analytisch
+    // geseedet (Minimal-Twist — als Funktion der Zielrichtung selbst STETIG,
+    // reanchored den Twist, damit er nicht in Limits wandert); alle übrigen
+    // Gelenke erben die Vorgängerlösung und verfeinern sie nur noch.
     for (let f = 0; f < n; f++) {
       const off2 = f * nu;
+      // Frame 0 ZWEIMAL lösen: der zweite Durchlauf startet aus der eigenen
+      // Lösung (= stationärer Zustand, den auch f=1 sieht) → keine f=0→1-Nadel
+      const reps = f === 0 ? 2 : 1;
+      for (let rep = 0; rep < reps; rep++) {
+      if (f > 0) q.copyWithin(off2, off2 - nu, off2); // Warm-Start aus Vorgängerframe
       bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
       for (const side of ['left', 'right']) {
         const bb = G1B[side];
@@ -840,8 +872,15 @@ export function retargetToG1(clip, sim, log = () => {}) {
             `triadYaw=${(triadYaw[f] * 180 / Math.PI).toFixed(0)}°`);
         }
       }
+      } // rep (Frame 0 doppelt)
     }
   }
+
+  // ── Timeline-Pflege (v2.4.1): Rest-Glitches aus der Gelenk-Zeile filtern ──
+  // a) Vereinzelte Spike-Frames (IK-Sonderfälle, Export-Artefakte) überbrücken
+  denoiseTimeline(q, n, nu);
+  // b) Loop-Naht: springt das Clip-Ende zum Anfang, das Ende sanft hinbiegen
+  seamBlend(q, n, nu);
 
   // ── Boden-Anpassung (Fuß erden): tiefsten Fußpunkt pro Frame via Geist ──
   // WICHTIG: MIT Basis-Orientierung (baseQ) — bei gebeugtem Lehrer (Zombie)
@@ -880,17 +919,99 @@ export function retargetToG1(clip, sim, log = () => {}) {
     h[f] = Math.min(1.15, Math.max(0.4, h[f] - lowest));
   }
 
+  // ── Locomotion-Bewertung: wandert die Bahn wirklich? ──
+  // motiontask nutzt das, um den Loop-Rebase (Endlos-Laufen) nur bei echten
+  // Bewegungs-Clips anzuwenden — bei Idles würde sonst der winzige
+  // Yaw-/Positions-Unterschied Clip-Ende↔Anfang JEDE Schleife akkumulieren
+  // (der Geist drehte sich über Minuten komplett um / wanderte davon).
+  let travel = 0;
+  for (let f = 1; f < n; f++) {
+    travel += Math.hypot(root[2 * f] - root[2 * f - 2], root[2 * f + 1] - root[2 * f - 1]);
+  }
+  const meanSpeed = travel / Math.max(1e-6, (n - 1) / fps);
+  const locomotion = meanSpeed > 0.10; // m/s — Idles/Sways bleiben unterhalb
+
   return {
     name: clip.name || 'clip',
     fps, n, nu,
     q, h,
     root, yaw, srcPos, srcJoints,
     baseQ, // Basis-Orientierung je Frame (n×4, xyzw) — Lehrer-Nick/Roll für den Geist
+    rawYaw, triadYaw, // Diagnose: Blick-Rohwert + Triaden-Yaw vor Unwrap
+    locomotion, meanSpeed, // true = echte Fortbewegung (Loop-Rebase erlaubt)
     scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
     mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,
     duration: clip.duration,
   };
+}
+
+// ── Timeline-Pflege (v2.4.1) ────────────────────────────────────────────
+// a) Spike-Brücke: isolierte Ausreißer-Frames (beidseitig steile Kanten)
+//    gegen die adaptive Bewegungsskala des Gelenks ersetzen. Echte schnelle
+//    Bewegungen (Rampen) bleiben unangetastet — nur NADELN werden gebrochen.
+function denoiseTimeline(q, n, nu) {
+  if (n < 5) return;
+  for (let j = 0; j < nu; j++) {
+    for (let pass = 0; pass < 2; pass++) {
+      let changed = false;
+      for (let f = 1; f < n - 1; f++) {
+        const v0 = q[(f - 1) * nu + j], v1 = q[f * nu + j], v2 = q[(f + 1) * nu + j];
+        const d0 = Math.abs(v1 - v0), d1 = Math.abs(v2 - v1);
+        const edge = Math.max(d0, d1);
+        if (edge < 0.3) continue; // unter der Nadel-Schwelle
+        // lokale Bewegungsskala (Median der Nachbar-Deltas ohne f)
+        const nb = [];
+        for (let g = Math.max(1, f - 3); g <= Math.min(n - 1, f + 4); g++) {
+          if (g === f || g === f + 1) continue;
+          nb.push(Math.abs(q[g * nu + j] - q[(g - 1) * nu + j]));
+        }
+        nb.sort((a, b) => a - b);
+        const med = nb.length ? nb[nb.length >> 1] : 0;
+        const thr = Math.max(0.3, 6 * med);
+        if (d0 > thr && d1 > thr) {
+          q[f * nu + j] = 0.5 * (v0 + v2); // Nadel → Brücke
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  }
+}
+
+// b) Loop-Naht: endet der Clip in einer deutlich anderen Pose als er startet,
+//    werden die letzten K Frames zum Start-Pose hin geblendet (Smoothstep) —
+//    das Endlosschleifen-Wrap zuckt nicht mehr.
+function seamBlend(q, n, nu) {
+  if (n < 10) return;
+  let seam = 0;
+  for (let j = 0; j < nu; j++) seam = Math.max(seam, Math.abs(q[j] - q[(n - 1) * nu + j]));
+  if (seam < 0.15) return; // Naht ohnehin stetig
+  const K = Math.min(8, n >> 2);
+  for (let k = 0; k < K; k++) {
+    const f = n - K + k;
+    const u = (k + 1) / (K + 1);
+    const s = u * u * (3 - 2 * u); // Smoothstep
+    for (let j = 0; j < nu; j++) {
+      q[f * nu + j] = q[f * nu + j] * (1 - s) + q[j] * s;
+    }
+  }
+}
+
+// c) Winkel-Brücke: einzelne Sprünge > maxStep (bereits ent-wrapped, relativ)
+//    linear über die betroffenen Frames verteilen.
+function bridgeAngles(arr, n, maxStep) {
+  for (let f = 1; f < n; f++) {
+    if (Math.abs(arr[f] - arr[f - 1]) <= maxStep) continue;
+    let g = f;
+    while (g < Math.min(n - 1, f + 6) && Math.abs(arr[g + 1] - arr[g]) > maxStep * 0.5) g++;
+    const a0 = arr[f - 1], a1 = arr[g];
+    const steps = g - f + 1;
+    for (let k = 0; k < steps; k++) {
+      arr[f + k] = a0 + (a1 - a0) * ((k + 1) / (steps + 1));
+    }
+    f = g;
+  }
 }
 
 // Fuß-Geoms mit ECHTER Tiefe: unterster Punkt je Geom im KÖRPER-Frame
