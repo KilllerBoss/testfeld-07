@@ -85,7 +85,10 @@
     <span id="stMode">MANUELL</span>
   </div>
 
-  <!-- KI-Button-Leiste (von der KI eingerichtete Aktionen) -->
+  <!-- Clip-Aktions-Buttons (v2.6.0: unten statt oben) -->
+  <div id="clipButtons" class="clip-buttons hidden"></div>
+
+  <!-- KI-Button-Leiste (von der KI eingerichtete Aktionen, v2.6.0 unten) -->
   <div id="aiButtons" class="ai-buttons hidden"></div>
 
   <!-- Steuerung -->
@@ -161,10 +164,16 @@
         <span class="glb-ctrl-label">Steuerung</span>
         <button class="speed-chip ctrl-chip active" data-ctrl="none">Keine</button>
         <button class="speed-chip ctrl-chip" data-ctrl="joy">Joystick</button>
+        <button class="speed-chip ctrl-chip" data-ctrl="btn">Buttons</button>
         <label class="glb-toggle anim-train-toggle"><input type="checkbox" id="animTrainToggle" checked> Animation im Training</label>
       </div>
+      <div id="glbBtnRow" class="glb-row glb-btn-row hidden">
+        <input id="glbBtnName" type="text" placeholder="z. B. Kicken" maxlength="12" autocomplete="off">
+        <button id="glbBtnAdd" class="btn small">+ Button</button>
+        <span class="glb-ctrl-label glb-btn-hint">max. 4 · lang drücken = löschen</span>
+      </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
+      <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Buttons“ = Joystick PLUS eigene Aktionstasten (z. B. Kicken, Springen): im Training feuern sie zufällig, im POLICY-Modus löst eine Taste die Aktion aus — die Tastenleiste erscheint unten. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
     </div>
     <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
   </section>

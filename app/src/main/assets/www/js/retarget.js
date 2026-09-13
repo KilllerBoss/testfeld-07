@@ -335,6 +335,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const G1B = {}; // Geist-Körper je Seite
   const G1D0 = {}; // Nullposen-Richtungen je Seite
   const G1X0 = {}; // Nullposen-Körperquats je Seite [x,y,z,w]
+  const VALGUS = {}; // Frontalwinkel OS→SB der Nullpose (rad, signed) je Seite
   for (const side of ['left', 'right']) {
     const elbow = bidOfAct(side + '_elbow_joint');
     const ankle = bidOfAct(side + '_ankle_pitch_joint');
@@ -349,6 +350,14 @@ export function retargetToG1(clip, sim, log = () => {}) {
       fore: G1B[side].wrist > 0 ? dirBetween0(elbow, G1B[side].wrist) : null,
     };
     G1X0[side] = { thigh: zeroQuat(hip), arm: zeroQuat(upperArm), foot: zeroQuat(ankle) };
+    // Eingebauter VALGUS (Frontalwinkel OS→SB in der G1-Nullpose, um die
+    // Vorwärtsachse): das Modell-Bein ist nicht gerade — der OS steht ±9°
+    // außen, die SB ~vertikal. Ein STRAIGHTER Lehrer-Bein ist am G1 daher
+    // NICHT exakt darstellbar (roll stellt nur den OS, nie beide); mkGoals
+    // rotiert das Hüftziel bei geradem Bein um −valgus/2 → symmetrischer
+    // A-Stand (je ~4,5° außen/innen) statt X-Bein (0°/10° innen).
+    const latAng = (v) => Math.atan2(v[1], -v[2]);
+    VALGUS[side] = latAng(G1D0[side].shin) - latAng(G1D0[side].thigh);
   }
 
   // Distale Partner für Lehrer-Richtungen: Hand (Unterarm) bzw. Fuß-Ende
@@ -646,10 +655,20 @@ export function retargetToG1(clip, sim, log = () => {}) {
     // Oberschenkel/Oberarm = reine RICHTUNGEN (die Twist um die Knochenachse
     // ist visuell irrelevant und erzeugte sonst Hüft-/Schulter-Verdrehungen
     // bis ins Gelenklimit — der Twist bleibt naturbelassen beim Warm-Start).
+    // v2.6.0 — GERADES-BEIN-FIX („Bein etwas falsch / X-Beine"): Das G1
+    // steht in der Nullpose im A-Stand (Oberschenkel ±9° nach außen). Richtete
+    // die IK den OS exakt auf den Lehrer aus (roll ∓0,16), kippte die SCHIEN
+    // ~10° nach INNEN — das Knie (Scharnier um die Querachse) kann laterale
+    // Fehler nicht korrigieren →Knöchel-Rollworkaround + sichtbares X-Bein.
+    // Bei nahezu gestrecktem Bein (OS↔SB < 20°) zielt die Hüfte jetzt auf den
+    // WINKELBISSEKTOR aus OS+SB: der unvermeidliche Restfehler verteilt sich
+    // symmetrisch (je ~5° statt 0°/10°), das Knie bleibt natürlich. Gebogene
+    // Beine (Kniebeuge > 20°) zielen weiter rein auf den OS — da kommt der
+    // Seitwärts-Anteil eh aus der Hüfte und das Knie löst den Rest.
     const mkGoals = (f, side) => {
       const li = side === 'left' ? 0 : 4;
-      const g = { hasThigh: false, hasShin: false, hasFoot: false, hasArm: false, hasFore: false,
-        dThigh: [0, 0, 0], dShin: [0, 0, 0], dArm: [0, 0, 0], dFore: [0, 0, 0] };
+      const g = { hasThigh: false, hasShin: false, hasFoot: false, hasArm: false, hasFore: false, straightLeg: false,
+        dThigh: [0, 0, 0], dShin: [0, 0, 0], dHip: [0, 0, 0], dArm: [0, 0, 0], dFore: [0, 0, 0] };
       const oT = (f * 8 + li) * 3, oS = (f * 8 + li + 1) * 3;
       const oA = (f * 8 + li + 2) * 3, oF = (f * 8 + li + 3) * 3;
       const t1 = [0, 0, 0, 1], t2 = [0, 0, 0, 1];
@@ -662,6 +681,23 @@ export function retargetToG1(clip, sim, log = () => {}) {
         rotVec(yq, [dSrc[oS], dSrc[oS + 1], dSrc[oS + 2]], g.dShin);
         g.hasShin = true;
       }
+      if (g.hasThigh && g.hasShin) {
+        const dot = Math.max(-1, Math.min(1, g.dThigh[0] * g.dShin[0] + g.dThigh[1] * g.dShin[1] + g.dThigh[2] * g.dShin[2]));
+        if (dot > 0.94) { // < ~20° Kniebeuge → „gerades“ Bein
+          let bx = g.dThigh[0] + g.dShin[0], by = g.dThigh[1] + g.dShin[1], bz = g.dThigh[2] + g.dShin[2];
+          // Valgus-Kompensation: Ziel um −valgus/2 um die Basis-X-Achse
+          // (Vorwärts) drehen → Hüftziel je Seite ~4,5° nach AUÑEN —
+          // OS und SB teilen sich den Restfehler symmetrisch.
+          const half = -(VALGUS[side] || 0) / 2;
+          const cy = Math.cos(half), sy = Math.sin(half);
+          const by2 = by * cy - bz * sy, bz2 = by * sy + bz * cy;
+          by = by2; bz = bz2;
+          const l = Math.hypot(bx, by, bz) || 1;
+          g.dHip = [bx / l, by / l, bz / l];
+          g.straightLeg = true;
+        }
+      }
+      if (!g.straightLeg) { g.dHip[0] = g.dThigh[0]; g.dHip[1] = g.dThigh[1]; g.dHip[2] = g.dThigh[2]; }
       const o4 = (f * 2 + (side === 'left' ? 0 : 1)) * 4;
       if (Number.isFinite(footW[o4])) {
         t1[0] = footW[o4]; t1[1] = footW[o4 + 1]; t1[2] = footW[o4 + 2]; t1[3] = footW[o4 + 3];
@@ -789,14 +825,15 @@ export function retargetToG1(clip, sim, log = () => {}) {
             { name: side + '_hip_pitch_joint', aid: A[side + '_hip_pitch_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
           ];
           const kneeEntries = [side + '_knee_joint'].map(nm => ({ name: nm, aid: A[nm] }));
-          // REINER Oberschenkel-Fehler für die Hüft-Züge: Die Anti-Züge (mit
+          // REINER Hüft-Fehler (v2.6.0: Ziel = dHip — OS bzw. dessen
+          // Bissector bei geradem Bein, s. mkGoals): Die Anti-Züge (mit
           // Clamp-Rejekt) halten die Schiene raumfix, sodass die Hüfte die
           // Richtung optimal anfahren kann, ohne die Schiene zubeeinflussen.
           const thighErr = G.hasThigh ? () => {
             sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
             gposOf(bb.hip, pA); gposOf(bb.knee, pB);
             dirFromTo(pA, pB, dDisp);
-            return angBetween(dDisp, G.dThigh);
+            return angBetween(dDisp, G.dHip);
           } : () => 0;
           const shinErr = G.hasShin ? () => {
             sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
@@ -825,7 +862,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
           // Klemm-Konflikte; der kontinuierliche Anker hielt die Yaw-Spikes
           // klein). Die WARM-GATE-Behandlung bleibt der Schulter (Arm-
           // Ellbogen kann klemmen — dort ist der Sanftanker nötig).
-          if (G.hasThigh) seedChain(off2, G1D0[side].thigh, G.dThigh, hipNames);
+          if (G.hasThigh) seedChain(off2, G1D0[side].thigh, G.dHip, hipNames);
           for (let round = 0; round < 2; round++) {
             descend(off2, thighErr, hipEntries, 6);
             descend(off2, shinErr, kneeEntries, 6);

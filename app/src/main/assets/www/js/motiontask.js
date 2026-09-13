@@ -12,6 +12,15 @@
 //   'joy' (Kommandos vx/wz führen die Wurzel). Im TRAINING werden die
 //   Kommandos zufällig gewürfelt (Domain-Randomization — die Policy lernt,
 //   dass der Joystick sie steuert), im POLICY-Modus liefert der Stick sie.
+// v2.6.0 — ctrlMode 'btn': wie 'joy' (Zufalls-Kommandos im Training,
+//   Stick im POLICY-Modus) PLUS 4 TRIGGER-KANÄLE (nutzerdefinierte Buttons,
+//   z. B. „Kicken"/„Springen"). Im Training werden die Trigger zufällig
+//   feuern (Domain-Randomization) und der Posen-Anteil der Belohnung
+//   gedämpft + kleiner Bewegungs-Bonus — die Policy lernt, dass ein
+//   Trigger eine EIGENE dynamische Aktion auslöst (Freistil in der Pose-
+//   Familie), danach zurück zur Referenz. Beobachtungsraum: 3·nu + 18
+//   (+4 Trigger-Kanäle, geglättet 0..1) — Policies von ≤ v2.5.0 werden
+//   verworfen (obsDim-Wache in main.js loadPolicy).
 // v2.5.0 — ANIMATION AN/AUS: animOn=false schaltet das Posen-Tracking ab
 //   (Referenz = Keyframe-Stand) — so lernt der Roboter NUR GLEICHGEWICHT,
 //   denn die GLB-Animationen besitzen selbst kein physikalisches
@@ -53,6 +62,14 @@ export function makeMotionTask(cfg, clip, sim) {
     //   führen das Wurzel-Ziel. Training: Zufalls-Kommandos (Domain-
     //   Randomization). POLICY-Modus: der Joystick liefert sie.
     ctrlMode: 'none',
+    // v2.6.0 'btn': wie 'joy' PLUS 4 Trigger-Kanäle (nutzerdefinierte
+    // Buttons, z. B. „Kicken"/„Springen"). Training: Zufalls-Trigger +
+    // gedämpfter Posen-Anteil + Bewegungs-Bonus → die Policy verbindet den
+    // Button mit einer eigenen dynamischen Aktion (Freistil in der Pose-
+    // familie), danach zurück zur Referenz. POLICY-Modus: Taste setzt Trigger.
+    buttons: [],                   // Button-Labels je Clip (max. 4, UI/Debug)
+    trg: new Float64Array(4),      // geglättete Trigger 0..1
+    _trgHold: new Float64Array(4), // Rest-Haltezeit je Trigger (s)
     // ── Animation an/aus (v2.5.0) ──────────────────────────
     // false = Posen-Tracking AUS (Referenz = Keyframe-Stand): es wird nur
     //   GLEICHGEWICHT gelernt. Der Posen-Anteil fällt auf 35 % (grobe
@@ -61,7 +78,7 @@ export function makeMotionTask(cfg, clip, sim) {
     cmd: { vx: 0, wz: 0 },   // aktuelles Kommando (Training: gewürfelt, Policy: Stick)
     _cmdHold: 0,             // Rest-Haltezeit des Kommandos (s)
     _tx: 0, _ty: 0, _tyaw: 0, // Kommando-integriertes Wurzel-Ziel
-    obsDim: 3 * nu + 14,
+    obsDim: 3 * nu + 18, // v2.6.0: +4 Trigger-Kanäle (Buttons)
     actDim: nu,
     phase: 0,
     lastAct: new Float64Array(nu),
@@ -79,6 +96,8 @@ export function makeMotionTask(cfg, clip, sim) {
       this.phase = 0;
       this.tElapsed = 0;
       this.lastAct.fill(0);
+      this.trg.fill(0);
+      this._trgHold.fill(0);
       this._loopX = 0; this._loopY = 0; this._loopYaw = 0;
       // Kommando-Ziel auf den Bahn-Anfang setzen (v2.5.0)
       this._tx = hasRoot ? clip.root[0] : 0;
@@ -142,11 +161,20 @@ export function makeMotionTask(cfg, clip, sim) {
       return Math.hypot(dx, dy) * c.fps;
     },
 
+    // Trigger setzen (v2.6.0): POLICY-Modus (Button-Taste) + Tests
+    setTrigger(i, sec = 1.2) {
+      if (this.ctrlMode !== 'btn' || i < 0 || i > 3) return false;
+      this._trgHold[i] = Math.max(this._trgHold[i], sec);
+      return true;
+    },
+
     // Zufalls-Kommandos im TRAINING (v2.5.0, Domain-Randomization): der
     // Roboter lernt, dass (vx, wz) ihn steuert — Haltezeit 1,5–4 s,
     // ~25 % Stille (Stehen), sonst Vorwärts/Rückwärts + Gieren.
+    // v2.6.0 ('btn'): zusätzlich zufällige TRIGGER (25 % je Kanal,
+    // Haltezeit 0,8–2,0 s) — die Policy lernt, Buttons ernst zu nehmen.
     sampleCmd() {
-      if (this.ctrlMode !== 'joy') { this.cmd.vx = 0; this.cmd.wz = 0; this._cmdHold = Infinity; return; }
+      if (this.ctrlMode === 'none') { this.cmd.vx = 0; this.cmd.wz = 0; this._cmdHold = Infinity; return; }
       const vxMax = Math.max(0.5, Math.min(1.0, (clip.meanSpeed || 0.4) * 1.6));
       if (Math.random() < 0.25) { this.cmd.vx = 0; this.cmd.wz = 0; }
       else {
@@ -154,6 +182,9 @@ export function makeMotionTask(cfg, clip, sim) {
         this.cmd.wz = (Math.random() * 2 - 1) * 0.9;
       }
       this._cmdHold = 1.5 + Math.random() * 2.5;
+      if (this.ctrlMode === 'btn') {
+        for (let i = 0; i < 4; i++) this._trgHold[i] = Math.random() < 0.25 ? (0.8 + Math.random() * 1.2) : 0;
+      }
     },
 
     observe(sim, out) {
@@ -193,6 +224,11 @@ export function makeMotionTask(cfg, clip, sim) {
       // bei 'none' dauerhaft 0.
       out[o++] = this.cmd.vx;
       out[o++] = this.cmd.wz;
+      // Trigger-Kanäle (v2.6.0): geglättete Button-Aktivierungen 0..1
+      out[o++] = this.trg[0];
+      out[o++] = this.trg[1];
+      out[o++] = this.trg[2];
+      out[o++] = this.trg[3];
       for (let i = 0; i < nu; i++) out[o++] = this.lastAct[i];
       return o;
     },
@@ -216,6 +252,7 @@ export function makeMotionTask(cfg, clip, sim) {
       out[o++] = Math.sin(2 * Math.PI * phase);
       out[o++] = Math.cos(2 * Math.PI * phase);
       out[o++] = 0; out[o++] = 0; // Kommando-Kanäle (BC ohne Führung)
+      out[o++] = 0; out[o++] = 0; out[o++] = 0; out[o++] = 0; // Trigger (v2.6.0)
       for (let i = 0; i < nu; i++) out[o++] = 0;
       return o;
     },
@@ -238,10 +275,10 @@ export function makeMotionTask(cfg, clip, sim) {
       const h = this._p[2];
       const eH = Math.exp(-Math.pow((h - this._href[0]) / MOTION_R.hScale, 2));
       // Bahn-Folgen: Abstand zur Wurzel + Blick. v2.5.0: bei Kommando-
-      // führung (joy) oder animOn=false ist das Ziel die Integration
+      // führung (joy/btn) oder animOn=false ist das Ziel die Integration
       // (_tx/_ty/_tyaw), sonst die wandernde Referenz-Bahn.
       let eRoot = 1, eYaw = 1, dRoot = 0;
-      const trackCmd = this.ctrlMode === 'joy' || this.animOn === false;
+      const trackCmd = this.ctrlMode === 'joy' || this.ctrlMode === 'btn' || this.animOn === false;
       if (trackCmd) {
         const dx = this._tx - this._p[0], dy = this._ty - this._p[1];
         dRoot = Math.hypot(dx, dy);
@@ -260,10 +297,23 @@ export function makeMotionTask(cfg, clip, sim) {
       for (let i = 0; i < nu; i++) e += this.lastAct[i] * this.lastAct[i];
       // animOn=false: Posen-Anteil gedämpft (grobe Stand-Attraktor — die
       // Beine bleiben frei genug, um auf Joystick-Kommandos zu gehen)
-      const poseW = this.animOn === false ? MOTION_R.pose * 0.35 : MOTION_R.pose;
+      // v2.6.0: AKTIVER TRIGGER dämpft den Posen-Anteil zusätzlich (0,25×)
+      // und zahlt einen kleinen Bewegungs-Bonus — der Button „befreit" den
+      // Roboter für eine eigene dynamische Aktion (Kicken/Springen-artig);
+      // Höhe/Aufrecht/Bahn halten ihn dabei sicher.
+      let poseW = this.animOn === false ? MOTION_R.pose * 0.35 : MOTION_R.pose;
+      let styleB = 0;
+      let trgSum = 0;
+      for (let i = 0; i < 4; i++) trgSum += this.trg[i];
+      if (trgSum > 0.2) {
+        poseW *= 0.25;
+        let mAbs = 0;
+        for (let i = 0; i < nu; i++) mAbs += Math.abs(this.lastAct[i]);
+        styleB = 0.08 * Math.min(1, (mAbs / nu) / 0.35) * Math.min(1, trgSum);
+      }
       const r = poseW * eQ + MOTION_R.height * eH
         + MOTION_R.root * eRoot + MOTION_R.yaw * eYaw
-        + MOTION_R.up * clamp(upz, 0, 1) + MOTION_R.base - MOTION_R.energy * e;
+        + MOTION_R.up * clamp(upz, 0, 1) + MOTION_R.base + styleB - MOTION_R.energy * e;
       // Abbruch: Sturz ODER dauerhaft verloren von der Bahn (Eingangsphase geschont)
       const lostRoot = hasRoot && (this.tElapsed || 0) > 1.2 && dRoot > MOTION_R.rootDone;
       const done = upz < MOTION_R.upMin || h < MOTION_R.hMin * this._href[0] || h > MOTION_R.hMax || lostRoot;
@@ -273,11 +323,11 @@ export function makeMotionTask(cfg, clip, sim) {
     advance(dt) {
       const old = this.phase;
       const c = clip;
-      // Kommando-Führung (v2.5.0): das Wurzel-Ziel integriert (vx, wz).
-      // joy + animOn: Kommandos führen (Training: gewürfelt, Policy: Stick).
+      // Kommando-Führung (v2.5.0/2.6.0): das Wurzel-Ziel integriert (vx, wz).
+      // joy/btn + animOn: Kommandos führen (Training: gewürfelt, Policy: Stick).
       // animOn=false: Ziel bleibt an der Startposition stehen (Gleichgewicht
-      //   lernen ohne Weglauf-Drang) — außer bei joy (dort führt der Stick).
-      const joy = this.ctrlMode === 'joy';
+      //   lernen ohne Weglauf-Drang) — außer bei joy/btn (dort führt der Stick).
+      const joy = this.ctrlMode === 'joy' || this.ctrlMode === 'btn';
       if (joy) {
         this._cmdHold -= dt;
         if (this._cmdHold <= 0) this.sampleCmd();
@@ -286,6 +336,14 @@ export function makeMotionTask(cfg, clip, sim) {
         this._ty += Math.sin(this._tyaw) * this.cmd.vx * dt;
       } else if (this.animOn === false) {
         // _tx/_ty/_tyaw bleiben fix — Ziel = Startposition (Stehen lernen)
+      }
+      // Trigger (v2.6.0): Haltezeit runterzählen + rechteckförmig glätten
+      // (Anstieg ~0,12 s, Abfall ~0,25 s — die Policy sieht saubere Kanäle)
+      for (let i = 0; i < 4; i++) {
+        if (this._trgHold[i] > 0) this._trgHold[i] = Math.max(0, this._trgHold[i] - dt);
+        const goal = this._trgHold[i] > 0 ? 1 : 0;
+        const k = goal > this.trg[i] ? Math.min(1, dt * 8) : Math.min(1, dt * 4);
+        this.trg[i] += (goal - this.trg[i]) * k;
       }
       // Phasen-Tempo: bei Joystick-Führung die Schrittfrequenz grob ans
       // Kommandotempo anpassen (Geh-Clip + Stand-Kommando → Zeitlupe,

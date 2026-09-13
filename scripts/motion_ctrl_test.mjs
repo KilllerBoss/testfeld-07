@@ -1,10 +1,12 @@
-// motion_ctrl_test.mjs — v2.5.0-Verifikation der Motion-Task-Änderungen:
-//   1) obsDim = 3·nu + 14 (Kommando-Kanäle vx/wz immer im Beobachtungsraum)
-//   2) ctrlMode 'none': Kommandos bleiben 0, Ziel = Referenzbahn (wie v2.4.1)
+// motion_ctrl_test.mjs — v2.6.0-Verifikation der Motion-Task-Änderungen:
+//   1) obsDim = 3·nu + 18 (Kommando vx/wz + 4 Trigger-Kanäle für Buttons)
+//   2) ctrlMode 'none': Kommandos/Trigger bleiben 0, Ziel = Referenzbahn
 //   3) ctrlMode 'joy': sampleCmd würfelt, Wurzel-Ziel integriert (vx, wz),
 //      Phasen-Faktor bleibt in [0.4, 1.7]
 //   4) animOn=false: sampleRef liefert Keyframe-Stand, Höhen-Referenz 0,79
 //   5) Reward in allen Modi endlich; done-Logik greift bei Sturz
+//   6) v2.6.0 'btn': Zufalls-Trigger im Training, setTrigger nur im btn-
+//      Modus, Glättung (Anstieg > Abfall), Posen-Dämpfung + Bewegungs-Bonus
 // Läuft ohne MuJoCo (Stub-Sim reicht: motiontask nutzt nur die Getter).
 
 import { makeMotionTask, MOTION_R } from '../app/src/main/assets/www/js/motiontask.js';
@@ -56,7 +58,7 @@ const cfg = { nu, actSpan: 0.4 };
 // ── 1) obsDim ──
 {
   const t = makeMotionTask(cfg, makeClip(false), sim);
-  check('obsDim = 3·nu + 14', t.obsDim === 3 * nu + 14);
+  check('obsDim = 3·nu + 18 (v2.6.0: +4 Trigger)', t.obsDim === 3 * nu + 18);
 }
 
 // ── 2) 'none': Kommandos 0, Beobachtung vollständig, Reward endlich ──
@@ -69,10 +71,13 @@ const cfg = { nu, actSpan: 0.4 };
   for (let k = 0; k < 120; k++) {
     const used = t.observe(sim, obs);
     if (used !== t.obsDim) { ok = false; break; }
-    if (obs[t.obsDim - 2] !== 0 || obs[t.obsDim - 1] !== 0) { ok = false; break; } // Kommandos 0
+    // Reihenfolge: … lead, sin, cos, cmd.vx, cmd.wz, trg0-3, lastAct(nu)
+    const c0 = t.obsDim - nu - 6;
+    for (let i = 0; i < 6; i++) if (obs[c0 + i] !== 0) { ok = false; break; } // Kommandos+Trigger 0
+    if (!ok) break;
     t.advance(0.02);
   }
-  check("'none': observe füllt exakt obsDim, Kommando-Kanäle bleiben 0", ok);
+  check("'none': observe füllt exakt obsDim, Kommando-+Trigger-Kanäle bleiben 0", ok);
   const { r, done } = t.reward(sim);
   check("'none': Reward endlich, Episode läuft weiter (aufrecht, auf der Bahn)", Number.isFinite(r) && !done);
 }
@@ -93,8 +98,8 @@ const cfg = { nu, actSpan: 0.4 };
     if (Math.hypot(t._tx - x0, t._ty - y0) > 0.01) txMoved = true;
     const used = t.observe(sim, obs);
     if (used !== t.obsDim) { holdOk = false; break; }
-    // Führung-Kanal (Index obsDim−nu−5) = Kommando vx
-    if (Math.abs(obs[t.obsDim - nu - 5] - t.cmd.vx) > 1e-6) { holdOk = false; break; }
+    // Führung-Kanal: cmd.vx liegt bei obsDim−nu−6 (in joy ist lead gleich)
+    if (Math.abs(obs[t.obsDim - nu - 6] - t.cmd.vx) > 1e-6) { holdOk = false; break; }
   }
   check("'joy': Zufalls-Kommandos erscheinen (vx≠0 oder wz≠0)", cmdSeen);
   check("'joy': Haltezeit ≤ 4 s", holdOk);
@@ -140,7 +145,57 @@ const cfg = { nu, actSpan: 0.4 };
   check('animOn=false + joy: Ziel folgt Kommandos (Gehen ohne Anim)', t._cmdHold > 0);
 }
 
-// ── 5) Sturz-Abbruch ──
+// ── 5) 'btn': Trigger-Zufall, setTrigger-Gate, Glättung, Reward-Umverteilung ──
+{
+  const clip = makeClip(true);
+  const t = makeMotionTask(cfg, clip, sim);
+  t.ctrlMode = 'btn';
+  t.reset(null, sim);
+  // a) Training würfelt Trigger
+  let trgSeen = false;
+  for (let k = 0; k < 400; k++) {
+    t._cmdHold = 0; // erzwingt sampleCmd im advance
+    t.advance(0.02);
+    for (let i = 0; i < 4; i++) if (t._trgHold[i] > 0) trgSeen = true;
+  }
+  check("'btn': sampleCmd würfelt zufällige Trigger (Hold > 0)", trgSeen);
+  check("'btn': Trigger-Haltezeit ≤ 2 s", (() => {
+    for (let k = 0; k < 300; k++) { t._cmdHold = 0; t.advance(0.02); for (let i = 0; i < 4; i++) if (t._trgHold[i] > 2.001) return false; }
+    return true;
+  })());
+  // b) setTrigger nur im btn-Modus
+  const tNone = makeMotionTask(cfg, makeClip(false), sim);
+  tNone.reset(null, sim);
+  check("'none': setTrigger wird abgelehnt", tNone.setTrigger(0) === false);
+  check("'btn': setTrigger(i) akzeptiert (Hold ≥ 1,2 s)", t.setTrigger(1) && t._trgHold[1] >= 1.2);
+  // c) Glättung: Anstieg auf ~1, danach Abfall — trg Kanal landet im obs
+  const obs = new Float32Array(t.obsDim);
+  for (let k = 0; k < 30; k++) { t.advance(0.02); t.observe(sim, obs); }
+  check("'btn': Trigger-Kanal steigt Richtung 1 (glättend)", t.trg[1] > 0.5);
+  t._cmdHold = Infinity; // sampleCmd ausnehmen — sonst würfelt es neue Trigger
+  for (let k = 0; k < 300; k++) { t.advance(0.02); t.observe(sim, obs); }
+  check("'btn': Trigger-Kanal fällt nach Haltezeit auf ~0", t.trg[1] < 0.05);
+  const used = t.observe(sim, obs);
+  check("'btn': Trigger-Kanäle liegen im obs (Positionen korrekt)", used === t.obsDim && Math.abs(obs[t.obsDim - nu - 4] - t.trg[0]) < 1e-6);
+  // d) Reward: aktiver Trigger dämpft Posen-Anteil + zahlt Bewegungs-Bonus
+  t.reset(null, sim);
+  const r0 = t.reward(sim).r; // kein Trigger
+  for (let i = 0; i < nu; i++) t.lastAct[i] = 0.6; // Bewegung simulieren
+  t.setTrigger(0, 1.0);
+  for (let k = 0; k < 20; k++) t.advance(0.02); // trg[0] → ~1
+  const r1 = t.reward(sim).r;
+  check("'btn': aktiver Trigger verändert den Reward (Freistil-Bonus + Posen-Dämpfung)", Math.abs(r1 - r0) > 1e-6 && Number.isFinite(r1));
+  const { done } = t.reward(sim);
+  check("'btn': Freistil endet nicht sofort (Höhe/Aufrecht ok)", !done);
+  const tNone2 = makeMotionTask(cfg, makeClip(false), sim);
+  tNone2.reset(null, sim);
+  const rNone0 = tNone2.reward(sim).r;
+  for (let i = 0; i < nu; i++) tNone2.lastAct[i] = 0.6;
+  const rNone1 = tNone2.reward(sim).r;
+  check("'none': OHNE Trigger keine Reward-Umverteilung (klar abgegrenzt)", Math.abs(rNone1 - rNone0) < 1e-9 || rNone1 < rNone0); // Energie-Strafe senkt r
+}
+
+// ── 6) Sturz-Abbruch ──
 {
   const clip = makeClip(false);
   const t = makeMotionTask(cfg, clip, sim);

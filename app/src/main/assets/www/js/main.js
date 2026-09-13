@@ -19,7 +19,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.5.0';
+const VERSION = '2.6.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -97,10 +97,13 @@ async function loadRobot(id, first = false) {
     if (id === 'g1' && S.motionClip) {
       S.task = makeMotionTask(cfg, S.motionClip, sim);
       S.task.animOn = S.animTraining;
-      // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0)
+      // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0, 'btn' v2.6.0)
       const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
-      if (rec && rec.ctrl === 'joy') S.task.ctrlMode = 'joy';
+      if (rec && (rec.ctrl === 'joy' || rec.ctrl === 'btn')) S.task.ctrlMode = rec.ctrl;
+      if (rec && Array.isArray(rec.buttons)) S.task.buttons = rec.buttons.slice(0, 4);
       syncCtrlChips();
+      syncBtnRow();
+      renderClipButtons();
     } else {
       S.task = cfg.task(cfg);
     }
@@ -340,8 +343,9 @@ function observeState() {
     motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
     activeClip: S.motionClip ? S.motionClip.name : null,
     motionCtrl: S.task && S.task.kind === 'motion'
-      ? { ctrlMode: S.task.ctrlMode, animOn: S.task.animOn, cmd: { vx: +S.task.cmd.vx.toFixed(2), wz: +S.task.cmd.wz.toFixed(2) } }
+      ? { ctrlMode: S.task.ctrlMode, animOn: S.task.animOn, cmd: { vx: +S.task.cmd.vx.toFixed(2), wz: +S.task.cmd.wz.toFixed(2) }, triggers: Array.from(S.task.trg).map(v => +v.toFixed(2)) }
       : null,
+    clipButtons: (S.activeRecId && S.clips.find(r => r.id === S.activeRecId)?.buttons) || [],
     pushStrength: S.pushStrength,
     joystick: controls.joyMap,
     buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
@@ -715,10 +719,10 @@ function policyCtrlStep() {
   const sim = S.sim, task = S.task, trainer = S.trainer;
   if (!trainer) return;
   const substeps = Math.max(1, Math.round((S.sim.cfg.ctrlDt || CTRL_DT) / sim.timestep));
-  // Joystick-Steuerung (v2.5.0): bei ctrlMode 'joy' liefert der Stick die
-  // Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy im Training
-  // mit Zufalls-Kommandos kennengelernt hat.
-  if (task.kind === 'motion' && task.ctrlMode === 'joy') {
+  // Joystick/Buttons-Steuerung (v2.5.0): bei ctrlMode 'joy'/'btn' liefert
+  // der Stick die Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy
+  // im Training mit Zufalls-Werten kennengelernt hat.
+  if (task.kind === 'motion' && (task.ctrlMode === 'joy' || task.ctrlMode === 'btn')) {
     const c = controls.command(S.sim.cfg);
     task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
   }
@@ -1082,7 +1086,9 @@ function wireUI() {
   document.getElementById('glbFile').addEventListener('change', onGlbFiles);
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
   // ── Steuerung je Clip (v2.5.0): Keine = Referenzbahn, Joystick = Zufalls-
-  // Kommandos im Training + echte Stick-Steuerung im POLICY-Modus
+  // Kommandos im Training + echte Stick-Steuerung im POLICY-Modus.
+  // v2.6.0: „Buttons" = wie Joystick PLUS 4 Trigger-Kanäle für nutzer-
+  // definierte Aktionen (z. B. Kicken/Springen) — unten in der Leiste.
   for (const b of document.querySelectorAll('.ctrl-chip')) {
     b.addEventListener('click', () => {
       controls.buzz();
@@ -1094,11 +1100,41 @@ function wireUI() {
       putClip(rec).catch(() => {});
       S.task.ctrlMode = mode;
       S.task.cmd.vx = 0; S.task.cmd.wz = 0; S.task._cmdHold = 0;
+      S.task._trgHold.fill(0);
+      syncBtnRow();
+      renderClipButtons();
       log(mode === 'joy'
         ? 'Steuerung: JOYSTICK — im Training werden zufällige Fahrbefehle (vx, Gier-Rate) gewürfelt, damit die Policy lernt, dass der Joystick sie steuert; im POLICY-Modus steuert der echte Stick'
-        : 'Steuerung: KEINE — das Gelernte folgt rein der Referenzbahn (typisch für Idle)', 'ok');
-      ui.toast(mode === 'joy' ? 'Steuerung: Joystick' : 'Steuerung: keine');
+        : mode === 'btn'
+          ? 'Steuerung: BUTTONS — wie Joystick, PLUS deine Buttons (z. B. Kicken/Springen): im Training feuern sie zufällig und die Policy lernt eine eigene Aktion dazu; im POLICY-Modus löst eine Taste die Aktion aus (unten in der Leiste)'
+          : 'Steuerung: KEINE — das Gelernte folgt rein der Referenzbahn (typisch für Idle)', 'ok');
+      ui.toast(mode === 'joy' ? 'Steuerung: Joystick' : mode === 'btn' ? 'Steuerung: Buttons' : 'Steuerung: keine');
     });
+  }
+  // ── Clip-Buttons hinzufügen (v2.6.0) ────────────────────
+  const addClipBtn = document.getElementById('glbBtnAdd');
+  const nameInp = document.getElementById('glbBtnName');
+  if (addClipBtn && nameInp) {
+    const addFromInput = () => {
+      const label = (nameInp.value || '').trim().slice(0, 12);
+      if (!label) { ui.toast('Erst einen Namen tippen (z. B. Kicken)', true); return; }
+      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+      if (!rec) { ui.toast('Zuerst eine GLB-Referenz wählen', true); return; }
+      const list = Array.isArray(rec.buttons) ? rec.buttons.slice() : [];
+      if (list.some(x => x.toLowerCase() === label.toLowerCase())) { ui.toast('Button existiert schon', true); return; }
+      if (list.length >= 4) { ui.toast('Maximal 4 Buttons pro Clip', true); return; }
+      list.push(label);
+      rec.buttons = list;
+      putClip(rec).catch(() => {});
+      if (S.task && S.task.kind === 'motion') S.task.buttons = list.slice();
+      nameInp.value = '';
+      renderClipButtons();
+      controls.buzz();
+      log(`Button „${label}" hinzugefügt (${list.length}/4) — Training würfelt jetzt auch diesen Trigger`, 'ok');
+      ui.toast('Button „' + label + '" angelegt');
+    };
+    addClipBtn.addEventListener('click', addFromInput);
+    nameInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addFromInput(); } });
   }
   // ── Animation im Training an/aus (v2.5.0): AUS = nur Gleichgewicht lernen
   const animT = document.getElementById('animTrainToggle');
@@ -1223,6 +1259,57 @@ function syncCtrlChips() {
   for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x.dataset.ctrl === mode);
 }
 
+// Eingabezeile für neue Buttons nur im 'btn'-Modus zeigen (v2.6.0)
+function syncBtnRow() {
+  const row = document.getElementById('glbBtnRow');
+  if (!row) return;
+  const on = !!(S.task && S.task.kind === 'motion' && S.task.ctrlMode === 'btn');
+  row.classList.toggle('hidden', !on);
+}
+
+// Clip-Buttons unten in der Leiste rendern (v2.6.0): sichtbar, wenn der
+// aktive Clip im 'btn'-Modus ist und Buttons existieren. Tippen = Trigger
+// (POLICY- UND MANUELL-Modus); lange drücken = Button löschen.
+function renderClipButtons() {
+  const bar = document.getElementById('clipButtons');
+  if (!bar) return;
+  bar.innerHTML = '';
+  const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+  const labels = (rec && Array.isArray(rec.buttons)) ? rec.buttons : [];
+  const on = !!(S.task && S.task.kind === 'motion' && S.task.ctrlMode === 'btn' && labels.length);
+  bar.classList.toggle('hidden', !on);
+  if (!on) return;
+  labels.forEach((label, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'ai-btn clip-btn';
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      controls.buzz();
+      if (S.task && S.task.kind === 'motion' && S.task.setTrigger(i)) {
+        btn.classList.add('hold');
+        setTimeout(() => btn.classList.remove('hold'), 500);
+        log('Button „' + label + '\" ausgelöst');
+      }
+    });
+    // Lang drücken (600 ms) = löschen
+    let pressT = 0;
+    btn.addEventListener('pointerdown', () => { pressT = setTimeout(() => {
+      const list = labels.slice(); list.splice(i, 1);
+      rec.buttons = list;
+      putClip(rec).catch(() => {});
+      if (S.task && S.task.kind === 'motion') S.task.buttons = list.slice();
+      renderClipButtons();
+      ui.toast('Button „' + label + '\" entfernt');
+      controls.buzz(24);
+    }, 600); });
+    const clear = () => clearTimeout(pressT);
+    btn.addEventListener('pointerup', clear);
+    btn.addEventListener('pointercancel', clear);
+    btn.addEventListener('pointerleave', clear);
+    bar.appendChild(btn);
+  });
+}
+
 async function refreshClipList() {
   S.clips = await listClips();
   const list = document.getElementById('glbList');
@@ -1230,7 +1317,11 @@ async function refreshClipList() {
   list.innerHTML = '';
   for (const rec of S.clips) {
     const row = document.createElement('div');
-    const active = S.motionClip && S.motionClip.name === rec.name;
+    // v2.6.0: Aktiv-Merkung über die RECORD-ID (der alte Name-Vergleich
+    // ‚motionClip.name === rec.name' griff nie — Datei- vs. Animationsname —
+    // deshalb zeigte die aktive Zeile nie „Aktiv" und Deaktivieren war
+    // unmöglich: „nur entfernen, aber es bleibt geladen")
+    const active = S.activeRecId ? S.activeRecId === rec.id : false;
     row.className = 'glb-clip' + (active ? ' active' : '');
     const name = document.createElement('span');
     name.className = 'glb-clip-name';
@@ -1241,8 +1332,15 @@ async function refreshClipList() {
     meta.textContent = (m.duration || 0).toFixed(1) + 's · ' + m.n + 'F';
     const use = document.createElement('button');
     use.className = 'btn small';
-    use.textContent = active ? 'Aktiv' : 'Referenz';
-    use.addEventListener('click', () => activateClip(rec));
+    if (active) {
+      // v2.6.0: aktiven Clip DEAKTIVIEREN ohne ihn aus der Liste zu werfen
+      use.textContent = 'Aus';
+      use.title = 'Referenz deaktivieren (Clip bleibt in der Liste)';
+      use.addEventListener('click', () => deactivateClip());
+    } else {
+      use.textContent = 'Referenz';
+      use.addEventListener('click', () => activateClip(rec));
+    }
     const del = document.createElement('button');
     del.className = 'btn small';
     del.textContent = '×';
@@ -1262,10 +1360,13 @@ function activateClip(rec) {
   S.activeRecId = rec.id; // aktiver Clip-Datensatz (für Steuerungs-Wahl, v2.5.0)
   S.motionClip = unpackMotion(rec.motion);
   S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
-  // Steuerung + Animation-Status je Clip (v2.5.0)
-  S.task.ctrlMode = rec.ctrl === 'joy' ? 'joy' : 'none';
+  // Steuerung + Animation-Status je Clip (v2.5.0, Buttons v2.6.0)
+  S.task.ctrlMode = rec.ctrl === 'joy' || rec.ctrl === 'btn' ? rec.ctrl : 'none';
+  S.task.buttons = Array.isArray(rec.buttons) ? rec.buttons.slice(0, 4) : [];
   S.task.animOn = S.animTraining;
   syncCtrlChips();
+  syncBtnRow();
+  renderClipButtons();
   S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
   S.obsBuf = new Float32Array(S.task.obsDim);
   S.actBuf = new Float32Array(S.task.actDim);
@@ -1293,6 +1394,7 @@ function activateClip(rec) {
   const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Roboter folgt dem wandernden Lehrer)' : '';
   const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
   const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
+    : S.task.ctrlMode === 'btn' ? ' · Steuerung: BUTTONS (Training würfelt Fahrbefehle + Trigger, POLICY-Modus: Stick + Tasten unten)'
     : ' · Steuerung: keine (rein Referenzbahn)';
   log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);
@@ -1305,6 +1407,8 @@ function deactivateClip() {
   S.srcScene = null;
   S.activeRecId = null;
   syncCtrlChips();
+  syncBtnRow();
+  renderClipButtons();
   r3d.removeGhost();
   r3d.removeSourceGhost();
   if (S.sim) {
@@ -1342,6 +1446,7 @@ Object.defineProperty(window, '__trainrobot', {
     get aiButtons() { return S.aiButtons; },
     get cruise() { return S.cruise; },
     doPush: (dir, strength) => doPush(dir, strength),
+    setTrigger: (i) => S.task && S.task.kind === 'motion' ? S.task.setTrigger(i) : false,
     executeAction: (action) => executeAction(action),
     applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
     ui,
