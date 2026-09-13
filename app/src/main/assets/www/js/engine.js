@@ -250,9 +250,13 @@ export class RobotSim {
 
   /**
    * Setzt die Geister-Pose: Gelenke aus q[off..off+nu], Basis auf (x, y, höhe)
-   * mit Blickrichtung yaw (um +Z). Danach mj_forward (nur Kinematik).
+   * mit Blickrichtung yaw (um +Z). baseLocalQ (optional): zusätzliche lokale
+   * Basis-Orientierung [x,y,z,w] (Nick/Roll des Lehrers — z. B. nach vorn
+   * gebeugt), wird NACH der Yaw-Rotation angewendet:
+   *   Basis-Quat = yawQuat ⊗ baseLocalQ.
+   * Danach mj_forward (nur Kinematik).
    */
-  setGhostPose(ghost, qArr, off, height, x = 0, y = 0, yaw = 0) {
+  setGhostPose(ghost, qArr, off, height, x = 0, y = 0, yaw = 0, baseLocalQ = null) {
     const gq = ghost.qpos;
     for (let a = 0; a < this.nu; a++) gq[this.actQposAdr[a]] = qArr[off + a];
     // Freier Basis-Gelenkanfang (7 Werte: pos + quat)
@@ -262,7 +266,18 @@ export class RobotSim {
     })());
     gq[adr] = x; gq[adr + 1] = y; gq[adr + 2] = height;
     const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
-    gq[adr + 3] = cy; gq[adr + 4] = 0; gq[adr + 5] = 0; gq[adr + 6] = sy;
+    if (baseLocalQ && baseLocalQ.length >= 4) {
+      // Basis = yawQuat ⊗ baseLocalQ. ACHTUNG: baseLocalQ ist [x,y,z,w]
+      // (glTF-Konvention im Projekt), MuJoCo qpos erwartet (w,x,y,z)!
+      const bx = baseLocalQ[0], by = baseLocalQ[1], bz = baseLocalQ[2], bw = baseLocalQ[3];
+      const px = cy * bx - sy * by;
+      const py = cy * by + sy * bx;
+      const pz = cy * bz + sy * bw;
+      const pw = cy * bw - sy * bz;
+      gq[adr + 3] = pw; gq[adr + 4] = px; gq[adr + 5] = py; gq[adr + 6] = pz;
+    } else {
+      gq[adr + 3] = cy; gq[adr + 4] = 0; gq[adr + 5] = 0; gq[adr + 6] = sy;
+    }
     this._mjApi.mj_forward(this.model, ghost);
     return ghost;
   }

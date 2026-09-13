@@ -69,6 +69,7 @@ export function packMotion(motion) {
   if (motion.yaw) out.yaw = Array.from(motion.yaw);
   if (motion.srcPos) out.srcPos = Array.from(motion.srcPos);
   if (motion.srcJoints) out.srcJoints = motion.srcJoints.slice();
+  if (motion.baseQ) out.baseQ = Array.from(motion.baseQ);
   return out;
 }
 
@@ -89,5 +90,7 @@ export function unpackMotion(rec) {
     m.srcPos = new Float32Array(rec.srcPos);
     m.srcJoints = rec.srcJoints.slice();
   }
+  // Basis-Orientierung (Lehrer-Nick/Roll) — alte Datensätze ohne baseQ weiter ok
+  if (rec.baseQ && rec.baseQ.length === 4 * rec.n) m.baseQ = new Float32Array(rec.baseQ);
   return m;
 }

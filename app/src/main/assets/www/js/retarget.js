@@ -1,18 +1,24 @@
 // ═══════════════════════════════════════════════════════════
 // retarget.js — GLB-Skelett → Unitree-G1-Gelenke.
-// Methode (robust gegen abweichende Ruhelage des Quell-Skeletts):
-//   1. Welt-Rotations-Delta je Knochen: ΔQ(t) = Q_welt(t) · Q_ruh⁻¹
-//   2. globale Ausrichtung GLB(+Z Blick) → G1(+X Blick) dazwischen
-//   3. Projektion auf die G1-Gelenkachsen: Einachser (Knie/Knöchel)
-//      direkt über Achsen-Projektion; Hüfte (3 Achsen) per numerischer
-//      Koordinaten-Abstiegs-Lösung gegen die Zielrotation.
+// Methode (WELT-ORIENTIERUNGS-MATCHING — der Geist nimmt die ABSOLUTE
+// Lehrer-Pose an, nicht nur die Bewegungs-Deltas):
+//   1. Basis-Orientierung = Brust-Weltrotation des Lehrers (ALIGN-konjugiert,
+//      Yaw-Anteil entfernt — die Blickrichtung besitzt der Root-Motion-Yaw).
+//      So überträgt sich auch eine in der RUHEPOSE steckende Pose (z. B.
+//      Zombie-Beuge): der G1-Geist neigt die Basis, die Hüften kompensieren.
+//   2. Je Gelenk: Ziel-Lokalrotation aus den QUELL-Weltrotationen von
+//      Eltern-Knochen und Kind-Knochen:  L = A·(W_eltern⁻¹ ⊗ W_kind)·A⁻¹
+//      (Eltern für Beine/Arme = Brust, da die G1-Basis die Brust trägt).
+//   3. 3-Achsen-Gelenke (Hüfte/Schulter) per numerischem Koordinaten-
+//      Abstieg gegen die Zielrotation; 1-Achser (Knie/Knöchel/Ellbogen/
+//      Taille) per Achsen-Projektion; 2-Achser (Knöchel) wie 3-Achser.
 //   4. Basis-Höhe aus Hüft-Translation (cm/m-Erkennung), dann
 //      Boden-Anpassung: tiefsten Fußpunkt über Geister-Vorwärtslauf
-//      anheben (offline, einmalig beim Import).
-// Ergebnis: Referenz-Timeline q_ref (nu je Frame) + h_ref (Basis-Höhe).
+//      anheben (offline, einmalig beim Import) — MIT Basis-Nick.
+// Ergebnis: Referenz-Timeline q_ref (nu je Frame) + h_ref + baseQ (n×4).
 // ═══════════════════════════════════════════════════════════
 
-import { GlbClip, quatMul, quatRot, quatRotInv } from './glb.js';
+import { GlbClip, quatMul, quatRot as rotVec, quatRotInv } from './glb.js';
 
 // Universeller Knochen-Resolver:
 //   1) Alias-Tabelle (normalisiert, ohne Sonderzeichen) — Mixamo mit/ohne
@@ -139,7 +145,8 @@ function jointWorldAxis(sim, jid, out) {
   const bid = mod.jnt_bodyid[jid];
   // jnt_axis ist im Rahmen des Kind-Körpers lokal
   const ax = [mod.jnt_axis[3 * jid], mod.jnt_axis[3 * jid + 1], mod.jnt_axis[3 * jid + 2]];
-  const q = [sim._xquat[4 * bid], sim._xquat[4 * bid + 1], sim._xquat[4 * bid + 2], sim._xquat[4 * bid + 3]];
+  // MuJoCo xquat ist (w,x,y,z) → in [x,y,z,w] drehen für rotVecByQuat!
+  const q = [sim._xquat[4 * bid + 1], sim._xquat[4 * bid + 2], sim._xquat[4 * bid + 3], sim._xquat[4 * bid]];
   rotVecByQuat(q, ax, out);
   return out;
 }
@@ -187,11 +194,31 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const ALIGN = [0.5, 0.5, 0.5, 0.5];
   const ALIGN_INV = [-0.5, -0.5, -0.5, 0.5];
 
-  // Ruhewelt-Quaternionen der Quell-Knochen (ohne Animation)
-  // Rest-Welt-Rotationen: lokale Rest-Rotationen verketten — WICHTIG: auch
-  // matrix-basierte Nodes (assimp _$AssimpFbx$_ PreRotation!) einbeziehen,
-  // sonst ist die Ruhelage falsch und ΔQ wird zum vollen Weltwinkel (die
-  // Hüften schlagen dann an die Gelenkgrenzen statt zu mimiken).
+  // „Brust“ = nächster Vorfahre der Arme — deren WELTrotation enthält die
+  // komplette Oberkörperbeugung (Wirbelsäulen-Kette akkumuliert). Die G1-
+  // Basis trägt diese Orientierung (inkl. Ruhepose-Beugung wie beim Zombie).
+  const armNode = bones.leftArm !== undefined ? bones.leftArm
+    : (bones.rightArm !== undefined ? bones.rightArm : undefined);
+  let chestIdx = armNode !== undefined ? clip.parentOf.get(armNode) : undefined;
+  if (chestIdx === undefined || chestIdx === bones.hips) chestIdx = bones.spine;
+  if (chestIdx === undefined) chestIdx = bones.hips;
+
+  const fps = Math.min(30, Math.max(15, clip.fpsHint));
+  const n = Math.max(2, Math.round(clip.duration * fps));
+  const q = new Float32Array(n * nu);
+  const h = new Float32Array(n);
+
+  const worldMap = new Map();
+  const conjTmp = [0, 0, 0, 1];
+  const axisTmp = [0, 0, 0];
+  const qTmp = [0, 0, 0, 1];
+  const qTmp2 = [0, 0, 0, 1];
+  const qId = [0, 0, 0, 1];
+  const tA = [0, 0, 0, 1], tB = [0, 0, 0, 1];
+
+  // ── Ruhewelt-Rotationen der Quell-Knochen (Kalibrierungs-Referenz) ──
+  // WICHTIG: auch matrix-basierte Nodes (assimp _$AssimpFbx$_ PreRotation!)
+  // einbeziehen, sonst ist die Ruhelage falsch.
   const localRestRot = (idx) => {
     const n = clip.nodes[idx];
     if (n.rotation) return n.rotation.slice();
@@ -207,52 +234,101 @@ export function retargetToG1(clip, sim, log = () => {}) {
     restQ.set(idx, w);
     return w;
   };
-  for (const role of roleNames) computeRest(bones[role]);
+  const calRoles = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+  for (const r of calRoles) if (bones[r] !== undefined) computeRest(bones[r]);
+  computeRest(chestIdx);
 
-  const fps = Math.min(30, Math.max(15, clip.fpsHint));
-  const n = Math.max(2, Math.round(clip.duration * fps));
-  const q = new Float32Array(n * nu);
-  const h = new Float32Array(n);
+  // ── G1-KALIBRIERUNG: Körper-Orientierungen in der NULL-Pose ──
+  // Knochen-Frames verschiedener Rigs sind beliebig konventioniert — direkt
+  // verglichen werden dürfen nur die jeweiligen RUHELAGEN. CAL[seite][glied]
+  // = (alignierte Quell-Ruhe-Weltrotation)⁻¹ ⊗ G1-Körper-Nullpose-Quat.
+  // Damit gilt: Quell-Ruhepose ↔ G1-Nullpose EXAKT, Animation relativ dazu.
+  const bodyOfAct = (name) => sim.model.jnt_bodyid[sim.actJoint[sim.actByName[name]]];
+  const ghost0 = sim.makeGhostData();
+  sim._mjApi.mj_resetData(sim.model, ghost0);
+  sim._mjApi.mj_forward(sim.model, ghost0);
+  // MuJoCo xquat ist (w,x,y,z) → in [x,y,z,w] drehen (Projekt-Konvention)
+  const zeroQuat = (b) => [ghost0.xquat[4 * b + 1], ghost0.xquat[4 * b + 2], ghost0.xquat[4 * b + 3], ghost0.xquat[4 * b]];
+  const makeCal = (srcIdx, g1Body) => {
+    const ar = quatMul2(ALIGN, computeRest(srcIdx), [0, 0, 0, 1]);
+    const aligned = quatMul2(ar, ALIGN_INV, [0, 0, 0, 1]);
+    return quatMul2(quatConj(aligned, [0, 0, 0, 1]), zeroQuat(g1Body), [0, 0, 0, 1]);
+  };
+  const CAL = {};
+  for (const side of ['left', 'right']) {
+    CAL[side] = {
+      thigh: makeCal(bones[side + 'UpLeg'], bodyOfAct(side + '_hip_pitch_joint')),
+      shin: makeCal(bones[side + 'Leg'], bodyOfAct(side + '_knee_joint')),
+      foot: bones[side + 'Foot'] !== undefined ? makeCal(bones[side + 'Foot'], bodyOfAct(side + '_ankle_pitch_joint')) : qId,
+      arm: bones[side + 'Arm'] !== undefined ? makeCal(bones[side + 'Arm'], sim.model.body_parentid[bodyOfAct(side + '_elbow_joint')]) : qId,
+      fore: bones[side + 'ForeArm'] !== undefined ? makeCal(bones[side + 'ForeArm'], bodyOfAct(side + '_elbow_joint')) : qId,
+    };
+  }
 
-  const worldMap = new Map();
-  const deltaQ = [0, 0, 0, 1];
-  const alignedQ = [0, 0, 0, 1];
-  const conjTmp = [0, 0, 0, 1];
-  const axisTmp = [0, 0, 0];
-  const qTmp = [0, 0, 0, 1];
+  // Alignierte Ziel-Weltrotation eines Quell-Knochens (animiert): A·W·A⁻¹
+  const alignedOf = (idx, out) => {
+    const w = worldMap.get(idx);
+    if (!w) { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1; return out; }
+    quatMul2(ALIGN, w, qTmp); quatMul2(qTmp, ALIGN_INV, out);
+    return out;
+  };
+  // Gelenk-Lokalziel an der BASIS (Hüfte/Schulter): base⁻¹ ⊗ W'_kind ⊗ CAL
+  // (die Basis trägt die Brust-Triade — Hüften/Schultern wirken relativ dazu,
+  //  wodurch sich ein gebeugter Lehrer automatisch in Basis-Nick + kompensierte
+  //  Hüften übersetzt und die Füße unten bleiben)
+  const triadQ = [0, 0, 0, 1]; // wird je Frame aus KnochenPOSITIONEN gebaut
+  const targetFromBase = (childIdx, cal, out) => {
+    alignedOf(childIdx, tA);
+    quatConj(triadQ, conjTmp);
+    quatMul2(conjTmp, tA, tB);
+    quatMul2(tB, cal, out);
+    return out;
+  };
+  // Gelenk-Lokalziel relativ (Knie/Knöchel/Ellbogen):
+  // CAL_eltern⁻¹ ⊗ W'_eltern⁻¹ ⊗ W'_kind ⊗ CAL_kind — die Knochenframes
+  // kürzen sich heraus, die CALs überbrücken die Rest-Konventionen.
+  const targetRel = (parentIdx, childIdx, calP, calC, out) => {
+    alignedOf(parentIdx, tA);
+    alignedOf(childIdx, tB);
+    quatConj(tA, conjTmp);
+    quatMul2(conjTmp, tB, tA);       // W'_eltern⁻¹ ⊗ W'_kind
+    quatConj(calP, conjTmp);
+    quatMul2(conjTmp, tA, tB);       // CAL_eltern⁻¹ ⊗ …
+    quatMul2(tB, calC, out);         // … ⊗ CAL_kind
+    return out;
+  };
 
-  // Einzelachs-Gelenke: projizieren
+  // Einachser: Projektion des Ziel-Achsenwinkels auf die Gelenkachse
   const project1 = (jointName, dq) => {
     const ang = quatLogAxis(dq, axisTmp);
     const a = axisOf[jointName];
     return clampA(jointName, ang * (axisTmp[0] * a[0] + axisTmp[1] * a[1] + axisTmp[2] * a[2]));
   };
 
-  // 3-Achsen-Hüfte: numerischer Abstieg (yaw/roll/pitch-Jointnamen in Kettenreihenfolge)
-  const solveHip = (joints, dq, out3) => {
-    // Start: Achsenprojektion je Achse
-    const th = out3;
-    th[0] = th[1] = th[2] = 0;
+  // Mehrachsen-Kette (Hüfte 3, Schulter 3, Knöchel 2): numerischer Abstieg
+  // (Koordinaten-Abstieg mit fallenden Schrittweiten gegen die Zielrotation)
+  const solveN = (jointNames, dq, outN) => {
+    const th = outN;
+    for (let j = 0; j < th.length; j++) th[j] = 0;
     const errOf = () => {
-      // q_est = R(a0,th0)·R(a1,th1)·R(a2,th2)  → Fehler gegen dq
-      const qa = quatFromAxisAngle(axisOf[joints[0]], th[0], [0, 0, 0, 1]);
-      const qb = quatFromAxisAngle(axisOf[joints[1]], th[1], [0, 0, 0, 1]);
-      const qc = quatFromAxisAngle(axisOf[joints[2]], th[2], [0, 0, 0, 1]);
-      const q1 = quatMul2(qa, qb, [0, 0, 0, 1]);
-      const qe = quatMul2(q1, qc, [0, 0, 0, 1]);
+      let qe = quatFromAxisAngle(axisOf[jointNames[0]], th[0], [0, 0, 0, 1]);
+      for (let j = 1; j < jointNames.length; j++) {
+        const qj = quatFromAxisAngle(axisOf[jointNames[j]], th[j], [0, 0, 0, 1]);
+        qe = quatMul2(qe, qj, [0, 0, 0, 1]);
+      }
       quatConj(qe, conjTmp);
       const d = quatMul2(dq, conjTmp, qTmp);
-      // Fehler = |Achs-Winkel| des Restes
       return Math.abs(quatLogAxis(d, axisTmp)) * Math.hypot(axisTmp[0], axisTmp[1], axisTmp[2]);
     };
     let e = errOf();
     for (let it = 0; it < 12; it++) {
       let improved = false;
-      for (let j = 0; j < 3; j++) {
+      for (let j = 0; j < jointNames.length; j++) {
+        const name = jointNames[j];
         for (const step of [0.2, 0.05, 0.012]) {
           for (const dir of [1, -1]) {
             const old = th[j];
-            th[j] = clampA(joints[j], old + dir * step);
+            th[j] = clampA(name, old + dir * step);
             const e2 = errOf();
             if (e2 < e - 1e-5) { e = e2; improved = true; break; }
             th[j] = old;
@@ -265,7 +341,11 @@ export function retargetToG1(clip, sim, log = () => {}) {
   };
 
   const hipCache = { left: [0, 0, 0], right: [0, 0, 0] };
+  const ankleCache = { left: [0, 0], right: [0, 0] };
+  const shoulderCache = { left: [0, 0, 0], right: [0, 0, 0] };
   const hipJoints = (side) => [A[side + '_hip_yaw_joint'], A[side + '_hip_roll_joint'], A[side + '_hip_pitch_joint']];
+  const ankleJoints = (side) => [A[side + '_ankle_pitch_joint'], A[side + '_ankle_roll_joint']];
+  const shoulderJoints = (side) => [A[side + '_shoulder_pitch_joint'], A[side + '_shoulder_roll_joint'], A[side + '_shoulder_yaw_joint']];
 
   let hipsRestH = 0;
   // Hüft-WELTHöhe bei Frame 0 (volle FK — erfasst auch assimp-Zwischenknoten;
@@ -282,6 +362,11 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const hScale = g1StandH / Math.max(0.2, hipsRestH * scale);
 
   const rawH = new Float32Array(n);
+  // Basis-Orientierung je Frame (Brust-Weltrotation, ALIGN-konjugiert,
+  // Yaw-Anteil entfernt — die Blickrichtung besitzt der Root-Motion-Yaw).
+  // Trägt die ABSOLUTE Oberkörper-Pose (auch Ruhepose-Beugung wie beim
+  // Zombie) — die Hüften kompensieren, damit die Füße unten bleiben.
+  const baseQ = new Float32Array(n * 4);
   // Root-Motion: Bahn des Hüftpunkts (MuJoCo-Rahmen, relativ zu Frame 0)
   // + Blickrichtung (Yaw) — der Referenz-Geist läuft damit WIRKLICH durchs Feld.
   const root = new Float32Array(n * 2);
@@ -293,70 +378,95 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const worldPos = new Map();
   const FWD_GLB = [0, 0, 1]; // GLB: +Z ist Blickrichtung (Annahme wie Achsen-Mapping)
   const fwdTmp = [0, 0, 0];
+  const alignedQ = [0, 0, 0, 1];
   let sx0 = 0, sy0 = 0;
   for (let f = 0; f < n; f++) {
     const t = f / fps;
     clip.sampleWorldFull(t, wanted, worldMap, worldPos);
     const off = f * nu;
-    // Beine
+    // ── Basis-Triade aus KnochenPOSITIONEN (konventionsfrei) ──
+    // up  = Richtung Hüfte→Brust — die VISUELLE Torso-Achse (erfasst die
+    //       komplette Beugung, auch eine in der Ruhepose steckende)
+    // fwd = Blick der Hüfte (GLB +Z rotiert mit W_hips), orthogonal auf up
+    {
+      const hp3 = worldPos.get(bones.hips), cp3 = worldPos.get(chestIdx) || hp3;
+      let ux = 0, uy = 0, uz = 1; // MJC hoch (Fallback aufrecht)
+      if (hp3 && cp3) {
+        const g = rotVec(ALIGN, [cp3[0] - hp3[0], cp3[1] - hp3[1], cp3[2] - hp3[2]], [0, 0, 0]);
+        const len = Math.hypot(g[0], g[1], g[2]);
+        if (len > 1e-9) { ux = g[0] / len; uy = g[1] / len; uz = g[2] / len; }
+      }
+      const wHipsQ = worldMap.get(bones.hips) || qId;
+      const fG = rotVec(ALIGN, rotVec(wHipsQ, FWD_GLB, [0, 0, 0]), [0, 0, 0]);
+      const dd = fG[0] * ux + fG[1] * uy + fG[2] * uz;
+      let fx = fG[0] - dd * ux, fy = fG[1] - dd * uy, fz = fG[2] - dd * uz;
+      let fl = Math.hypot(fx, fy, fz);
+      if (fl < 1e-6) { fx = 1 - ux * ux; fy = -ux * uy; fz = -ux * uz; fl = Math.hypot(fx, fy, fz) || 1; }
+      fx /= fl; fy /= fl; fz /= fl;
+      const lx = uy * fz - uz * fy, ly = uz * fx - ux * fz, lz = ux * fy - uy * fx; // Y = Z×X
+      mat3ToQuat(fx, fy, fz, lx, ly, lz, ux, uy, uz, triadQ);
+    }
+    // Beine: Hüfte = Basis⁻¹⊗OS⊗CAL (3 Achsen), Knie = CAL⁻¹⊗OS⁻¹⊗SB⊗CAL,
+    // Knöchel = CAL⁻¹⊗SB⁻¹⊗Fuß⊗CAL (2 Achsen) — ABSOLUTE Weltposen, dadurch
+    // gleicht die Hüfte automatisch den Basis-Nick aus (Füße bleiben unten).
     for (const side of ['left', 'right']) {
+      const C = CAL[side];
       const bIdx = bones[side + 'UpLeg'];
-      const rest = restQ.get(bIdx);
-      const wq = worldMap.get(bIdx) || rest;
-      quatConj(rest, conjTmp);
-      quatMul2(wq, conjTmp, deltaQ);
-      quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ); // R·ΔQ·R⁻¹
-      // Hüfte (3 Achsen: yaw, roll, pitch)
+      targetFromBase(bIdx, C.thigh, alignedQ);
       const joints = hipJoints(side);
-      // Ziel-Gelenknamen prüfen
-      const th = solveHip(joints.map(jn => sim.actName[jn]), alignedQ, hipCache[side]);
+      const th = solveN(joints.map(jn => sim.actName[jn]), alignedQ, hipCache[side]);
       q[off + joints[0]] = clampA(sim.actName[joints[0]], th[0]);
       q[off + joints[1]] = clampA(sim.actName[joints[1]], th[1]);
       q[off + joints[2]] = clampA(sim.actName[joints[2]], th[2]);
       // Knie
       const legIdx = bones[side + 'Leg'];
-      quatConj(restQ.get(legIdx), conjTmp);
-      quatMul2(worldMap.get(legIdx) || restQ.get(legIdx), conjTmp, deltaQ);
-      quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
+      targetRel(bIdx, legIdx, C.thigh, C.shin, alignedQ);
       q[off + A[side + '_knee_joint']] = project1(side + '_knee_joint', alignedQ);
-      // Knöchel (pitch/roll als Einachser-Projektionen)
+      // Knöchel (pitch + roll gemeinsam gelöst)
       const footIdx = bones[side + 'Foot'];
       if (footIdx !== undefined) {
-        quatConj(restQ.get(footIdx), conjTmp);
-        quatMul2(worldMap.get(footIdx) || restQ.get(footIdx), conjTmp, deltaQ);
-        quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-        q[off + A[side + '_ankle_pitch_joint']] = project1(side + '_ankle_pitch_joint', alignedQ);
-        q[off + A[side + '_ankle_roll_joint']] = project1(side + '_ankle_roll_joint', alignedQ);
+        targetRel(legIdx, footIdx, C.shin, C.foot, alignedQ);
+        const th2 = solveN(ankleJoints(side).map(jn => sim.actName[jn]), alignedQ, ankleCache[side]);
+        q[off + A[side + '_ankle_pitch_joint']] = th2[0];
+        q[off + A[side + '_ankle_roll_joint']] = th2[1];
       }
     }
-    // Oberkörper: Hüft-Delta → Taille (Gegenrotation, gedämpft)
-    {
-      quatConj(restQ.get(bones.hips), conjTmp);
-      quatMul2(worldMap.get(bones.hips) || restQ.get(bones.hips), conjTmp, deltaQ);
-      quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-      const ang = quatLogAxis(alignedQ, axisTmp);
-      // Taille: nur um die Welt-Hochachse (Yaw-Anteil), leicht gedämpft
-      const waistName = 'waist_yaw_joint';
-      const a = axisOf[waistName];
-      q[off + A[waistName]] = clampA(waistName, 0.85 * ang * (axisTmp[0] * a[0] + axisTmp[1] * a[1] + axisTmp[2] * a[2]));
-    }
-    // Arme: Schulter-Pitch + Ellbogen (Projektionen, gedämpft)
+    // Taille: Verdrehung Becken↔Brust (Yaw-Anteil) — die BEUGUNG selbst
+    // trägt die Basis-Orientierung, nicht die Taille (G1 hat nur waist_yaw)
+    quatConj(worldMap.get(bones.hips) || qId, conjTmp);
+    quatMul2(conjTmp, worldMap.get(chestIdx) || qId, alignedQ);
+    quatMul2(ALIGN, alignedQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
+    const waistName = 'waist_yaw_joint';
+    q[off + A[waistName]] = project1(waistName, alignedQ);
+    // Arme: Schulter = Basis⁻¹⊗OA⊗CAL (3 Achsen pitch/roll/yaw),
+    // Ellbogen = CAL⁻¹⊗OA⁻¹⊗UA⊗CAL — ohne Dämpfung, Gelenkgrenzen klemmen
     for (const side of ['left', 'right']) {
+      const C = CAL[side];
       const armIdx = bones[side + 'Arm'];
       if (armIdx === undefined) continue;
-      quatConj(restQ.get(armIdx), conjTmp);
-      quatMul2(worldMap.get(armIdx) || restQ.get(armIdx), conjTmp, deltaQ);
-      quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-      const sp = side + '_shoulder_pitch_joint';
-      q[off + A[sp]] = clampA(sp, 0.9 * project1(sp, alignedQ));
-      const el = side + '_elbow_joint';
+      targetFromBase(armIdx, C.arm, alignedQ);
+      const th3 = solveN(shoulderJoints(side).map(jn => sim.actName[jn]), alignedQ, shoulderCache[side]);
+      q[off + A[side + '_shoulder_pitch_joint']] = th3[0];
+      q[off + A[side + '_shoulder_roll_joint']] = th3[1];
+      q[off + A[side + '_shoulder_yaw_joint']] = th3[2];
       const foreIdx = bones[side + 'ForeArm'];
       if (foreIdx !== undefined) {
-        quatConj(restQ.get(foreIdx), conjTmp);
-        quatMul2(worldMap.get(foreIdx) || restQ.get(foreIdx), conjTmp, deltaQ);
-        quatMul2(ALIGN, deltaQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-        q[off + A[el]] = clampA(el, 0.9 * project1(el, alignedQ));
+        targetRel(armIdx, foreIdx, C.arm, C.fore, alignedQ);
+        const el = side + '_elbow_joint';
+        q[off + A[el]] = project1(el, alignedQ);
       }
+    }
+    // Basis-Orientierung für die ANZEIGE: Triade mit herausgedrehtem Yaw
+    // (base = yawQ⁻¹ ⊗ q) — es bleibt Nick+Roll, die Blickrichtung kommt
+    // aus dem Root-Motion-Yaw (kein Doppel-Yaw beim Loop-Rebase).
+    {
+      const qx = triadQ[0], qy = triadQ[1], qz = triadQ[2], qw = triadQ[3];
+      const yawC = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
+      const cy2 = Math.cos(-yawC / 2), sy2 = Math.sin(-yawC / 2);
+      baseQ[4 * f]     = cy2 * qx + sy2 * qy;
+      baseQ[4 * f + 1] = cy2 * qy - sy2 * qx;
+      baseQ[4 * f + 2] = cy2 * qz - sy2 * qw;
+      baseQ[4 * f + 3] = cy2 * qw + sy2 * qz;
     }
     // Basis-Höhe, Root-Bahn + Yaw aus der Hüft-WELTposition (volle FK)
     const hp = worldPos.get(bones.hips) || hipsP0;
@@ -365,7 +475,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     if (f === 0) { sx0 = wx; sy0 = wy; }
     root[2 * f] = wx - sx0;
     root[2 * f + 1] = wy - sy0;
-    quatRot(worldMap.get(bones.hips) || restQ.get(bones.hips), FWD_GLB, fwdTmp);
+    rotVec(worldMap.get(bones.hips) || qId, FWD_GLB, fwdTmp);
     rawYaw[f] = Math.atan2(fwdTmp[0], fwdTmp[1]); // MuJoCo: x=Z_glb, y=X_glb
     // Lehrer-Ghost-Positionen (GLB Y-up → MuJoCo Z-up, skaliert auf m)
     for (let gi = 0; gi < ghostRoles.length; gi++) {
@@ -408,27 +518,48 @@ export function retargetToG1(clip, sim, log = () => {}) {
   }
 
   // ── Boden-Anpassung (Fuß erden): tiefsten Fußpunkt pro Frame via Geist ──
+  // WICHTIG: MIT Basis-Orientierung (baseQ) — bei gebeugtem Lehrer (Zombie)
+  // hängen die Füße sonst falsch und die Höhe würde verkalkt. Die Tiefe je
+  // Fuß-Geom wird ECHT aus den Mesh-Vertices/Kugel-Radien bestimmt (einmalig).
   const ghost = sim.makeGhostData();
+  const bq4 = [0, 0, 0, 1];
+  const footGeoms = sim.footGeoms || (sim.footGeoms = findFootGeoms(sim));
   for (let f = 0; f < n; f++) {
     const off = f * nu;
-    sim.setGhostPose(ghost, q, off, rawH[f]);
+    bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+    sim.setGhostPose(ghost, q, off, rawH[f], 0, 0, 0, bq4);
     let lowest = 0;
-    // Füße: Körper mit 'ankle' im Namen
-    const footBodies = sim.footBodies || (sim.footBodies = findFootBodies(sim));
-    for (const b of footBodies) {
-      const z = ghost.xpos[3 * b + 2] - footGeomOffset(sim, b);
+    // Füße: unterster Punkt aller Fuß-Geoms (Welt-z = Körper-hoch + Tiefen-Offset)
+    for (const fg of footGeoms) {
+      const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
       if (z < lowest) lowest = z;
     }
     h[f] = Math.min(1.15, Math.max(0.4, rawH[f] - lowest));
   }
-  // Höhe glätten (Burgen vermeiden)
+  // Höhe glätten (Burgen vermeiden)…
   smooth(h, 5);
+  // …und DANACH exakt erden: mit der GEGLÄTTETEN Höhe erneut messen und den
+  // Rest-Auftrieb abziehen (das Glätten hebt den tiefsten Fuß sonst cm-weise an).
+  // Echtes Minimum (auch positiv!) — sonst bleibt ein cm-Hover stehen.
+  for (let f = 0; f < n; f++) {
+    const off = f * nu;
+    bq4[0] = baseQ[4 * f]; bq4[1] = baseQ[4 * f + 1]; bq4[2] = baseQ[4 * f + 2]; bq4[3] = baseQ[4 * f + 3];
+    sim.setGhostPose(ghost, q, off, h[f], 0, 0, 0, bq4);
+    let lowest = Infinity;
+    for (const fg of footGeoms) {
+      const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
+      if (z < lowest) lowest = z;
+    }
+    if (!Number.isFinite(lowest)) lowest = 0;
+    h[f] = Math.min(1.15, Math.max(0.4, h[f] - lowest));
+  }
 
   return {
     name: clip.name || 'clip',
     fps, n, nu,
     q, h,
     root, yaw, srcPos, srcJoints,
+    baseQ, // Basis-Orientierung je Frame (n×4, xyzw) — Lehrer-Nick/Roll für den Geist
     scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
     mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,
@@ -436,34 +567,65 @@ export function retargetToG1(clip, sim, log = () => {}) {
   };
 }
 
-function findFootBodies(sim) {
+// Fuß-Geoms mit ECHTER Tiefe: unterster Punkt je Geom im KÖRPER-Frame
+// (Meshes: unterste Vertebra inkl. geom_quat; Kugel/Kapsel/Zylinder/Box: Formel)
+function findFootGeoms(sim) {
   const out = [];
   const m = sim.model;
-  for (let b = 0; b < sim.nbody; b++) {
+  for (let g = 0; g < sim.ngeom; g++) {
+    const b = m.geom_bodyid[g];
     const name = mjName(sim, b);
-    if (name && /ankle|foot/i.test(name)) out.push(b);
+    if (!name || !/ankle|foot/i.test(name)) continue;
+    const type = m.geom_type[g];
+    const pz = m.geom_pos[3 * g + 2];
+    let lowZ = pz;
+    if (type === 7) { // Mesh: unterste Vertebra (geom_quat einrechnen)
+      const qx = m.geom_quat[4 * g + 1], qy = m.geom_quat[4 * g + 2], qz = m.geom_quat[4 * g + 3], qw = m.geom_quat[4 * g];
+      const dId = m.geom_dataid[g], vAdr = m.mesh_vertadr[dId], vNum = m.mesh_vertnum[dId];
+      let minVz = 0;
+      for (let i = 0; i < vNum; i++) {
+        const vx = m.mesh_vert[3 * (vAdr + i)], vy = m.mesh_vert[3 * (vAdr + i) + 1], vz = m.mesh_vert[3 * (vAdr + i) + 2];
+        const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx);
+        const z = vz + qw * tz + (qx * ty - qy * tx); // z von q⊗v⊗q*
+        if (z < minVz) minVz = z;
+      }
+      lowZ = pz + minVz;
+    } else if (type === 2) lowZ = pz - m.geom_size[3 * g];                          // Kugel
+    else if (type === 3) lowZ = pz - (m.geom_size[3 * g] + m.geom_size[3 * g + 1]); // Kapsel (Z-Achse)
+    else if (type === 5) lowZ = pz - m.geom_size[3 * g + 1];                        // Zylinder
+    else if (type === 6) lowZ = pz - m.geom_size[3 * g + 2];                        // Box
+    out.push({ body: b, lowZ });
   }
+  return out;
+}
+
+// Rotationsmatrix (Spalten X=fwd, Y=left, Z=up) → Quaternion [x,y,z,w]
+// (Shepperd-Methode — für die konventionsfreie Basis-Triade)
+function mat3ToQuat(xx, xy, xz, yx, yy, yz, zx, zy, zz, out) {
+  const m00 = xx, m01 = yx, m02 = zx;
+  const m10 = xy, m11 = yy, m12 = zy;
+  const m20 = xz, m21 = yz, m22 = zz;
+  const tr = m00 + m11 + m22;
+  let qx = 0, qy = 0, qz = 0, qw = 1, S;
+  if (tr > 0) {
+    S = Math.sqrt(tr + 1) * 2; qw = 0.25 * S;
+    qx = (m21 - m12) / S; qy = (m02 - m20) / S; qz = (m10 - m01) / S;
+  } else if (m00 > m11 && m00 > m22) {
+    S = Math.sqrt(1 + m00 - m11 - m22) * 2; qw = (m21 - m12) / S; qx = 0.25 * S;
+    qy = (m01 + m10) / S; qz = (m02 + m20) / S;
+  } else if (m11 > m22) {
+    S = Math.sqrt(1 + m11 - m00 - m22) * 2; qw = (m02 - m20) / S; qy = 0.25 * S;
+    qx = (m01 + m10) / S; qz = (m12 + m21) / S;
+  } else {
+    S = Math.sqrt(1 + m22 - m00 - m11) * 2; qw = (m10 - m01) / S; qz = 0.25 * S;
+    qx = (m02 + m20) / S; qy = (m12 + m21) / S;
+  }
+  const n = Math.hypot(qx, qy, qz, qw) || 1;
+  out[0] = qx / n; out[1] = qy / n; out[2] = qz / n; out[3] = qw / n;
   return out;
 }
 function mjName(sim, b) {
   try { return sim._mjApi.mj_id2name(sim.model, 1, b); } catch (e) { return null; } // mjOBJ_BODY=1
-}
-function footGeomOffset(sim, b) {
-  // unterster Geom-Punkt des Fuß-Körpers relativ zum Körperursprung (Z)
-  const m = sim.model;
-  let minZ = 0;
-  for (let g = 0; g < sim.ngeom; g++) {
-    if (m.geom_bodyid[g] !== b) continue;
-    const type = m.geom_type[g];
-    if (type === 7) { // mesh: grob über size/pos — Fallback: geom_pos.z
-      minZ = Math.min(minZ, m.geom_pos[3 * g + 2]);
-    } else {
-      const pz = m.geom_pos[3 * g + 2];
-      const sz = m.geom_size[3 * g + 2];
-      minZ = Math.min(minZ, pz - (type === 6 ? sz : Math.max(sz, 0.01)));
-    }
-  }
-  return minZ;
 }
 
 function smooth(arr, win) {

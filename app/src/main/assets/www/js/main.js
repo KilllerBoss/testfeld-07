@@ -18,7 +18,7 @@ import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbs
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 
-const VERSION = '2.3.2';
+const VERSION = '2.3.3';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -681,12 +681,15 @@ function loop(now) {
     }
     if (r3d.ghostGroups) {
       const gh = S.sim.makeGhostData();
+      // baseQ: Lehrer-Nick/Roll (z. B. Zombie-Beuge) — der G1-Geist nimmt die
+      // ABSOLUTE Lehrer-Pose an statt aufrecht daneben zu stehen
+      const bq = clip.baseQ ? clip.baseQ.subarray(4 * fr, 4 * fr + 4) : null;
       if (rr) {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2]);
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2], bq);
       } else if (clip.root && clip.yaw) {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr]);
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr], bq);
       } else {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr]);
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], 0, 0, 0, bq);
       }
       r3d.updateGhost(gh);
     }

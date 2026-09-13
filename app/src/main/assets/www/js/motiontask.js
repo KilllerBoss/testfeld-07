@@ -236,8 +236,11 @@ export function makeMotionTask(cfg, clip, sim) {
       const ghost = sim.makeGhostData();
       const tmpO = new Float64Array(obsDim);
       for (let f = 0; f < nFrames; f++) {
-        if (hasRoot) sim.setGhostPose(ghost, clip.q, f * nu, clip.h[f], clip.root[2 * f], clip.root[2 * f + 1], clip.yaw[f]);
-        else sim.setGhostPose(ghost, clip.q, f * nu, clip.h[f]);
+        if (hasRoot) {
+          const bq = clip.baseQ ? clip.baseQ.subarray(4 * f, 4 * f + 4) : null;
+          sim.setGhostPose(ghost, clip.q, f * nu, clip.h[f], clip.root[2 * f], clip.root[2 * f + 1], clip.yaw[f], bq);
+        }
+        else sim.setGhostPose(ghost, clip.q, f * nu, clip.h[f], 0, 0, 0, clip.baseQ ? clip.baseQ.subarray(4 * f, 4 * f + 4) : null);
         const phase = f / nFrames;
         this.observeGhost(sim, ghost, tmpO, phase);
         for (let i = 0; i < obsDim; i++) {
