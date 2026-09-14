@@ -154,6 +154,13 @@
       <button class="speed-chip fall-chip active" data-fall="reset">Auto-Reset</button>
       <button class="speed-chip fall-chip" data-fall="stay">Liegen lassen</button>
     </div>
+    <div class="train-actions" id="drRow">
+      <span class="glb-ctrl-label">Störungen</span>
+      <button class="speed-chip dr-chip" data-dr="aus">Aus</button>
+      <button class="speed-chip dr-chip active" data-dr="leicht">Leicht</button>
+      <button class="speed-chip dr-chip" data-dr="mittel">Mittel</button>
+      <button class="speed-chip dr-chip" data-dr="stark">Stark</button>
+    </div>
 
     <div id="glbSection" class="glb-section hidden">
       <div class="glb-head">
@@ -180,7 +187,7 @@
       <div id="glbList" class="glb-list"></div>
       <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Buttons“ = Joystick PLUS eigene Aktionstasten (z. B. Kicken, Springen): im Training feuern sie zufällig, im POLICY-Modus löst eine Taste die Aktion aus — die Tastenleiste erscheint unten. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
     </div>
-    <div id="trainNote" class="train-note">Tempo „MAX“ = PARALLEL: mehrere MuJoCo-WASM-Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro Runde für das gemeinsame PPO-Update gemischt — deutlich mehr Schritte/s. Plugins laufen inline. PPO · 64×64 MLP · CPU only</div>
+    <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). Tempo „MAX“ = PARALLEL: mehrere MuJoCo-WASM-Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro Runde für das gemeinsame PPO-Update gemischt. Plugins laufen inline. PPO · 64×64 MLP · CPU only</div>
   </section>
 
   <!-- KI-Trainer (Gemini) -->

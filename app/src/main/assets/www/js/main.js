@@ -18,13 +18,24 @@ import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
 import { ParallelTrainer, suggestWorkerCount } from './parallel.js';
+import { DR_LEVELS, drFromLevel, restoreDrModel } from './dr.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.10.0';
+const VERSION = '2.11.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
+
+// ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
+// Stufe global (nicht je Roboter — die Physik-Störungen betreffen das
+// Training, nicht den Roboter). Persistiert; Standard LEICHT, damit
+// Policies von Anfang an robust lernen.
+const DR_KEY = 'tr_dr_v1';
+function loadDrLevel() {
+  try { const l = localStorage.getItem(DR_KEY); if (DR_LEVELS.includes(l)) return l; } catch (e) { /* egal */ }
+  return 'leicht';
+}
 
 const ui = new UI();
 ui.init();
@@ -60,6 +71,7 @@ const S = {
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
   world: loadWorldState(), // v2.7.0: aktuelle Welt {id, seed} — prozedural generiert
+  drLevel: loadDrLevel(), // v2.11.0: Störungs-Stufe ('aus'|'leicht'|'mittel'|'stark')
   // v2.8.0 — VOLLSTÄNDIGER ROBOTER: Szenarien (Aufstehen/Abwurf/Gehen),
   // Sturz-Verhalten (Auto-Reset vs. Liegen lassen) und Plugin-Werkstatt.
   scenario: {},      // je Roboter: 'gehen' | 'getup' | 'drop' (GLB-Clip zählt als eigene Aufgabe)
@@ -84,6 +96,30 @@ function loadWorldState() {
 
 // PPO-Überschreibungen aus dem KI-Trainer (T wirkt beim nächsten Start)
 const PPO_OVERRIDES = {};
+
+/** DR-Spec der gewählten Stufe (FRESH je Aufruf — Reset würfelt je Episode neu). */
+function drCfg() { return drFromLevel(S.drLevel); }
+
+/** Stufe wechseln (Chips „Störungen“ im Trainings-Panel). */
+function setDr(level) {
+  if (!DR_LEVELS.includes(level)) return;
+  S.drLevel = level;
+  try { localStorage.setItem(DR_KEY, level); } catch (e) { /* voll */ }
+  if (S.sim) S.sim.cfg.dr = drCfg(); // wirkt ab der nächsten Episode
+  syncDrChips();
+  const beschrieb = {
+    aus: 'keine Störungen — perfektionistischer Simulator',
+    leicht: 'kleine Masse-/Motor-/Reibungs-/Pose-Schwankungen',
+    mittel: '+ Gravitation, Sensorrauschen, Schübe, 20 ms Aktions-Verzögerung',
+    stark: '+ große Streuung, 40 ms Verzögerung, kräftige Schübe — robust, lernt langsamer',
+  }[level];
+  log('Störungen (Domain Randomization): ' + level.toUpperCase() + ' — ' + beschrieb, 'ok');
+  ui.toast('Störungen: ' + level);
+}
+
+function syncDrChips() {
+  for (const x of document.querySelectorAll('.dr-chip')) x.classList.toggle('active', x.dataset.dr === S.drLevel);
+}
 
 // ── Konsolen-Ausgabe ────────────────────────────────────────
 const log = (m, c) => ui.log(m, c);
@@ -111,6 +147,7 @@ async function loadRobot(id, first = false) {
     const worldXml = buildWorldXML(cfg, S.world.id, S.world.seed);
     writeWorldFile(cfg.dir, 'welt_live.xml', worldXml);
     const sim = new RobotSim(cfg, 'welt_live.xml');
+    cfg.dr = drCfg(); // v2.11.0: DR-Spec je Roboter-Cfg (wirkt je Episode in task.reset)
     const ms = Math.round(performance.now() - t0);
 
     // Alte Simulation freigeben
@@ -171,6 +208,7 @@ async function loadRobot(id, first = false) {
     ui.setRobotTitle(cfg);
     ui.setDroneMode(!!cfg.drone);
     syncScenarioChips();
+    syncDrChips();
     ui.policyAvailable(!!S.trainer);
     ui.setMode(S.mode);
     if (S.mode === 'policy' && !S.trainer) { S.mode = 'manuell'; ui.setMode(S.mode); }
@@ -1006,6 +1044,7 @@ function parallelEnvCfg() {
   if (S.task && S.task.kind === 'motion') env.motionR = { ...MOTION_R };
   if (S.task && S.task.kind === 'recovery') env.recoveryR = { ...RECOVERY_R };
   env.fallMode = S.fallMode;
+  env.dr = drCfg(); // v2.11.0: Störungen an ALLE Worker durchreichen (je Worker anders gewürfelt)
   return env;
 }
 
@@ -1075,6 +1114,7 @@ function startTraining() {
   pluginHost.fireReset();
   S.training = true;
   S.epReward = 0;
+  log('Störungen (DR): ' + S.drLevel.toUpperCase() + ' — jede Episode andere Physik' + (S.speedMode === 'max' && !S.parallel ? '' : ''), 'ok');
   ui.$('tStart').textContent = 'Training pausieren';
   ui.$('tStart').classList.add('btn-stop');
   const tInfo = S.task.kind === 'recovery'
@@ -1225,6 +1265,7 @@ function policyCtrlStep() {
 function resetRobot() {
   if (!S.sim) return;
   S.sim.reset();
+  restoreDrModel(S.sim); // v2.11.0: „Zurücksetzen“ = wieder die ECHTE Physik
   pluginHost.fireReset();
   if (S.task && S.task.kind === 'motion') S.task.reset(new RNG(4242), S.sim); // zurück auf den Bahn-Anfang
   if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
@@ -1545,6 +1586,10 @@ function wireUI() {
   }
   for (const b of document.querySelectorAll('.fall-chip')) {
     b.addEventListener('click', () => { controls.buzz(); setFallMode(b.dataset.fall); });
+  }
+  // ── Störungen / Domain Randomization (v2.11.0) ──────────
+  for (const b of document.querySelectorAll('.dr-chip')) {
+    b.addEventListener('click', () => { controls.buzz(); setDr(b.dataset.dr); });
   }
   document.getElementById('tReset').addEventListener('click', () => {
     controls.buzz();
@@ -2039,6 +2084,9 @@ Object.defineProperty(window, '__trainrobot', {
     get fallMode() { return S.fallMode; },
     setScenario: (s) => switchScenario(s),
     setFallMode: (m) => setFallMode(m),
+    get drLevel() { return S.drLevel; },
+    setDr: (l) => setDr(l),
+    drActiveInfo: () => ({ level: S.drLevel, spec: drCfg(), modelRandomized: !!(S.sim && S.sim._drOrig) }),
     get pluginHost() { return pluginHost; },
     get plugins() { return pluginHost.list; },
     installPlugin: (name, code, enabled = true) => {

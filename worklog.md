@@ -321,3 +321,24 @@ Stage Summary:
 - Download (anonym verifiziert): https://github.com/KilllerBoss/testfeld-07/releases/download/v2.10.0/Trainrobot.apk
 - Für den Nutzer: Tempo „MAX" im Trainings-Panel = parallel auf allen Kernen (Log zeigt „Training läuft PARALLEL auf N MuJoCo-Workern"); S26 Ultra hat 8 Kerne → bis 6 Worker; MicroDuck ist mit 14 Aktuatoren das ideale Parallel-Trainingsziel; Plugins laufen wie gehabt inline
 - Roadmap GPU (Diskussion): realistischer Pfad = Vulkan-Compute-Port einzelner mj_step-Phasen (IREE/clspv-Referenzen), NICHT CUDA→Adreno; erste Datengrundlage = steps/s-Benchmark aus v2.10.0 auf dem Gerät
+
+---
+Task ID: 31
+Agent: Super Z (Hauptagent)
+Task: MASTER-PROMPT-Umsetzung — §39 Status-Report (16 Bereiche) + kleinster Schritt zu „working MicroDuck PPO" = DOMAIN RANDOMIZATION (§10 Pflicht) + Reward-Komplettierung (§9) → v2.11.0
+
+Work Log:
+- STATUS-REPORT aus Code gelesen (HEAD 993b98f, v2.10.0 live): ✓ MicroDuck/G1/Dog×3/Drone/MuJoCo/CPU-Physik/Parallel-Worker/PPO-Inferenz; ~ PPO (Netzgröße fix), Checkpointing (ohne Adam-State), Curriculum (manuell), Benchmarking (nur live steps/s); ✗ Vulkan, ONNX, Domain Randomization, Thermal. Kleinster Schritt: DR + Reward-Komponenten (ohne DR lernt Policy nur den perfekten Simulator)
+- dr.js NEU: 4 Stufen (aus/leicht/mittel/stark — LEICHT als Standard, §10 „Pflicht"): Masse+Trägheit (Roboter-Teilbaum, homogen), Motorstärke (kp: gainprm+biasprm gemeinsam), Gleitreibung (Roboter-Geoms + Boden-Plane, MuJoCo-max-Kombination), Gelenkdämpfung, Gravitation (schreibbar verifiziert: −9,37…−10,39 bei stark), Startpose/-tempo (Gelenkrauschen in qpos+ctrl, additive Yaw-Rotation), IMU-Sensorrauschen, Schubs-Zeitplan (Δv-exakt: Impuls = Δv × Dieselbe-Masse-die-pushImpulse-teilt), Aktions-Verzögerung 0–2 Zyklen (20–40 ms). sanitizeDr klemmt hart; Original-Snapshot (_drOrig) je RobotSim EINMAL, je Episode vom Original neu gewürfelt (KEINE Akkumulation); restoreDrModel für Reset-Button
+- robots.js Track-Task (5 Laufroboter): DR-Anbindung in reset() (Modell+Start), Sensorrauschen in observe() (Gyro/Gravitation/Höhe), Schübe in reward(), drDelayedAct in actionToCtrl; Reward-Neu: rW.smooth=0,01 (Aktionsruckeln), rW.jlimit=0,05 (Gelenk-Rand 5 %), rW.fall=0 (einmaliger Sturz-Malus, konfigurierbar) — MASTER-PROMPT §9
+- main.js: S.drLevel (persistiert tr_dr_v1), Störungs-Chips im Trainings-Panel (index.html drRow), parallelEnvCfg → env.dr an ALLE Worker (je Worker anders gewürfelt), resetRobot restauriert echte Physik, __trainrobot.setDr/drActiveInfo, VERSION 2.11.0
+- simworker.js applyEnv: env.dr durchreichen; ai.js: rW.smooth/jlimit/fall validiert + System-Prompt dokumentiert; build.gradle versionCode 21/2.11.0
+- BUG-JAGDEN: (1) tri() rief rng.next() entbunden → this.s undefined (Fix: Methodenaufruf); (2) applyDrStart ERSATZTE die Basis-Quaternion durch reines Yaw → richtete liegende Roboter stumm wieder auf (ui_v290 „Liegen lassen"-Test rot) → Fix: q_neu = q_yaw ⊗ q_alt (Hamilton, additive Rotation, Lage bleibt) + settleAboveGround nach Start-Rauschen; (3) Schubs-Δv exakt über Engine-Divisor-Masse
+- TESTS: dr_test.mjs NEU (41 Checks: Sanitizer, Determinismus je Seed, Keine-Akkumulation, Restore exakt, Sensorrauschen an/aus, Delay-Semantik, Schubs-Δv-Band, 300-Zyklen-Rollouts duck+a1 bei STARK ohne NaN, Roher-Worker-Spec, Lage-erhalten) — GRÜN; ALLE Regressionen grün: parallel 21, ground_settle, motion_ctrl, recovery_plugin, world, train_smoke, ui_v2100 13 (808 Schritte/s mit DR an), ui_v260/280/290
+- BUILD: lokal gebaut (Gradle-Hänger nach 10 min Wrapper-Timeout, APK doch fertig 21:57), aapt: versionCode 21 / 2.11.0, dr.js/simworker.js/parallel.js im APK verifiziert
+- RELEASE: main + Tag v2.11.0 → CI → Release (siehe unten verifizieren)
+
+Stage Summary:
+- v2.11.0: Domain Randomization ist LIVE — Trainings-Panel „Störungen" (Aus/Leicht/Mittel/Stark), wirkt inline UND in allen Sim-Workern, KI-tunbare Reward-Felder smooth/jlimit/fall
+- Der MASTER-PROMPT-Roadmap-Fortschritt: PHASE 6 (Domain randomization) DONE vor Phase 2-Vollausbau (GPU-Batching) — bewusst, weil DR den Lernerfolg jeder Phase misst
+- Nächste sinnvolle Schritte (noch offen): ONNX-Export, Adam-State-Checkpointing, Auto-Benchmark (§6, keine erfundenen Zahlen), Thermal-Mode (§25), Curriculum-Automatik (§11), Netzgrößen 128/256 (§13)

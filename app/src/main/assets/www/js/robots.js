@@ -9,6 +9,7 @@
 // ═══════════════════════════════════════════════════════════
 
 import { clamp } from './math.js';
+import { sanitizeDr, applyDrModel, applyDrStart, drSensor, drPushDue, drDelayedAct } from './dr.js';
 
 // Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
 export const HOVER_R = {
@@ -205,8 +206,23 @@ export function makeTrackTask(cfg) {
       this.vb = new Float64Array(3);
       this._ref = new Float64Array(cfg.nu);
       this._tick = 0; // Phasen-Uhr
+      this._curAct = new Float32Array(cfg.nu);
+      this._nextPush = null; this._dlyBuf = null; // v2.11.0 DR-Zustand neu
+      this._rng = (rng && typeof rng.next === 'function') ? rng : null; // Rausch-Quelle
       // Referenzpose = Keyframe-Reglerwerte (home/stand)
       for (let a = 0; a < cfg.nu; a++) this._ref[a] = sim.actCenter[a] * 0 + (sim.keyCtrl ? sim.keyCtrl[a] : 0);
+      // ── v2.11.0 DOMAIN RANDOMIZATION — jede Episode andere Physik ──
+      this._dr = cfg.dr ? sanitizeDr(cfg.dr) : null;
+      if (this._dr && sim) {
+        if (this._dr.mass + this._dr.motor + this._dr.friction + this._dr.damping + this._dr.gravity > 0) {
+          applyDrModel(sim, this._dr, rng);
+          // Masse-Basis für Schubs-Impulse: dieselbe Summe, die engine.pushImpulse
+          // als Divisor nutzt (alle Bodies) — sonst stimmt Δv nicht exakt.
+          this._drMass = 0;
+          for (let b = 0; b < sim.nbody; b++) this._drMass += sim.model.body_mass[b];
+        }
+        if (this._dr.pose + this._dr.vel > 0) applyDrStart(sim, this._dr, rng);
+      }
     },
     sampleCmd(rng) {
       const R = cfg.cmd;
@@ -251,6 +267,11 @@ export function makeTrackTask(cfg) {
         sim.footContacts(this._fc || (this._fc = new Float64Array(nFeet)));
         for (let f = 0; f < nFeet; f++) out[o++] = this._fc[f] ? 1 : 0;
       }
+      // ── v2.11.0 SENSORRAUSCHEN (DR): IMU-Realität in die Kanäle ──
+      if (this._dr && this._dr.sensor > 0) {
+        const nR = this._rng || { next: Math.random };
+        for (let k = o - 7; k < o; k++) out[k] += drSensor(nR, this._dr.sensor);
+      }
       // Phasen-Uhr (Zeitgefühl): Takt der eigenen Gangart, sin/cos kodiert
       this._tick = (this._tick || 0) + 1;
       const ph = (this._tick * 0.02 * (cfg.gaitFreq || 1.2)) % 1;
@@ -277,15 +298,52 @@ export function makeTrackTask(cfg) {
       let e = 0, d = 0;
       for (let i = 0; i < cfg.nu; i++) { e += this.lastAct[i] * this.lastAct[i]; d += this.lastAct[i]; }
       r += -cfg.rW.energy * e;
+      // ── v2.11.0 Reward-Erweiterungen (MASTER-PROMPT §9, konfigurierbar) ──
+      // action_smoothness_penalty: Ruckeln zwischen aufeinanderfolgenden
+      // Aktionen bestrafen — ruhigere, physikalisch ausführbare Gaits.
+      if (cfg.rW.smooth > 0 && this._curAct) {
+        let sm = 0;
+        for (let i = 0; i < cfg.nu; i++) { const dd = this._curAct[i] - this.lastAct[i]; sm += dd * dd; }
+        r += -cfg.rW.smooth * sm;
+      }
+      // joint_limit_penalty: Überdehnung nahe der Anschlagsgrenzen (5 % Rand)
+      if (cfg.rW.jlimit > 0) {
+        const jq = this._jq || (this._jq = new Float64Array(cfg.nu));
+        sim.jointPositions(jq);
+        let jl = 0;
+        for (let a = 0; a < cfg.nu; a++) {
+          const lo = sim.actRange[2 * a], hi = sim.actRange[2 * a + 1];
+          const mrg = 0.05 * (hi - lo);
+          if (jq[a] < lo + mrg) { const ex = lo + mrg - jq[a]; jl += ex * ex; }
+          else if (jq[a] > hi - mrg) { const ex = jq[a] - (hi - mrg); jl += ex * ex; }
+        }
+        r += -cfg.rW.jlimit * jl;
+      }
+      // ── v2.11.0 DR-SCHÜBE: zufällige Stör-Impulse während der Episode ──
+      if (this._dr && this._drMass > 0) {
+        const dv = drPushDue(this, null);
+        if (dv > 0) {
+          const ang = Math.random() * 2 * Math.PI;
+          const J = dv * this._drMass; // Impuls = Δv × Masse(divisor des Engine) → genau Δv m/s
+          sim.pushImpulse(Math.cos(ang) * J, Math.sin(ang) * J, 0);
+        }
+      }
       sim.basePos(this._bp || (this._bp = new Float64Array(3)));
       // Abbruch bei Sturz
       const done = upz < cfg.done.upMin || this._bp[2] < cfg.done.zMin || this._bp[2] > cfg.done.zMax;
+      // fall_penalty: einmaliger Malus NUR beim echten Sturz (nicht bei
+      // Höhen-Maximum) — hilft der Wertfunktion, Stürze vorherzusehen.
+      if (done && cfg.rW.fall > 0 && (upz < cfg.done.upMin || this._bp[2] < cfg.done.zMin)) r -= cfg.rW.fall;
       return { r, done };
     },
     actionToCtrl(sim, act) {
+      // v2.11.0 DR-Aktionsverzögerung (Steuerketten-Realität, §15): bei
+      // delay > 0 wird die um delay Zyklen ALTE Aktion ausgeführt.
+      const a2 = drDelayedAct(this, act);
+      if (this._curAct) this._curAct.set(a2);
       // Rest-Aktion auf Keyframe-Pose (tanh-begrenzt)
       for (let a = 0; a < cfg.nu; a++) {
-        sim.ctrl[a] = this._ref[a] + cfg.actSpan * Math.tanh(act[a] * J);
+        sim.ctrl[a] = this._ref[a] + cfg.actSpan * Math.tanh(a2[a] * J);
       }
     }
   };
@@ -375,7 +433,8 @@ const ROBOTS = {
     task: makeTrackTask,
     nu: 12, actSpan: 0.55, jointResidual: 1.0,
     cmd: { vx: [-0.6, 1.0], yaw: [-1.2, 1.2] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015 },
+    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
     done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
   },
   spot: {
@@ -397,7 +456,8 @@ const ROBOTS = {
     task: makeTrackTask,
     nu: 12, actSpan: 0.5, jointResidual: 1.0,
     cmd: { vx: [-0.5, 0.9], yaw: [-1.0, 1.0] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015 },
+    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
     done: { upMin: 0.45, zMin: 0.2, zMax: 1.8 },
   },
   g1: {
@@ -420,7 +480,8 @@ const ROBOTS = {
     task: makeTrackTask,
     nu: 29, actSpan: 0.4, jointResidual: 1.0,
     cmd: { vx: [-0.3, 0.5], yaw: [-0.8, 0.8] },
-    rW: { vel: 0.2, yaw: 0.05, up: 0.15, alive: 0.05, energy: 0.00012 },
+    rW: { vel: 0.2, yaw: 0.05, up: 0.15, alive: 0.05, energy: 0.00012, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    dr: null,
     done: { upMin: 0.6, zMin: 0.35, zMax: 1.6 },
   },
   x2: {
@@ -454,7 +515,8 @@ const ROBOTS = {
     task: makeTrackTask,
     nu: 12, actSpan: 0.55, jointResidual: 1.0,
     cmd: { vx: [-0.6, 1.1], yaw: [-1.2, 1.2] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015 },
+    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
     done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
   },
   duck: {
@@ -474,7 +536,8 @@ const ROBOTS = {
     task: makeTrackTask,
     nu: 14, actSpan: 0.35, jointResidual: 1.0,
     cmd: { vx: [-0.15, 0.3], yaw: [-0.8, 0.8] },
-    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002 },
+    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    dr: null,
     done: { upMin: 0.45, zMin: 0.045, zMax: 0.45 },
   },
 };

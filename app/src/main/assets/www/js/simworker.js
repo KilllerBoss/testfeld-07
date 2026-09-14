@@ -115,6 +115,9 @@ function applyEnv(env) {
   if (env.motionR) Object.assign(MOTION_R, env.motionR);
   if (env.recoveryR) Object.assign(RECOVERY_R, env.recoveryR);
   if (env.fallMode) envState.fallMode = env.fallMode;
+  // v2.11.0 DOMAIN RANDOMIZATION: Spec je Worker setzen — task.reset
+  // würfelt je Episode vom Original aus (je Worker anders).
+  if (env.dr) sim.cfg.dr = env.dr;
 }
 
 /**
