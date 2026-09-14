@@ -299,3 +299,25 @@ Stage Summary:
 - sha256 (CI-Build): f4c43cc63497b60b9d1fbabb96b7dcbf07d6cff6de3a833db9ce46ed7490bd25
 - main = 48de48a, versionCode 19, CI grün (beide Runs), Auto-Release via Workflow, Token nicht persistiert
 - Für den Nutzer: Update installieren (gleiche Signatur) → „Aufgabe liegen" liegt SAUBER auf dem Boden, „Liegen lassen" gilt auch im Training, Kopfstand über das ★-Plugin „Kopfstand-Training" oder den KI-Chip „Kopfstand lernen"
+
+---
+Task ID: 30
+Agent: Super Z (Hauptagent)
+Task: v2.10.0 — Paralleles Training (MuJoCo-WASM in Web Workern + PPO-Erfahrungs-Merge) auf Basis v2.9.0
+
+Work Log:
+- AUSGANGSLAGE: Nutzerwunsch „mehrere MuJoCo-WASM-Instanzen parallel über Web Workers auf den CPU-Kernen, Erfahrungen fürs PPO-Update zusammenführen — schneller gescheit laufen lernen". Lokal war aus einer abgebrochenen Session ein v2.7.0-Zweig (68e5148) vorhanden; Fern-Repo war inzwischen bei v2.9.0 (parallele Session: Sensorik, Welten, 6 Roboter inkl. Microduck, Plugins/Mods, Szenarien Aufstehen/Abwurf, Boden-Startlagen-Fixes) — v2.7.0/v2.8.0/v2.9.0 dort bereits released
+- ENTSCHEIDUNG: v2.9.0 (cb324de, versionCode 19) als Basis übernommen (git reset --hard), nur das Parallel-Training neu integriert — Posen-Aufgaben/ createTask aus dem alten Zweig verworfen (v2.9.0 deckt das mit Szenarien + Plugins ab)
+- IMPLEMENTIERUNG: train.js PPO.mergeSegments (GAE je Segment mit eigenem lastVal, globale Advantage-Normalisierung, ein gemeinsames Update) + _update(buf,T) generalisiert; parallel.js ParallelTrainer (N Worker, Start-Barrier, Runden-Sync on-policy ohne Staleness, Schritte/s-Fenster, Worker-Ausfall-Robustheit, start/stop, test-injizierbare Worker-Factory); simworker.js Modul-Worker mit ECHTEM App-Code (engine/robots/motiontask/recoverytask/plugins/train) — Rollout = 1:1 trainCtrlStep-Semantik (fireAct/fireReward über leeren PluginHost, „Liegen lassen"-Logik, NaN-Wache), eigene prozedurale Welt (worldXml per init-Message), Modell-Fetch mit SEITENwurzel-Auflösung (Worker-relative fetches gehen gegen js/ — Root-Cause zweier Fehlstarts); main.js Tempo MAX = Parallel (startTraining/stopTraining/Loop 3-Wege, Plugin-Wächter: aktives Plugin → Inline mit Log, onParallelSegment → Episoden/Chart/Env-Patches live)
+- BUGS UNTERWEGS: wasmBinary-Parameter wurde nicht durchgereicht (wasmBuf vs wasm), worldXml fehlte in _boot → „empty file welt_live.xml", Worker-Boot frass CPU des Inline-Trainings → starting-Gate, gestaffelte Starts, Fail-Loud-Logging der Boot-Fehler
+- TESTS: parallel_test.mjs NEU (21: mergeSegments-Mathematik/StepCounts/Determinismus, Orchestrierung mit Mock-Workern: Boot-Barrier, Runden, Ausfall mid-round, stop); ui_v2100_test.mjs NEU (13, ECHTE Worker im Chromium: Tempo MAX aktiviert ParallelTrainer, 1024→3072+ Schritte, ≥3 Runden, 814 Schritte/s bei 1 Worker auf 2 Kernen, Pause terminiert, getup-Start über Boden); ALLE v2.9.0-Regressionen GRÜN (motion_ctrl, ground_settle 31, recovery_plugin, world, model_smoke, train_smoke, ui_v260/280/290)
+- BUILD: versionCode 20 / versionName 2.10.0, APK 41.624.889 bytes (6-Roboter-OBJ-Assets), Signatur CN=Trainrobot OU=Testfeld07 identisch (1c0422b9…), simworker/parallel/mergeSegments im APK verifiziert; Build-Env: SDK neu installiert (cmdline-tools 11076708, platform 34, build-tools 34), Gradle-Hänger nach Kill → Locks/neu
+- CI-FIX: android-actions/setup-android@v3 bricht JETZT mit „Failed to find package tools" (Google hat Legacy-Paket entfernt — Runner-Drift, unabhängig von unserem Code) → Workflow nutzt direkt das vorinstallierte Runner-SDK (Lizenzen + platform 34 + build-tools 34.0.0); Tag v2.10.0 auf Fix-Commit umgehängt (3dc4059 → fef9f50)
+- RELEASE: main cb324de→fef9f50 + Tag v2.10.0, CI beide Runs GRÜN (34896813781, 34896835646), Release id 388713851 AUTOMATISCH, Asset Trainrobot.apk 41.624.889 bytes uploaded
+- Integrität: CI-Asset via API geladen → aapt versionCode 20/2.10.0, Signatur identisch, anonymer Download HTTP 200; CI-sha256 1ff62346… (lokal 03f7a59a… — Zip-Metadaten, Signatur entscheidend)
+
+Stage Summary:
+- v2.10.0 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.10.0
+- Download (anonym verifiziert): https://github.com/KilllerBoss/testfeld-07/releases/download/v2.10.0/Trainrobot.apk
+- Für den Nutzer: Tempo „MAX" im Trainings-Panel = parallel auf allen Kernen (Log zeigt „Training läuft PARALLEL auf N MuJoCo-Workern"); S26 Ultra hat 8 Kerne → bis 6 Worker; MicroDuck ist mit 14 Aktuatoren das ideale Parallel-Trainingsziel; Plugins laufen wie gehabt inline
+- Roadmap GPU (Diskussion): realistischer Pfad = Vulkan-Compute-Port einzelner mj_step-Phasen (IREE/clspv-Referenzen), NICHT CUDA→Adreno; erste Datengrundlage = steps/s-Benchmark aus v2.10.0 auf dem Gerät
