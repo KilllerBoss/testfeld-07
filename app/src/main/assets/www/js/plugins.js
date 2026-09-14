@@ -172,7 +172,14 @@ export class PluginHost {
       for (const f of inst.act) { try { f(sim, ctrl); } catch (e) { this._fail(id, e); return; } }
     }
   }
-  /** Reward-Hook: summiert Boni / erzwingt done → {r, done}. */
+  /**
+   * Reward-Hook: summiert Boni / formt done → {r, done}.
+   * v2.9.0: {done:false} hebt den Aufgaben-Abbruch für diesen Schritt AUF
+   * (Freestyle-Aufgaben wie Kopfstand: der „Sturz"-Abbruch der Geh-Aufgabe
+   * würde sonst jede Episode nach 1 Schritt killen — genau deshalb
+   * „wirkte das Kopfstand-Plugin nicht aufs Training"). done:true erzwingt
+   * weiterhin das Episoden-Ende (Eigenerfolg/Zeitlimit des Plugins).
+   */
   fireReward(sim, info) {
     let r = info.r, done = info.done;
     for (const [id, inst] of this._inst) {
@@ -182,7 +189,8 @@ export class PluginHost {
           if (typeof out === 'number') r += out;
           else if (out && typeof out === 'object') {
             if (typeof out.bonus === 'number' && Number.isFinite(out.bonus)) r += out.bonus;
-            if (out.done) done = true;
+            if (out.done === true) done = true;
+            else if (out.done === false) done = false;
           }
         } catch (e) { this._fail(id, e); return { r, done }; }
       }
@@ -230,5 +238,50 @@ const off = api.onStep((dt) => {
   }
 });
 return off;`,
+  },
+  {
+    id: 'builtin_kopfstand',
+    name: 'Kopfstand-Training',
+    desc: 'FREESTYLE-Aufgabe: Roboter startet kopfüber und lernt, den Kopfstand zu halten. Zeigt das Muster: eigene Startpose (onReset) + eigene Belohnung (onReward) + Aufgaben-Abbruch aufheben ({done:false}).',
+    enabled: false,
+    code: `// KOPFSTAND-TRAINING (v2.9.0 Referenz-Plugin für Freestyle-Aufgaben)
+// Muster: 1) onReset setzt JEDE Episode (auch im Training) kopfüber,
+//         2) onReward zahlt für kopfüber + ruhig + lange gehalten,
+//         3) {done:false} hebt den „Sturz"-Abbruch der Geh-Aufgabe auf —
+//            sonst endet jede Episode nach 1 Schritt und nichts lernt.
+const HOLD = 2.0;          // so lange Kopfstand halten (s) → Erfolg
+const LIMIT = 12.0;        // Episoden-Zeitlimit (s)
+let okT = 0, steps = 0;
+function upzOf(s) { const q = [0, 0, 0, 0]; s.baseQuat(q); return 1 - 2 * (q[1] * q[1] + q[2] * q[2]); }
+api.onReset(() => {
+  const s = api.sim(); if (!s) return;
+  okT = 0; steps = 0;
+  const p = [0, 0, 0]; s.basePos(p);           // aktuelle Höhe als Startanker
+  const yaw = Math.random() * 6.2832;
+  const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
+  const t = Math.PI + (Math.random() - 0.5) * 0.3; // kopfüber, leicht gestreut
+  const ct = Math.cos(t / 2), st = Math.sin(t / 2);
+  // q = qyaw ⊗ qtilt(X) → (cy·ct, cy·st, sy·st, sy·ct)
+  api.teleport(p[0], p[1], Math.max(p[2], 0.15), cy * ct, cy * st, sy * st, sy * ct);
+});
+api.onReward((info) => {
+  const s = api.sim(); if (!s) return null;
+  const u = Number.isFinite(info.upz) ? info.upz : upzOf(s); // kopfüber = −1
+  const inv = Math.max(0, -u);
+  let bonus = 0.4 * (-u) + 0.6 * inv * inv;    // je kopfüberer, desto besser
+  const w = [0, 0, 0]; s.baseAngVelBody(w);    // ruhig halten zählt doppelt
+  const wild = Math.hypot(w[0], w[1], w[2]);
+  bonus += 0.15 * Math.exp(-wild * wild);
+  steps++;
+  // Erfolg (gehalten) oder Zeitlimit → Episode SAUBER beenden (done:true
+  // gewinnt gegen das Aufheben unten). Sonst: Abbruch der Geh-Aufgabe
+  // aufheben ({done:false}) — Freestyle läuft weiter.
+  if (inv > 0.6 && wild < 1.5) { okT += 0.02; } else okT = 0;
+  if (okT >= HOLD) { api.toast('KOPFSTAND gehalten!'); return { bonus: bonus + 5, done: true }; }
+  if (steps * 0.02 > LIMIT) return { bonus, done: true };
+  return { bonus, done: false };
+});
+api.log('Kopfstand-Training aktiv — Training starten!');
+return () => {};`,
   },
 ];

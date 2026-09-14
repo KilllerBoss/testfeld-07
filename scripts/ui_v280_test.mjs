@@ -121,9 +121,9 @@ check('Drohne: Szenario-Zeile versteckt', await page.evaluate(() => document.get
 // 7) Werkstatt (zurück zum A1)
 await page.evaluate(() => document.querySelector('.robot-chip[data-robot="a1"]').click());
 await page.waitForFunction(() => window.__trainrobot.cfg && window.__trainrobot.cfg.id === 'a1', undefined, { timeout: 120000 });
-check('Werkstatt listet 2 ★-Beispiele', await page.evaluate(() => {
+check('Werkstatt listet 3 ★-Beispiele', await page.evaluate(() => {
   const rows = [...document.querySelectorAll('#plgList .plugin-row')];
-  return rows.length === 2 && rows.every(r => r.textContent.includes('★'));
+  return rows.length === 3 && rows.every(r => r.textContent.includes('★'));
 }));
 
 // Abwurf-Plugin aktivieren → Chip erscheint

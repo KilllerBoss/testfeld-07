@@ -22,7 +22,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.8.0';
+const VERSION = '2.9.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -139,6 +139,7 @@ async function loadRobot(id, first = false) {
       renderClipButtons();
     }
     S.task.reset(new RNG(4242), sim);
+    pluginHost.fireReset(); // v2.9.0: Plugins (z. B. Kopfstand) dürfen die Startpose formen
     S.obsBuf = new Float32Array(S.task.obsDim);
     S.actBuf = new Float32Array(S.task.actDim);
     ui.$('glbSection').classList.toggle('hidden', id !== 'g1');
@@ -274,6 +275,7 @@ function switchScenario(scn) {
   const cfg = S.sim.cfg;
   S.task = makeTaskFor(S.robotId, cfg, S.sim);
   S.task.reset(new RNG(4242), S.sim);
+  pluginHost.fireReset(); // v2.9.0
   S.obsBuf = new Float32Array(S.task.obsDim);
   S.actBuf = new Float32Array(S.task.actDim);
   S.trainer = loadPolicy(S.robotId);
@@ -1021,8 +1023,19 @@ function trainCtrlStep() {
   if (task.kind === 'motion') task.advance(CTRL_DT);
   let { r, done } = task.reward(sim);
   // Reward-Hook (v2.8.0): Plugins formen Belohnungen um (Bonus/done)
-  const rw = pluginHost.fireReward(sim, { r, done, task });
+  // v2.9.0 FIX: info.upz/info.height wurden bisher NIE mitgeliefert
+  // (immer undefined — Plugins konnten also nicht auf Aufrecht/Höhe
+  // reagieren → „Kopfstand-Plugin verändert nichts"). Jetzt echt.
+  const _o4 = 4 * sim.baseBody;
+  const _bx = sim._xquat[_o4 + 1], _by = sim._xquat[_o4 + 2];
+  const rBefore = r;
+  const rw = pluginHost.fireReward(sim, {
+    r, done, task,
+    upz: 1 - 2 * (_bx * _bx + _by * _by),
+    height: sim._xpos[3 * sim.baseBody + 2],
+  });
   r = rw.r; done = rw.done;
+  S.plgBonus = (S.plgBonus || 0) + (r - rBefore);
   for (let i = 0; i < act.length; i++) task.lastAct[i] = act[i];
   S.epReward += r;
 
@@ -1031,9 +1044,29 @@ function trainCtrlStep() {
     S.episodes++;
     ui.pushEpisodeReward(S.epReward);
     S.epReward = 0;
-    sim.reset();
-    task.reset(trainer.rng, sim);
-    pluginHost.fireReset();
+    // v2.9.0 „Liegen lassen" konsequent: Endet eine GEH-Episode durch einen
+    // Sturz UND „Liegen lassen" ist gewählt, bleibt der Roboter LIEGEN
+    // (kein Teleport) — die Episode endet trotzdem sauber für PPO
+    // (Value-Bootstrap via done=true), die nächste startet aus der Lage.
+    const o4 = 4 * sim.baseBody;
+    const fx = sim._xquat[o4 + 1], fy = sim._xquat[o4 + 2];
+    const fallen = (1 - 2 * (fx * fx + fy * fy)) < sim.cfg.done.upMin;
+    // kind==='speed' | undefined (Speed-Task vor v2.9.0 ohne kind) — nur die
+    // Geh-Aufgabe bleibt liegen; Motion-Tracking/Recovery resetten normal.
+    const stayDown = (task.kind === 'speed' || task.kind === undefined) && S.fallMode === 'stay' && fallen && Number.isFinite(fx + fy);
+    if (stayDown) {
+      task.reset(trainer.rng, sim); // neue Kommandos — POSE bleibt (liegt weiter)
+      pluginHost.fireReset();
+      const now = performance.now();
+      if (now - lastFallLog > 6000) {
+        log('Episode endete (Sturz) — Roboter bleibt liegen („Liegen lassen“). Aufstehen lernen: Aufgabe „Aufstehen“.', 'warn');
+        lastFallLog = now;
+      }
+    } else {
+      sim.reset();
+      task.reset(trainer.rng, sim);
+      pluginHost.fireReset();
+    }
   }
   if (full) {
     const lastObs = task.observe(sim, S.obsBuf);
@@ -1085,7 +1118,16 @@ function policyCtrlStep() {
     task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
   }
   task.observe(sim, S.obsBuf);
-  if (!finiteArr(S.obsBuf)) { sim.reset(); if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0; return; }
+  // v2.9.0: NaN-Wache resetzt jetzt auf die AUFGABEN-Startpose (statt still
+  // zur Keyframe-Stehpose zu teleportieren — „liegen an gemacht, aber wurde
+  // zurück teleportiert"): Recovery bleibt liegend, Speed bleibt am Boden.
+  if (!finiteArr(S.obsBuf)) {
+    sim.reset();
+    if (S.task && S.task.kind !== 'motion') S.task.reset(new RNG(4242), sim);
+    if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
+    pluginHost.fireReset();
+    return;
+  }
   trainer.actDeterministic(S.obsBuf, S.actBuf);
   task.actionToCtrl(sim, S.actBuf);
   pluginHost.fireAct(sim, sim.ctrl); // v2.8.0
@@ -1302,6 +1344,12 @@ function loop(now) {
   if (statusT > 0.2) {
     statusT = 0;
     ui.status(S.sim.baseSpeed(), S.sim.baseHeight(), fps);
+    // v2.9.0: sichtbarer Beweis, dass Plugins das Training formen
+    if (S.plgBonus && (S.training || S.mode === 'policy') && performance.now() - (S._plgLogT || 0) > 10000) {
+      log(`Plugin-Belohnung aktiv (Σ Bonus ${S.plgBonus >= 0 ? '+' : ''}${S.plgBonus.toFixed(1)}) — Training reagiert`, 'ok');
+      S._plgLogT = performance.now();
+      S.plgBonus = 0;
+    }
     if (ui.$('trainSheet') && !ui.$('trainSheet').classList.contains('hidden')) {
       const m = S.trainer ? S.trainer : null;
       ui.trainStats({
@@ -1801,6 +1849,7 @@ async function activateClip(rec) {
   syncBtnRow();
   renderClipButtons();
   S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
+  pluginHost.fireReset(); // v2.9.0
   S.obsBuf = new Float32Array(S.task.obsDim);
   S.actBuf = new Float32Array(S.task.actDim);
   S.trainer = loadPolicy(S.robotId);
@@ -1855,6 +1904,7 @@ function deactivateClip() {
     const cfg = S.sim.cfg;
     S.task = makeTaskFor(S.robotId, cfg, S.sim); // v2.8.0: Szenario respektieren
     S.task.reset(new RNG(4242), S.sim);
+    pluginHost.fireReset(); // v2.9.0
     S.obsBuf = new Float32Array(S.task.obsDim);
     S.actBuf = new Float32Array(S.task.actDim);
     S.trainer = loadPolicy(S.robotId);

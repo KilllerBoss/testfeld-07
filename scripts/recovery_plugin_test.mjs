@@ -236,9 +236,10 @@ return () => { globalThis.__plgDisposed = true; };`,
 
 console.log('── 4) BUILTIN-Plugins (Abwurf / Auto-Schubser) ──');
 {
-  check('Zwei BUILTIN-Beispiele vorhanden', BUILTIN_PLUGINS.length === 2
+  check('Drei BUILTIN-Beispiele vorhanden', BUILTIN_PLUGINS.length === 3
     && BUILTIN_PLUGINS.some(p => p.id === 'builtin_abwurf')
-    && BUILTIN_PLUGINS.some(p => p.id === 'builtin_autopush'));
+    && BUILTIN_PLUGINS.some(p => p.id === 'builtin_autopush')
+    && BUILTIN_PLUGINS.some(p => p.id === 'builtin_kopfstand'));
 
   const host = new PluginHost();
   let pushed = 0, chipCb = null;

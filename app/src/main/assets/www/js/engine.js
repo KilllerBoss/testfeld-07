@@ -159,6 +159,23 @@ export class RobotSim {
     }
     if (this.baseBody < 0) throw new Error(`Kein freier Basiskörper in ${this.cfg.name}`);
 
+    // v2.9.0: Roboter-Bodies = Teilbaum unter baseBody. Das Testfeld enthält
+    // STATISCHE Deko-Bodies (Rampen, Mauern, Stufen — z. T. unterhalb z=0
+    // verankert); sie gehören NICHT zur Boden-Freiheit des Roboters.
+    this._robotBody = new Uint8Array(this.nbody);
+    if (mod.body_parentid) {
+      const stack = [this.baseBody];
+      while (stack.length) {
+        const b = stack.pop();
+        this._robotBody[b] = 1;
+        for (let c = 1; c < this.nbody; c++) {
+          if (!this._robotBody[c] && mod.body_parentid[c] === b) stack.push(c);
+        }
+      }
+    } else {
+      this._robotBody.fill(1);
+    }
+
     // Keyframe
     this.keyId = 0;
     const nkey = mod.nkey;
@@ -467,6 +484,12 @@ export class RobotSim {
    * und Basis-Geschwindigkeiten auf null. Danach mj_forward.
    * Grundlage für die Aufstehen-/Abwurf-Szenarien (recoverytask.js) und
    * für Plugins (api.teleport — „Roboter von oben runter werfen").
+   *
+   * v2.9.0 BUGFIX „Roboter steht auf der Decke des Bodens": Nach dem
+   * Versetzen wird die Basis automatisch so weit ANGEBEBEN, dass kein
+   * fester Geom mehr unter der Bodenebene (z=0) hängt. Liegende/gekippte
+   * Startposen hingen sonst mit Kopf/Armen IM Boden → Kontakt-Explosion,
+   * NaN-Beobachtungen, Stummer Teleport zur Keyframe-Pose.
    */
   placeBaseFull(x, y, z, qw = 1, qx = 0, qy = 0, qz = 0) {
     const adr = this._baseQposAdr2 || (this._baseQposAdr2 = this._baseQposAdrOf());
@@ -477,5 +500,110 @@ export class RobotSim {
     const dadr = this._baseDofAdr2 || (this._baseDofAdr2 = this._baseDofAdrOf());
     for (let i = 0; i < 6; i++) this._qvel[dadr + i] = 0; // freies Gelenk: 6 Dofs
     this._mjApi.mj_forward(this.model, this.data);
+    this.settleAboveGround();
+  }
+
+  /**
+   * v2.9.0: Tiefster Punkt aller Roboter-eigenen festen Geoms (Welt-Z) —
+   * EXAKT (keine konservativen Schranken): Primitive über geschlossene
+   * Stützformeln, MESHes über echte Vertex-Transformation (mesh_vert =
+   * dieselbe Kollisionsgeometrie, die MuJoCo nutzt). Nur Roboter-Bodies
+   * (Teilbaum unter baseBody) — die Testfeld-Deko (Rampen/Mauern, teils
+   * unterhalb z=0 verankert) zählt nicht.
+   *
+   * collisionOnly=true (für settleAboveGround): nur Kollisions-Geoms —
+   * das ist die PHYSIK-Wahrheit. Vereinfachte Kollisions-Hulls (z. B.
+   * Microduck-Gehäuse) lassen die detaillierteren Visual-Meshes um wenige
+   * cm überstehen — kosmetisch, von der Physik nicht beeinflussbar.
+   * Begründung: liegend/kopfüber gesetzte Roboter hingen vorher mit
+   * Kopf/Armen im Boden → Kontakt-Explosion → NaN → stiller Teleport
+   * („Roboter steht auf der Decke des Bodens", „wurde zurück teleportiert").
+   */
+  minGeomZ(collisionOnly = false) {
+    const mod = this.model, dat = this.data;
+    let minZ = Infinity;
+    for (let g = 0; g < this.ngeom; g++) {
+      const body = mod.geom_bodyid[g];
+      if (body === 0) continue;             // Welt
+      if (this._robotBody && !this._robotBody[body]) continue; // Szene-Deko
+      // collisionOnly: nur Geoms, die mit dem BODEN (contype/conaffinity 1)
+      // kollidieren KÖNNEN (MuJoCo-Paar-Regel: (c1&ca2)||(c2&ca1)). Geoms in
+      // Selbstkollisions-Familien (z. B. contype=2) berühren den Boden nie
+      // und sinken von der Physik bewusst ignoriert etwas ein.
+      if (collisionOnly && !(mod.geom_contype[g] & 1) && !(mod.geom_conaffinity[g] & 1)) continue; // Visual-only / Selbstkollision
+      const t = mod.geom_type[g];
+      if (t === 0 || t === 1) continue;     // PLANE/HFIELD = Boden selbst
+      // Welt-Z-Achse des Geoms = dritte Zeile von geom_xmat (row-major)
+      const R20 = dat.geom_xmat[9 * g + 2], R21 = dat.geom_xmat[9 * g + 5], R22 = dat.geom_xmat[9 * g + 8];
+      const gz = dat.geom_xpos[3 * g + 2];
+      let z;
+      if (t === 2) {                                          // SPHERE
+        z = gz - mod.geom_size[3 * g];
+      } else if (t === 3) {                                   // CAPSULE
+        z = gz - (Math.abs(R22) * mod.geom_size[3 * g + 1] + mod.geom_size[3 * g]);
+      } else if (t === 4) {                                   // ELLIPSOID
+        const a = mod.geom_size[3 * g], b = mod.geom_size[3 * g + 1], c = mod.geom_size[3 * g + 2];
+        z = gz - Math.sqrt((R20 * a) * (R20 * a) + (R21 * b) * (R21 * b) + (R22 * c) * (R22 * c));
+      } else if (t === 5) {                                   // CYLINDER
+        const r = mod.geom_size[3 * g], h = mod.geom_size[3 * g + 1];
+        z = gz - (Math.abs(R22) * h + Math.sqrt(R20 * R20 + R21 * R21) * r);
+      } else if (t === 6) {                                   // BOX (exakt)
+        const s0 = mod.geom_size[3 * g], s1 = mod.geom_size[3 * g + 1], s2 = mod.geom_size[3 * g + 2];
+        z = gz - (Math.abs(R20) * s0 + Math.abs(R21) * s1 + Math.abs(R22) * s2);
+      } else {
+        // MESH (7) & Sonstiges: echte Vertices transformieren — exakt.
+        let did = -1;
+        try { did = mod.geom_dataid[g]; } catch (e) { /* kein Mesh-Zugriff */ }
+        let done = false;
+        if (did >= 0 && mod.mesh_vertadr && mod.mesh_vertnum && mod.mesh_vert) {
+          const vAdr = mod.mesh_vertadr[did], vNum = mod.mesh_vertnum[did];
+          if (vNum > 0 && vNum < 200000) {
+            const px = dat.geom_xpos[3 * g], py = dat.geom_xpos[3 * g + 1], pz = dat.geom_xpos[3 * g + 2];
+            const R00 = dat.geom_xmat[9 * g], R01 = dat.geom_xmat[9 * g + 1];
+            const R10 = dat.geom_xmat[9 * g + 3], R11 = dat.geom_xmat[9 * g + 4];
+            let mn = Infinity;
+            for (let i = 0; i < vNum; i++) {
+              const vx = mod.mesh_vert[3 * (vAdr + i)], vy = mod.mesh_vert[3 * (vAdr + i) + 1], vz = mod.mesh_vert[3 * (vAdr + i) + 2];
+              const wz = pz + R20 * vx + R21 * vy + R22 * vz;
+              if (wz < mn) mn = wz;
+              void px; void py; void R00; void R01; void R10; void R11; // (nur Z nötig)
+            }
+            if (Number.isFinite(mn)) { z = mn; done = true; }
+          }
+        }
+        if (!done) {
+          // Fallback: AABB (Mitte + halbe Größe, lokal) rotieren
+          const ab = mod.geom_aabb;
+          const cx = ab ? ab[6 * g] : NaN, cy = ab ? ab[6 * g + 1] : NaN, cz = ab ? ab[6 * g + 2] : NaN;
+          const hx = ab ? ab[6 * g + 3] : NaN, hy = ab ? ab[6 * g + 4] : NaN, hz2 = ab ? ab[6 * g + 5] : NaN;
+          if (Number.isFinite(cx) && Math.abs(cx) < 10 && Math.abs(cy) < 10 && Math.abs(cz) < 10
+            && Number.isFinite(hx) && Math.abs(hx) < 10 && Math.abs(hy) < 10 && Math.abs(hz2) < 10) {
+            const cWorldZ = gz + R20 * cx + R21 * cy + R22 * cz;
+            z = cWorldZ - (Math.abs(R20) * hx + Math.abs(R21) * hy + Math.abs(R22) * hz2);
+          } else {
+            z = gz - (mod.geom_rbound ? mod.geom_rbound[g] : 0.05);
+          }
+        }
+      }
+      if (z < minZ) minZ = z;
+    }
+    return Number.isFinite(minZ) ? minZ : 0;
+  }
+
+  /**
+   * Hebt die Basis an, bis der tiefste feste KOLLISIONS-Geom ≥ margin über
+   * dem Boden ist (oder schon immer darüber war — dann No-Op). NIEMALS
+   * absenken: Abwurf/Kopfstand dürfen in der Luft starten.
+   */
+  settleAboveGround(margin = 0.004) {
+    const minZ = this.minGeomZ(true); // Physik-Wahrheit (Kollision)
+    const lift = margin - minZ;
+    if (lift > 1e-9) {
+      const adr = this._baseQposAdr2 || (this._baseQposAdr2 = this._baseQposAdrOf());
+      this._qpos[adr + 2] += lift;
+      this._mjApi.mj_forward(this.model, this.data);
+      return lift;
+    }
+    return 0;
   }
 }

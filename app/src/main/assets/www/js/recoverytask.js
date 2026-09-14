@@ -94,7 +94,12 @@ export function makeRecoveryTask(cfg, mode = 'getup') {
       if (!sim) return;
       sim.reset(); // Keyframe-Pose, alle Geschwindigkeiten 0
       sim.basePos(this._p);
-      this._h0 = Math.max(0.2, this._p[2]);
+      // v2.9.0 FIX: Klemme 0,2 m gesenkt → Microduck (Standhöhe 0,12 m)
+      // bekam sonst _h0 = 0,2 → Erfolgsschwelle 0,72·_h0 = 0,144 m war
+      // UNERREICHBAR („Training verändert sich nicht") und die normalized
+      // Höhe/liegend-Startlage lagen daneben. 0,05 m schützt nur vor
+      // defekten Keyframes.
+      this._h0 = Math.max(0.05, this._p[2]);
       this.tElapsed = 0;
       this._landed = false;
       this._okT = 0;

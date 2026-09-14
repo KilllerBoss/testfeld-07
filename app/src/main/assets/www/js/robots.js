@@ -192,6 +192,7 @@ function makeTrackTask(cfg) {
   const nFeet = Array.isArray(cfg.footBodies) ? cfg.footBodies.length : 0;
   const sensDim = 9 + nFeet;
   return {
+    kind: 'speed', // v2.9.0: explizit (war undefined — „speed" wurde nur implizit angenommen)
     obsDim: 3 * cfg.nu + 8 + sensDim,
     actDim: cfg.nu,
     reset(rng, sim) {
