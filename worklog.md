@@ -239,3 +239,22 @@ Stage Summary:
 - Gemini hat jetzt ROHEN Zugriff: runCode (live) + writePlugin (dauerhafte Mods mit Physik-Hooks, eigenen Buttons, Teleport, eigenen Belohnungen) — „Art mods oder plugins schreiben" 1:1 umgesetzt, mit 2 mitgelieferten Beispielen.
 - Lokales APK: download/Trainrobot.apk (versionCode 18), sha256 3e804f7ebfb6f774571734a1638bcd5f46a00aa63ee2e02738483e9d65a6c92c
 - Release-Status: siehe Folgeeintrag (Task 28-Release)
+
+---
+Task ID: 28-Release
+Agent: Super Z (Hauptagent)
+Task: v2.8.0 Release abschließen (CI + GitHub-Release verifizieren)
+
+Work Log:
+- Push: main 90a8e50→06fc0aa (Rebase-Ergebnis mit korrigierter main.js — die erste Rebase-Version hatte eine beim Konflikt-Schreiben verunstaltete main.js; acorn-Verifikation nach Rekonstruktion aus 90a8e50-Basis + assert-gesicherten Integrationen), danach Tag v2.8.0
+- CI: main-Run 34843474308 GRÜN; Tag-Run 34843476807 GRÜN → Release AUTOMATISCH erstellt (drittes Mal nach v2.6.0/v2.6.1): Release-ID 388378408, Asset 563354473 Trainrobot.apk 41.610.402 bytes (größer durch Go2 + Microduck-Modelle), state=uploaded
+- Integrität: Asset via API (octet-stream) geladen → aapt versionCode 18 / 2.8.0 ✓; CI-sha256 5777a33d80a7ebcf6c81585ff03d20aad506e61ad894ac734663d88e4b182bdb (lokal bedb14a52… — Zip-Metadaten, Signatur entscheidend)
+- Signatur: CI-Build identisch mit allen v2.x (CN=Trainrobot OU=Testfeld07, SHA-256 1c0422b9…) → Update über alle Installationen möglich
+- Anonymer Browser-Download: HTTP 200, volle Größe ✓
+- Debug-Werkzeuge bleiben erhalten: scripts/debug_glb_flow.mjs, scripts/debug_g1_load.mjs, scripts/recovery_plugin_test.mjs, scripts/ui_v280_test.mjs
+
+Stage Summary:
+- Release v2.8.0 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.8.0
+- Download (anonym verifiziert): https://github.com/KilllerBoss/testfeld-07/releases/download/v2.8.0/Trainrobot.apk
+- Inhalt: v2.7.0-Sensorik/Welten/6-Roboter + NEU in v2.8.0: Sturz-Verhalten wählbar (Auto-Reset | Liegen lassen), Aufstehen-/Abwurf-Trainings-Szenarien (mit Sensorblock), Gemini mit rohem Zugriff (runCode + writePlugin — Mods/Plugins mit Physik-Hooks, Teleport, eigenen Buttons; 2 Beispiele inklusive), Werkstatt-UI in der KI-Tafel
+- Token nicht in Repo/Logs/Scripts persistiert
