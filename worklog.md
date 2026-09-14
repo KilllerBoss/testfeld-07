@@ -279,3 +279,23 @@ Work Log:
 Stage Summary:
 - v2.9.0: „Aufgabe liegen" startet ÜBER dem Boden (kein Kopf-unter-Boden mehr, Microduck-Kopf kollidiert jetzt), „Liegen lassen" gilt AUSSERDEM im Training (kein Teleport bei Sturz-Episodenende), Kopfstand-/Freestyle-Plugins wirken WIRKLICH aufs Training (echtes upz/height, done:false hebt Sturz-Abbruch auf, sichtbares Bonus-Log) + ★-Beispiel „Kopfstand-Training"
 - Release-Status: siehe Folgeeintrag (Task 29-Release)
+
+---
+Task ID: 29-Release
+Agent: Super Z (Hauptagent)
+Task: v2.9.0 Release abschließen (CI + GitHub-Release verifizieren)
+
+Work Log:
+- Build-Umgebung: Gradle-Dist-Download via wrapper 504 (GitHub-Mirror-Störung) → manuell von services.gradle.org geladen + Wrapper-Cache gesät; SDK-Neuinstallation via scripts/install_sdk_v290.sh (Environment-Reset)
+- Build: assembleRelease GRÜN (1 m 15 s warm), APK 41.615.730 bytes, versionCode 19 / versionName 2.9.0, Signatur CN=Trainrobot OU=Testfeld07 (SHA-256 1c0422b9… identisch mit allen v2.x — Update-fähig), lokaler sha256 f6f32e4d…
+- Push: main 9fb0db7→48de48a + Tag v2.9.0
+- CI: main-Run 34862086574 GRÜN; Tag-Run 34862090948 GRÜN → Release AUTOMATISCH erstellt (viertes Mal in Folge): Release-ID 388506382, Asset 563667570 Trainrobot.apk 41.615.730 bytes, state=uploaded
+- Integrität: Asset via API (octet-stream) geladen → aapt versionCode 19 / 2.9.0 ✓; CI-sha256 f4c43cc63497b60b9d1fbabb96b7dcbf07d6cff6de3a833db9ce46ed7490bd25 (lokal f6f32e4d… — Zip-Metadaten, Signatur entscheidend); Signatur CI = lokal ✓
+- Anonymer Browser-Download: HTTP 200, volle 41.615.730 bytes ✓
+
+Stage Summary:
+- Release v2.9.0 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.9.0
+- Download (anonym verifiziert, HTTP 200): https://github.com/KilllerBoss/testfeld-07/releases/download/v2.9.0/Trainrobot.apk
+- sha256 (CI-Build): f4c43cc63497b60b9d1fbabb96b7dcbf07d6cff6de3a833db9ce46ed7490bd25
+- main = 48de48a, versionCode 19, CI grün (beide Runs), Auto-Release via Workflow, Token nicht persistiert
+- Für den Nutzer: Update installieren (gleiche Signatur) → „Aufgabe liegen" liegt SAUBER auf dem Boden, „Liegen lassen" gilt auch im Training, Kopfstand über das ★-Plugin „Kopfstand-Training" oder den KI-Chip „Kopfstand lernen"
