@@ -238,9 +238,66 @@ export class PPO {
     let varr = 0; for (let t = 0; t < T; t++) varr += (b.adv[t] - mean) ** 2; varr = Math.sqrt(varr / T) + 1e-8;
     for (let t = 0; t < T; t++) b.adv[t] = (b.adv[t] - mean) / varr;
 
-    const metrics = this._update();
+    const metrics = this._update(b, this.h.T);
     this.updateCount++;
     this.buf = null;
+    return metrics;
+  }
+
+  /**
+   * v2.10.0 PARALLELES TRAINING: Erfahrungen mehrerer Umgebungen (Sim-Worker)
+   * zusammenführen und EIN gemeinsames PPO-Update machen.
+   * seg = { obs, act, logp, rew, done, val, lastVal, n } — je Worker-Rollout
+   * (on-policy-Schnappschuss der ausgesendeten Gewichtsversion). GAE läuft
+   * JEDEM Segment einzeln rückwärts (mit dessen eigenem lastVal), dann
+   * global normalisiert und gemischt geupdatet — vektorisiertes PPO.
+   */
+  mergeSegments(segs) {
+    let total = 0;
+    for (const s of segs) total += s.n;
+    if (!total) return null;
+    const D = this.obsDim, A = this.actDim, h = this.h;
+    const m = {
+      obs: new Float32Array(total * D),
+      act: new Float32Array(total * A),
+      logp: new Float32Array(total),
+      rew: new Float32Array(total),
+      done: new Uint8Array(total),
+      val: new Float32Array(total),
+      adv: new Float32Array(total),
+      ret: new Float32Array(total),
+    };
+    // GAE je Segment (rückwärts), in den gemeinsamen Puffer schreiben
+    let off = 0;
+    for (const s of segs) {
+      const n = s.n;
+      const adv = new Float32Array(n);
+      let gae = 0;
+      for (let t = n - 1; t >= 0; t--) {
+        const nextNonTerm = s.done[t] ? 0 : 1;
+        const nextVal = t === n - 1 ? s.lastVal : s.val[t + 1];
+        const delta = s.rew[t] + h.gamma * nextVal * nextNonTerm - s.val[t];
+        gae = delta + h.gamma * h.lam * nextNonTerm * gae;
+        adv[t] = gae;
+      }
+      for (let t = 0; t < n; t++) {
+        const k = off + t;
+        m.obs.set(s.obs.subarray(t * D, t * D + D), k * D);
+        m.act.set(s.act.subarray(t * A, t * A + A), k * A);
+        m.logp[k] = s.logp[t]; m.rew[k] = s.rew[t];
+        m.done[k] = s.done[t] ? 1 : 0; m.val[k] = s.val[t];
+        m.adv[k] = adv[t]; m.ret[k] = adv[t] + s.val[t];
+      }
+      off += n;
+    }
+    // Advantages GEMEINSAM normalisieren (über alle Umgebungen)
+    let mean = 0; for (let t = 0; t < total; t++) mean += m.adv[t]; mean /= total;
+    let varr = 0; for (let t = 0; t < total; t++) varr += (m.adv[t] - mean) ** 2; varr = Math.sqrt(varr / total) + 1e-8;
+    for (let t = 0; t < total; t++) m.adv[t] = (m.adv[t] - mean) / varr;
+
+    const metrics = this._update(m, total);
+    this.stepCount += total;
+    this.updateCount++;
     return metrics;
   }
 
@@ -248,8 +305,8 @@ export class PPO {
     for (const g of this.net.grads()) g.fill(0);
   }
 
-  _update() {
-    const b = this.buf, T = this.h.T, D = this.obsDim, A = this.actDim;
+  _update(b, T) {
+    const D = this.obsDim, A = this.actDim;
     const h = this.h, net = this.net;
     const stds = new Float32Array(A);
     for (let i = 0; i < A; i++) stds[i] = Math.exp(net.logStd[i]);

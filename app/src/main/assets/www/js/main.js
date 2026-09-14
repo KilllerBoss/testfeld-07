@@ -17,12 +17,13 @@ import { retargetToG1, RT_ALG } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
+import { ParallelTrainer, suggestWorkerCount } from './parallel.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.9.0';
+const VERSION = '2.10.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -980,11 +981,95 @@ function wireAIKey() {
 }
 
 // ── Training ────────────────────────────────────────────────
+/** Ist mindestens ein Plugin aktiv? (Paralleltraining ausgeschlossen) */
+function pluginsActive() {
+  try { return pluginHost.list.some(p => p.enabled); } catch (e) { return true; }
+}
+
+/** Aufgaben-Beschreibung für die Sim-Worker (v2.10.0). */
+function workerTaskSpec() {
+  const kind = S.task && S.task.kind;
+  if (kind === 'motion') return { kind: 'motion', clip: S.motionClip };
+  if (kind === 'recovery') return { kind: 'recovery', mode: S.task.mode || scenarioOf(S.robotId) };
+  return { kind: 'speed' };
+}
+
+/** Umgebungseinstellungen (KI-Patches etc.) an die Worker durchreichen. */
+function parallelEnvCfg() {
+  const cfg = S.sim ? S.sim.cfg : null;
+  if (!cfg) return null;
+  const env = {};
+  if (cfg.rW) env.rW = { ...cfg.rW };
+  if (cfg.done) env.done = { ...cfg.done };
+  if (cfg.cmd) env.cmd = JSON.parse(JSON.stringify(cfg.cmd));
+  if (cfg.actSpan !== undefined) env.actSpan = cfg.actSpan;
+  if (S.task && S.task.kind === 'motion') env.motionR = { ...MOTION_R };
+  if (S.task && S.task.kind === 'recovery') env.recoveryR = { ...RECOVERY_R };
+  env.fallMode = S.fallMode;
+  return env;
+}
+
+/** Merge-Ergebnis einer Worker-Runde → UI/Statistik. */
+function onParallelSegment(info) {
+  S.episodes += info.episodes;
+  for (const r of info.epRewards) ui.pushEpisodeReward(r);
+  if (info.round <= 3 || info.round % 10 === 0) {
+    const mm = info.metrics || {};
+    log(`PPO-Runde ${info.round}: ${info.steps} Schritte aus ${S.parallel ? S.parallel.n : '?'} Workern gemischt · clipFrac ${(100 * (mm.clipFrac || 0)).toFixed(0)}% · ${Math.round(info.rate)} Schritte/s`, 'ok');
+  }
+  // Plugin wurde während des Paralleltrainings aktiviert? → sauber zurück
+  // auf Inline (Plugins greifen nur im Haupt-Thread-Rollout).
+  if (S.parallel && pluginsActive()) {
+    log('Plugin aktiviert — Paralleltraining endet, Training läuft inline weiter (Plugins wirken nur dort)', 'warn');
+    ui.toast('Plugin aktiv — Training läuft inline');
+    S.parallel.stop();
+    S.parallel = null;
+    return;
+  }
+  if (S.parallel) S.parallel.envCfg = parallelEnvCfg(); // KI-Patches live durchreichen
+}
+
 function startTraining() {
   if (!S.sim || !S.task) return;
   if (!S.trainer) {
     S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
     log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
+  }
+  // v2.10.0: Tempo „MAX“ = PARALLELES TRAINING — mehrere MuJoCo-WASM-
+  // Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro
+  // Runde für das gemeinsame PPO-Update gemischt. Voraussetzungen: kein
+  // Plugin aktiv (Plugins wirken nur im Haupt-Thread-Rollout) und
+  // Worker-Support. Sonst: Inline-Training wie bisher.
+  if (S.speedMode === 'max' && !S.parallel && !pluginsActive()) {
+    try {
+      const par = new ParallelTrainer({
+        getPPO: () => S.trainer,
+        onSegment: onParallelSegment,
+        log,
+      });
+      par.envCfg = parallelEnvCfg();
+      S.parallel = par;
+      const n = suggestWorkerCount();
+      par.start({
+        robotId: S.robotId,
+        taskSpec: workerTaskSpec(),
+        worldXml: buildWorldXML(S.sim.cfg, S.world.id, S.world.seed),
+        hyper: { T: Math.round(Math.min(2048, Math.max(128, S.trainer.h.T || 512))) },
+        seed: 1337 + ROBOT_ORDER.indexOf(S.robotId),
+        n,
+      }).then((ready) => {
+        if (!S.training || S.parallel !== par) { par.stop(); return; }
+        log(`Training läuft PARALLEL auf ${ready} MuJoCo-Workern + PPO-Merge im Haupt-Thread`, 'ok');
+      }).catch((err) => {
+        log('Paralleltraining nicht verfügbar (' + err.message + ') — Inline-Training im Haupt-Thread', 'warn');
+        if (S.parallel === par) S.parallel = null;
+      });
+    } catch (e) {
+      log('Paralleltraining nicht verfügbar (' + e.message + ') — Inline-Training', 'warn');
+      S.parallel = null;
+    }
+  } else if (S.speedMode === 'max' && pluginsActive()) {
+    log('Tempo MAX mit aktivem Plugin: Training läuft inline (Plugins wirken nur im Haupt-Thread-Rollout)', 'warn');
   }
   S.task.reset(S.trainer.rng, S.sim);
   pluginHost.fireReset();
@@ -1001,6 +1086,7 @@ function startTraining() {
 function stopTraining(silent = false) {
   if (!S.training) return;
   S.training = false;
+  if (S.parallel) { S.parallel.stop(); S.parallel = null; }
   const b = ui.$('tStart');
   b.textContent = 'Training starten';
   b.classList.remove('btn-stop');
@@ -1273,22 +1359,31 @@ function loop(now) {
   if (controls.consumeReset()) resetRobot();
 
   if (S.training) {
-    // Trainingsbetrieb: Zeitbudget pro Frame
-    const budget = S.speedMode === 'max' ? 12e3 : 0; // µs
-    const t0 = performance.now();
-    const nSteps = S.speedMode === 'max' ? 1e9 : (S.speedMode === '16' ? 16 : S.speedMode === '4' ? 4 : 1);
-    let done = 0;
-    while (done < nSteps) {
-      trainCtrlStep();
-      done++;
-      if (budget && performance.now() - t0 > budget) break;
+    if (S.parallel && S.parallel.active) {
+      // v2.10.0 PARALLEL: Worker rollen selbstständig; hier nur Takt/Anzeige.
+      S.stepsPerSec = S.parallel.rate;
+    } else if (S.parallel && S.parallel.starting) {
+      // Worker booten (WASM-Kompilierung) — Inline-Training anhalten,
+      // damit die Kerne für den Boot frei sind (sonst Timeout-Gefahr).
+      S.stepsPerSec = 0;
+    } else {
+      // Inline (Fallback / Tempo 1×–16×): Zeitbudget pro Frame
+      const budget = S.speedMode === 'max' ? 12e3 : 0; // µs
+      const t0 = performance.now();
+      const nSteps = S.speedMode === 'max' ? 1e9 : (S.speedMode === '16' ? 16 : S.speedMode === '4' ? 4 : 1);
+      let done = 0;
+      while (done < nSteps) {
+        trainCtrlStep();
+        done++;
+        if (budget && performance.now() - t0 > budget) break;
+      }
+      const el = performance.now() - t0;
+      S._stepTimes.push({ n: done, ms: el });
+      if (S._stepTimes.length > 30) S._stepTimes.shift();
+      let sn = 0, sm = 0;
+      for (const s of S._stepTimes) { sn += s.n; sm += s.ms; }
+      S.stepsPerSec = sm > 0 ? (sn / sm) * 1000 : 0;
     }
-    const el = performance.now() - t0;
-    S._stepTimes.push({ n: done, ms: el });
-    if (S._stepTimes.length > 30) S._stepTimes.shift();
-    let sn = 0, sm = 0;
-    for (const s of S._stepTimes) { sn += s.n; sm += s.ms; }
-    S.stepsPerSec = sm > 0 ? (sn / sm) * 1000 : 0;
   } else {
     // Echtzeit: MANUELL oder POLICY
     const cdt = S.sim.cfg.ctrlDt || CTRL_DT;
@@ -1932,6 +2027,7 @@ Object.defineProperty(window, '__trainrobot', {
     get ppoOverrides() { return PPO_OVERRIDES; },
     get aiBusy() { return S.aiBusy; },
     get pushStrength() { return S.pushStrength; },
+    get parallel() { return S.parallel; },
     get joyMap() { return controls.joyMap; },
     get aiButtons() { return S.aiButtons; },
     get cruise() { return S.cruise; },

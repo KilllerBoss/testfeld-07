@@ -185,7 +185,8 @@ function makeWaddle(cfg) {
 }
 
 // ── Trainingsaufgabe: Geschwindigkeits-Tracking (Laufroboter) ──
-function makeTrackTask(cfg) {
+// export: auch im Sim-Worker (parallel.js) im Einsatz — derselbe Code.
+export function makeTrackTask(cfg) {
   const J = cfg.jointResidual;
   // v2.7.0 Sensorblock: gyro(3) + projizierte Gravitation(3) + Höhe(1)
   // + Fußkontakte(F) + Phasen-Uhr(2) — „voller Roboter“-Wahrnehmung

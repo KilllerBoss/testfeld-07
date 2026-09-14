@@ -180,7 +180,7 @@
       <div id="glbList" class="glb-list"></div>
       <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Buttons“ = Joystick PLUS eigene Aktionstasten (z. B. Kicken, Springen): im Training feuern sie zufällig, im POLICY-Modus löst eine Taste die Aktion aus — die Tastenleiste erscheint unten. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
     </div>
-    <div id="trainNote" class="train-note">PPO · 64×64 MLP · CPU only · keine GPU nötig</div>
+    <div id="trainNote" class="train-note">Tempo „MAX“ = PARALLEL: mehrere MuJoCo-WASM-Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro Runde für das gemeinsame PPO-Update gemischt — deutlich mehr Schritte/s. Plugins laufen inline. PPO · 64×64 MLP · CPU only</div>
   </section>
 
   <!-- KI-Trainer (Gemini) -->
