@@ -78,6 +78,9 @@
   <!-- Clip-Aktions-Buttons (v2.6.0: unten statt oben) -->
   <div id="clipButtons" class="clip-buttons hidden"></div>
 
+  <!-- Plugin-Chips (v2.7.0: Buttons aus KI-geschriebenen Mods, ganz unten) -->
+  <div id="pluginChips" class="ai-buttons plugin-chips hidden"></div>
+
   <!-- KI-Button-Leiste (von der KI eingerichtete Aktionen, v2.6.0 unten) -->
   <div id="aiButtons" class="ai-buttons hidden"></div>
 
@@ -140,6 +143,18 @@
       <input type="file" id="importFile" accept=".json,application/json" class="hidden">
     </div>
 
+    <div class="train-actions" id="scnRow">
+      <span class="glb-ctrl-label">Aufgabe</span>
+      <button class="speed-chip scn-chip active" data-scn="gehen">Gehen</button>
+      <button class="speed-chip scn-chip" data-scn="getup">Aufstehen</button>
+      <button class="speed-chip scn-chip" data-scn="drop">Abwurf</button>
+    </div>
+    <div class="train-actions" id="fallRow">
+      <span class="glb-ctrl-label">Bei Sturz</span>
+      <button class="speed-chip fall-chip active" data-fall="reset">Auto-Reset</button>
+      <button class="speed-chip fall-chip" data-fall="stay">Liegen lassen</button>
+    </div>
+
     <div id="glbSection" class="glb-section hidden">
       <div class="glb-head">
         <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · HUMANOID (G1)</span>
@@ -182,7 +197,9 @@
     <div class="ai-suggest">
       <button class="ai-sug" data-q="Mein Roboter soll schneller laufen lernen">Schneller laufen</button>
       <button class="ai-sug" data-q="Füge einen Button hinzu, der den Roboter nach vorn schubst">Schubs-Button</button>
-      <button class="ai-sug" data-q="Mach den Joystick sanfter und füge einen Autopilot-Button hinzu, der 10 Sekunden geradeaus fährt">Joystick + Autopilot</button>
+      <button class="ai-sug" data-q="Wechsle zur Aufgabe Aufstehen und erhöhe die Belohnung für Aufrechtsein">Aufstehen lernen</button>
+      <button class="ai-sug" data-q="Schreibe ein Plugin, das den Roboter alle 10 Sekunden zufällig schubst">Plugin: Auto-Schubser</button>
+      <button class="ai-sug" data-q="Schreibe ein Plugin mit einem Button ABWURF, der den Roboter von oben in die Luft wirft">Plugin: Abwurf</button>
     </div>
     <div class="ai-inputrow">
       <input id="aiInput" type="text" placeholder="Was soll dein Roboter lernen?" autocomplete="off" enterkeyhint="send">
@@ -200,6 +217,15 @@
         <button class="speed-chip aimode" data-aimode="smart">SMART</button>
       </div>
       <span class="ai-note">Gemini · zum Anwenden Taste je Antwort</span>
+    </div>
+
+    <!-- WERKSTATT (v2.7.0): KI-geschriebene Mods/Plugins -->
+    <div class="plg-section">
+      <div class="glb-head">
+        <span class="sheet-title" style="font-size:11px">WERKSTATT · PLUGINS — KI-CODE MIT ROHEM ZUGRIFF</span>
+      </div>
+      <div id="plgList" class="glb-list plg-list"></div>
+      <div class="train-note">Die KI kann eigene Mods SCHREIBEN (writePlugin) oder live Code ausführen (runCode) — mit vollem Zugriff auf die Simulation: Teleport, Physik-Hooks, eigene Belohnungen, eigene Buttons. Plugins bleiben gespeichert und starten mit der App. ★ = mitgelieferte Beispiele. Plugin-Buttons erscheinen unten in der Leiste.</div>
     </div>
   </section>
 

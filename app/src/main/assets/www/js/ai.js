@@ -162,7 +162,32 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
    {type:"macro", steps:[Aktion oder {waitMs:50…5000}, max 6]} — Abfolge
 3. tool="removeButton" — args = {id:"…"} (IDs stehen im observe-Ergebnis).
 4. tool="mapJoystick" — Joystick-Belegung ändern. args = {maxV:0.1…3, maxW:0.1…4, invertX:<bool>, invertY:<bool>, deadzone:0…0.5, expo:0…1} (maxV/maxW = Tempofaktor, expo = Kurvenform: 0=linear, 1=feines Zentrum).
-5. tool="observe" — Zustand abfragen: Roboter, Modus, Tempo, Höhe, Training, gepseicherte Buttons (mit IDs), importierte Clips.
+5. tool="observe" — Zustand abfragen: Roboter, Modus, Tempo, Höhe, Training, Aufgabe (Szenario), Sturz-Verhalten, gespeicherte Buttons (mit IDs), importierte Clips, installierte Plugins.
+6. tool="setScenario" — Trainingsaufgabe wechseln. args = {scenario:"gehen"|"getup"|"drop"}:
+   "gehen" = Tempo-Tracking (Laufen lernen), "getup" = AUFSTEHEN (Roboter startet liegend — Rücken/Bauch/Seite — und lernt aufzustehen), "drop" = ABWURF (Roboter startet 0,9–2 m über dem Boden und lernt zu LANDEN und zu stehen). Nur für Laufroboter (nicht Drohne).
+7. tool="setFallMode" — Verhalten bei Sturz außerhalb des Trainings. args = {mode:"reset"|"stay"}: "reset" = Auto-Teleport zum Start (bisheriges Verhalten, schnell beim Üben), "stay" = Roboter BLEIBT LIEGEN (kein Teleport mehr — gut zum Aufstehen-Üben; der Reset-Button setzt trotzdem zurück).
+8. tool="runCode" — ROHER ZUGRIFF: eigenen JS-Code SOFORT ausführen. args = {code}. Der Code läuft als Funktion(api) und kann alles aus der PLUGIN-API unten nutzen. Rückgabewert (return) wird dir als TOOL-ERGEBNIS gemeldet — ideal für schnelle Experimente, Abfragen, Einmal-Aktionen.
+9. tool="writePlugin" — eigenen MOD/PLUGIN SCHREIBEN und dauerhaft installieren. args = {name:"≤32 Zeichen", desc:"≤200 Zeichen", code:"…"}. Der Code wird geprüft (Syntax) und sofort aktiviert; bleibt gespeichert und startet künftig mit der App. Bei Syntax-/Laufzeit-Fehlern bekommst du die Meldung als TOOL-ERGEBNIS und kannst writePlugin mit korrigiertem Code erneut aufrufen.
+
+PLUGIN-API (das Objekt „api" in runCode/writePlugin):
+- api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
+- api.state() → Status-Objekt (Roboter, Modus, Höhe, Tempo, Clips, Buttons …)
+- api.sim() → MuJoCo-Simulation ODER null (ROH: .data.qpos/.data.qvel/.ctrl Views, .stepN(n), .reset(), .placeBaseFull(x,y,z,qw,qx,qy,qz), .basePos(out), .baseQuat(out), .pushImpulse(fx,fy,fz), .keyCtrl, .nu, .actByName …). Vorsicht: nur VOR/NACH stepN manipulieren, nicht mitten in Physik-Substeps.
+- api.task() → aktive Trainingsaufgabe (kind: 'motion'|'recovery'|'speed'|'hover', bei recovery: mode 'getup'/'drop')
+- api.teleport(x,y,z, qw=1,qx=0,qy=0,qz=0) — Basis versetzen (Quaternion w,x,y,z; Geschwindigkeiten werden nullisiert) → z. B. in die Luft werfen
+- api.push(stärke 0.5…10) — zufällige Schubse (Δv in m/s)
+- api.reset() — Roboter zurücksetzen
+- api.executeAction(aktion) — {type:"reset"|"push"|"cmd"|"mode"|"clip"|"macro", …}
+- api.setConfig(patch, trainingZurücksetzen) — Belohnungen/PPO ändern (gleiche Felder wie „patch")
+- api.onStep(fn(dt)) — je Regelzyklus im Echtzeitbetrieb (MANUELL/POLICY; im Schnelltraining NICHT gefeuert)
+- api.onFrame(fn(dt)) — je Bild (immer, auch im Training)
+- api.onReset(fn()) — nach Roboter-Reset
+- api.onAct(fn(sim, ctrl)) — NACH Aktions→ctrl, VOR Physikschritt (ctrl überschreibbar = steuert den Roboter komplett um)
+- api.onReward(fn(info)) — im TRAINING nach Aufgaben-Belohnung; info={r, done, upz, height, task, sim}; Rückgabe: Zahl (Bonus) oder {bonus, done} → Belohnungen formen (z. B. Bonus für Höhe, done bei eigener Bedingung)
+- api.ui.addChip({label, onClick}) → {remove()} — eigener Button unten in der Leiste
+- api.addButton({label, action}) / api.removeButton(id) — persistente KI-Buttons
+- api.storage.get(key, standard) / api.storage.set(key, wert) — plugin-eigener Speicher (JSON, überlebt Neustart)
+Jede Hook-Registrierung gibt eine Abmelde-Funktion zurück. Ein Fehler in einem Hook deaktiviert das Plugin automatisch + Meldung.
 
 BEDEUTUNG DER KONFIG-FELDER
 - rW.vel: Bestrafung des Geschwindigkeitsfehlers |v_fahrt − v_soll|. Höher = Policy hält Tempo genauer (zu hoch = zögerlich).
@@ -177,11 +202,17 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|runCode|writePlugin   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
 }
+
+WANN WAS?
+- Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
+- Neue dauerhafte Fähigkeiten, eigene Belohnungslogik, neue Buttons mit Speziallogik, Welt-Interaktion → writePlugin (MOD).
+- Kurze Fragen an die Simulation, Tests, Einmal-Aktionen (z. B. „wirf ihn einmal hoch") → runCode.
+- Baue Plugins KLEIN und robust: selbständiger Code, keine Endlosschleifen, keine Netzwerkaufrufe, sauber auf api.* stützen, max ~120 Zeilen. Nutze api.storage für Zustand. Denke an api.sim() === null (Roboter lädt noch).
 
 REGELN
 - Will der Nutzer einen Button, eine Joystick-Änderung, eine Aktion oder einen Zustandsbericht → nutze WERKZEUGE (mehrere Schritte erlaubt).
@@ -248,7 +279,7 @@ export function validatePatch(raw) {
 }
 
 // ── Tool-Aufruf validieren (Agent-Vollzugriff, hart geklemmt) ─
-const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe'];
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin'];
 export function validateToolCall(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const tool = typeof parsed.tool === 'string' ? parsed.tool.trim() : '';
@@ -267,6 +298,22 @@ export function validateToolCall(parsed) {
     return { tool, args: { id: typeof args.id === 'string' ? args.id : '' } };
   }
   if (tool === 'mapJoystick') return { tool, args };
+  if (tool === 'setScenario') {
+    return { tool, args: { scenario: ['gehen', 'getup', 'drop'].includes(args.scenario) ? args.scenario : null } };
+  }
+  if (tool === 'setFallMode') {
+    return { tool, args: { mode: ['reset', 'stay'].includes(args.mode) ? args.mode : null } };
+  }
+  if (tool === 'runCode') {
+    return { tool, args: { code: typeof args.code === 'string' ? args.code : '' } };
+  }
+  if (tool === 'writePlugin') {
+    return { tool, args: {
+      name: typeof args.name === 'string' ? args.name.trim().slice(0, 32) : '',
+      desc: typeof args.desc === 'string' ? args.desc.trim().slice(0, 200) : '',
+      code: typeof args.code === 'string' ? args.code : '',
+    } };
+  }
   return { tool, args: {} }; // observe
 }
 
@@ -291,7 +338,7 @@ export async function askAI({ text, mode = 'fast', ctx }) {
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: sys }] },
     contents,
-    generationConfig: { temperature: 0.4, maxOutputTokens: 2048, responseMimeType: 'application/json' },
+    generationConfig: { temperature: 0.4, maxOutputTokens: 4096, responseMimeType: 'application/json' },
   });
   const { code, body: resp } = await _http(url, 'POST', body);
   if (code !== 200) throw new Error(_errText(code, resp));

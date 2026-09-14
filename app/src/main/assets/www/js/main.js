@@ -15,12 +15,14 @@ import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
 import { retargetToG1, RT_ALG } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
+import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
+import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.7.0';
+const VERSION = '2.8.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 const ui = new UI();
@@ -57,7 +59,18 @@ const S = {
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
   world: loadWorldState(), // v2.7.0: aktuelle Welt {id, seed} — prozedural generiert
+  // v2.8.0 — VOLLSTÄNDIGER ROBOTER: Szenarien (Aufstehen/Abwurf/Gehen),
+  // Sturz-Verhalten (Auto-Reset vs. Liegen lassen) und Plugin-Werkstatt.
+  scenario: {},      // je Roboter: 'gehen' | 'getup' | 'drop' (GLB-Clip zählt als eigene Aufgabe)
+  fallMode: 'reset', // 'reset' = Auto-Teleport bei Sturz, 'stay' = Roboter bleibt liegen
 };
+
+// Persistierte Szenario-/Sturz-Wahl laden (v2.8.0)
+try {
+  const sc = JSON.parse(localStorage.getItem('tr_scenario_v1') || '{}');
+  if (sc && typeof sc === 'object') S.scenario = sc;
+} catch (e) { /* defekt → Standard */ }
+S.fallMode = localStorage.getItem('tr_fallMode') === 'stay' ? 'stay' : 'reset';
 
 // v2.7.0 — Welt-Auswahl (persistiert): Preset-Welten + Zufallsgenerator
 function loadWorldState() {
@@ -112,8 +125,9 @@ async function loadRobot(id, first = false) {
     // Gang-/Flugregler
     S.gait = cfg.gait(cfg);
     if (cfg.drone && S.gait.init) { S.gait.init(sim); sim.flightCtl = S.gait; }
-    // Trainingsaufgabe: GLB-Motion-Tracking (nur G1 mit aktivem Clip) sonst Geschwindigkeit
-    if (id === 'g1' && S.motionClip) {
+    // Trainingsaufgabe (v2.8.0): GLB-Tracking → Recovery-Szenario → Standard
+    S.task = makeTaskFor(id, cfg, sim);
+    if (S.task.kind === 'motion') {
       S.task = makeMotionTask(cfg, S.motionClip, sim);
       S.task.animOn = S.animTraining;
       // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0, 'btn' v2.6.0)
@@ -123,8 +137,6 @@ async function loadRobot(id, first = false) {
       syncCtrlChips();
       syncBtnRow();
       renderClipButtons();
-    } else {
-      S.task = cfg.task(cfg);
     }
     S.task.reset(new RNG(4242), sim);
     S.obsBuf = new Float32Array(S.task.obsDim);
@@ -156,6 +168,7 @@ async function loadRobot(id, first = false) {
     ui.setRobotActive(id);
     ui.setRobotTitle(cfg);
     ui.setDroneMode(!!cfg.drone);
+    syncScenarioChips();
     ui.policyAvailable(!!S.trainer);
     ui.setMode(S.mode);
     if (S.mode === 'policy' && !S.trainer) { S.mode = 'manuell'; ui.setMode(S.mode); }
@@ -188,6 +201,10 @@ function countMeshes(sim) {
 function policyKey(id) {
   if (S.task && S.task.kind === 'motion') {
     return 'tr_policy_' + id + '_motion_' + (S.activeRecId || 'none');
+  }
+  // v2.8.0: Recovery-Szenarien (Aufstehen/Abwurf) haben EIGENE Policy-Slots.
+  if (S.task && S.task.kind === 'recovery') {
+    return 'tr_policy_' + id + '_recovery_' + S.task.mode;
   }
   return 'tr_policy_' + id + '_speed';
 }
@@ -231,8 +248,71 @@ function savePolicy(id, opts = {}) {
 // die KI liefert einen validierten Patch auf die Trainingskonfiguration.
 const DEFAULT_PPO = { T: 1024, gamma: 0.99, lam: 0.95, clip: 0.2, epochs: 4, mb: 256, lr: 3e-4, cV: 0.5, cE: 0.005, maxGrad: 0.5 };
 
+// ── Szenarien (v2.8.0): Gehen / Aufstehen / Abwurf ──────────
+function scenarioOf(id) { return S.scenario[id] || 'gehen'; }
+
+/** Aufgabenauswahl: GLB-Tracking (G1+Clip) → Recovery-Szenario → Standard. */
+function makeTaskFor(id, cfg, sim) {
+  if (id === 'g1' && S.motionClip) return makeMotionTask(cfg, S.motionClip, sim);
+  const scn = scenarioOf(id);
+  if (!cfg.drone && (scn === 'getup' || scn === 'drop')) return makeRecoveryTask(cfg, scn);
+  return cfg.task(cfg);
+}
+
+/** Szenario wechseln (Chips „Aufgabe" im Trainings-Panel). */
+function switchScenario(scn) {
+  if (!['gehen', 'getup', 'drop'].includes(scn)) return;
+  if (!S.sim || S.switching) return;
+  if (S.sim.cfg.drone) { ui.toast('Für die Drohne nicht verfügbar', true); return; }
+  stopTraining(true);
+  if (scn !== 'gehen' && S.motionClip) {
+    deactivateClip();
+    log('GLB-Referenz deaktiviert — Aufgabe wechselt zu „' + scn + '"');
+  }
+  S.scenario[S.robotId] = scn;
+  try { localStorage.setItem('tr_scenario_v1', JSON.stringify(S.scenario)); } catch (e) { /* voll */ }
+  const cfg = S.sim.cfg;
+  S.task = makeTaskFor(S.robotId, cfg, S.sim);
+  S.task.reset(new RNG(4242), S.sim);
+  S.obsBuf = new Float32Array(S.task.obsDim);
+  S.actBuf = new Float32Array(S.task.actDim);
+  S.trainer = loadPolicy(S.robotId);
+  ui.policyAvailable(!!S.trainer);
+  if (S.mode === 'policy' && !S.trainer) { S.mode = 'manuell'; ui.setMode(S.mode); }
+  syncScenarioChips();
+  const label = scn === 'getup'
+    ? 'AUFSTEHEN — der Roboter startet liegend (Rücken/Bauch/Seite) und lernt, selbst aufzustehen'
+    : scn === 'drop'
+      ? 'ABWURF — der Roboter startet 0,9–2 m über dem Boden und lernt, richtig zu landen und zu stehen'
+      : 'GEHEN — Tempo-Tracking (Laufen lernen)';
+  log('Aufgabe: ' + label, 'ok');
+  ui.toast('Aufgabe: ' + (scn === 'getup' ? 'Aufstehen' : scn === 'drop' ? 'Abwurf' : 'Gehen'));
+}
+
+/** Sturz-Verhalten: 'reset' = Teleport (alt), 'stay' = Roboter bleibt liegen. */
+function setFallMode(mode) {
+  if (mode !== 'reset' && mode !== 'stay') return;
+  S.fallMode = mode;
+  try { localStorage.setItem('tr_fallMode', mode); } catch (e) { /* voll */ }
+  syncScenarioChips();
+  log(mode === 'stay'
+    ? 'Sturz-Verhalten: LIEGEN LASSEN — kein Auto-Teleport mehr; der Roboter bleibt liegen (Aufstehen üben; Reset-Button setzt trotzdem zurück)'
+    : 'Sturz-Verhalten: AUTO-RESET — bei Sturz zurück zum Start (bisheriges Verhalten)', 'warn');
+  ui.toast(mode === 'stay' ? 'Sturz: liegen lassen' : 'Sturz: Auto-Reset');
+}
+
+function syncScenarioChips() {
+  const drone = S.sim && S.sim.cfg.drone;
+  const row = document.getElementById('scnRow');
+  if (row) row.classList.toggle('hidden', !!drone);
+  const scn = scenarioOf(S.robotId);
+  for (const x of document.querySelectorAll('.scn-chip')) x.classList.toggle('active', x.dataset.scn === scn);
+  for (const x of document.querySelectorAll('.fall-chip')) x.classList.toggle('active', x.dataset.fall === S.fallMode);
+}
+
 function aiTaskKind() {
   if (S.task && S.task.kind === 'motion') return 'motion';
+  if (S.task && S.task.kind === 'recovery') return 'recovery:' + S.task.mode;
   if (S.sim && S.sim.cfg && S.sim.cfg.drone) return 'hover';
   return 'speed';
 }
@@ -444,6 +524,115 @@ async function setWorld(id, seed) {
   ui.toast('Welt: ' + w.name + (id === 'zufall' ? ' · Seed ' + S.world.seed : ''));
 }
 
+// ── WERKSTATT (v2.8.0): Plugin-Host — roher KI-Zugriff ──────
+// Plugins = JS-Code von Gemini (writePlugin) oder Beispiele (★). Sie
+// laufen mit dem api-Objekt unten: volle Sim-Zugriffe, Teleport, Hooks,
+// eigene Chips, eigener Speicher. Fehler → Plugin aus + Meldung.
+const pluginHost = new PluginHost();
+pluginHost.onError = (id, name, err) => {
+  log('Plugin-Fehler — „' + name + '” deaktiviert: ' + (err && err.message ? err.message : err), 'err');
+  ui.toast('Plugin-Fehler: ' + name, true);
+  renderPluginList();
+};
+
+/** API-Objekt je Plugin (roher Zugriff, gekapselte Speicher-Namensräume). */
+function pluginApiFor(rec) {
+  const _safe = (fn, dflt) => { try { return fn(); } catch (e) { log('[Plugin ' + rec.name + '] ' + (e && e.message ? e.message : e), 'err'); return dflt; } };
+  return {
+    log: (m) => log('[Plugin ' + rec.name + '] ' + String(m).slice(0, 200)),
+    toast: (m, isErr) => ui.toast(String(m).slice(0, 80), !!isErr),
+    state: () => _safe(() => JSON.parse(observeState()), null),
+    sim: () => S.sim,
+    task: () => S.task,
+    robot: () => S.robotId,
+    mode: () => S.mode,
+    training: () => S.training,
+    teleport: (x, y, z, qw = 1, qx = 0, qy = 0, qz = 0) => {
+      if (!S.sim) return false;
+      S.sim.placeBaseFull(+x, +y, +z, +qw, +qx, +qy, +qz);
+      return true;
+    },
+    push: (strength) => doPush('auto', strength != null ? +strength : null),
+    reset: () => { resetRobot(); return true; },
+    executeAction: (a) => executeAction(a),
+    setConfig: (patch, resetTraining) => {
+      const v = validatePatch(patch);
+      return applyAIPatch(v, { resetTraining: !!resetTraining }) ? 'ok' : 'patch war leer';
+    },
+    onStep: (f) => { if (typeof f === 'function') { pluginHost.hooks(rec.id).step.push(f); return () => { const a = pluginHost.hooks(rec.id).step; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); }; } return () => {}; },
+    onFrame: (f) => { if (typeof f === 'function') { pluginHost.hooks(rec.id).frame.push(f); return () => { const a = pluginHost.hooks(rec.id).frame; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); }; } return () => {}; },
+    onReset: (f) => { if (typeof f === 'function') { pluginHost.hooks(rec.id).reset.push(f); return () => { const a = pluginHost.hooks(rec.id).reset; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); }; } return () => {}; },
+    onAct: (f) => { if (typeof f === 'function') { pluginHost.hooks(rec.id).act.push(f); return () => { const a = pluginHost.hooks(rec.id).act; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); }; } return () => {}; },
+    onReward: (f) => { if (typeof f === 'function') { pluginHost.hooks(rec.id).reward.push(f); return () => { const a = pluginHost.hooks(rec.id).reward; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); }; } return () => {}; },
+    ui: {
+      addChip: ({ label, onClick }) => {
+        const bar = document.getElementById('pluginChips');
+        if (!bar || typeof onClick !== 'function') return { remove: () => {} };
+        const btn = document.createElement('button');
+        btn.className = 'ai-btn';
+        btn.textContent = String(label || 'Plugin').slice(0, 16);
+        btn.addEventListener('click', () => { controls.buzz(); _safe(() => onClick(), null); });
+        bar.appendChild(btn);
+        bar.classList.remove('hidden');
+        return {
+          remove: () => {
+            btn.remove();
+            if (!bar.childElementCount) bar.classList.add('hidden');
+          },
+        };
+      },
+    },
+    storage: {
+      get: (k, dflt) => {
+        try { const v = localStorage.getItem('tr_plg_' + rec.id + '_' + k); return v === null ? dflt : JSON.parse(v); } catch (e) { return dflt; }
+      },
+      set: (k, v) => {
+        try { localStorage.setItem('tr_plg_' + rec.id + '_' + k, JSON.stringify(v)); return true; } catch (e) { return false; }
+      },
+    },
+  };
+}
+
+function renderPluginList() {
+  const list = document.getElementById('plgList');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const p of pluginHost.list) {
+    const row = document.createElement('div');
+    // EIGENE Klasse (nicht .glb-clip!) — GLB-Selektoren dürfen Plugin-Zeilen
+    // nie matchen (Regression: v260-Test klickte sonst den Plugin-Toggle)
+    row.className = 'plugin-row' + (p.enabled ? ' active' : '');
+    const name = document.createElement('span');
+    name.className = 'glb-clip-name';
+    name.textContent = p.name + (p.builtin ? ' ★' : '');
+    const desc = document.createElement('span');
+    desc.className = 'plg-desc';
+    desc.textContent = p.desc || '';
+    const tog = document.createElement('button');
+    tog.className = 'btn small';
+    tog.textContent = p.enabled ? 'An' : 'Aus';
+    tog.addEventListener('click', () => {
+      controls.buzz();
+      const r = pluginHost.enable(p.id, !p.enabled);
+      if (!r.ok) { ui.toast('Plugin-Fehler: ' + r.error, true, 4000); log('Plugin „' + p.name + '” Fehler: ' + r.error, 'err'); }
+      else ui.toast('Plugin „' + p.name + '” ' + (p.enabled ? 'aktiv' : 'aus'));
+      renderPluginList();
+    });
+    const del = document.createElement('button');
+    del.className = 'btn small';
+    del.textContent = '×';
+    del.title = 'Plugin löschen';
+    del.addEventListener('click', () => {
+      pluginHost.remove(p.id);
+      renderPluginList();
+      ui.toast('Plugin „' + p.name + '” entfernt');
+      controls.buzz(24);
+    });
+    row.append(name, desc, tog, del);
+    list.appendChild(row);
+  }
+}
+
 function observeState() {
   const sim = S.sim;
   let up = null;
@@ -470,6 +659,10 @@ function observeState() {
     pushStrength: S.pushStrength,
     world: S.world,
     sensors: 'Gyro, projizierte Gravitation, Basis-Höhe, Fußkontakte, Phasen-Takt in der Beobachtung (v2.7.0)',
+    scenario: scenarioOf(S.robotId),
+    taskKind: aiTaskKind(),
+    fallMode: S.fallMode,
+    plugins: pluginHost.list.filter(p => p.enabled).map(p => p.name),
     joystick: controls.joyMap,
     buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
   });
@@ -546,6 +739,38 @@ function execTool(tool, args) {
       controls.joyMap = validateJoyMap(args);
       saveJoyMap(controls.joyMap);
       return 'Joystick-Map gesetzt: ' + JSON.stringify(controls.joyMap);
+    }
+    if (tool === 'setScenario') {
+      if (!args.scenario) return 'Ungültiges Szenario — erlaubt: "gehen", "getup", "drop"';
+      if (S.sim && S.sim.cfg.drone) return 'Für die Drohne nicht verfügbar (nur Laufroboter)';
+      switchScenario(args.scenario);
+      return 'Aufgabe: ' + args.scenario + (S.task ? ' (aktiv: ' + S.task.kind + (S.task.mode ? '/' + S.task.mode : '') + ', obsDim ' + S.task.obsDim + ')' : '') + ' — alte Policies dieser Art bleiben erhalten, ggf. neu trainieren.';
+    }
+    if (tool === 'setFallMode') {
+      if (!args.mode) return 'Ungültiger Modus — erlaubt: "reset", "stay"';
+      setFallMode(args.mode);
+      return 'Sturz-Verhalten: ' + args.mode + (args.mode === 'stay' ? ' (Roboter bleibt liegen, kein Teleport)' : ' (Auto-Reset zum Start)');
+    }
+    if (tool === 'runCode') {
+      if (!args.code || !args.code.trim()) return 'Fehler: code ist leer';
+      let fn;
+      try { fn = compilePlugin(args.code); } catch (e) { return 'SYNTAX-FEHLER: ' + e.message; }
+      try {
+        const out = fn(pluginApiFor({ id: 'run', name: 'runCode' }));
+        return 'OK' + (out === undefined ? '' : ': ' + (typeof out === 'object' ? JSON.stringify(out) : String(out)).slice(0, 300));
+      } catch (e) { return 'LAUFZEIT-FEHLER: ' + (e && e.message ? e.message : String(e)); }
+    }
+    if (tool === 'writePlugin') {
+      if (!args.name) return 'Fehler: Name fehlt (args.name)';
+      if (!args.code || !args.code.trim()) return 'Fehler: code ist leer';
+      try { compilePlugin(args.code); } catch (e) { return 'SYNTAX-FEHLER im Plugin-Code: ' + e.message + ' — korrigiere den Code und rufe writePlugin erneut auf.'; }
+      const rec = pluginHost.add({ name: args.name, desc: args.desc, code: args.code, enabled: false });
+      const en = pluginHost.enable(rec.id, true);
+      renderPluginList();
+      if (!en.ok) return 'Plugin „' + rec.name + '” gespeichert, aber LAUFZEIT-FEHLER: ' + en.error + ' — korrigiere den Code und rufe writePlugin erneut auf (das defekte Plugin ist deaktiviert).';
+      log('KI-Plugin installiert + aktiv: ' + rec.name, 'ok');
+      ui.toast('Plugin installiert: ' + rec.name);
+      return 'Plugin „' + rec.name + '” (id=' + rec.id + ') installiert und AKTIV. Verfügbar: onStep/onFrame/onReset/onAct/onReward, ui.addChip, teleport, push, storage, sim(). Es läuft ab jetzt bei jedem App-Start mit.';
     }
     return 'Unbekanntes Werkzeug: ' + tool;
   } catch (e) {
@@ -711,7 +936,8 @@ async function aiOnOpen() {
   const logEl = document.getElementById('aiLog');
   logEl.innerHTML = '';
   for (const m of S.aiHistory.slice(-10)) aiPush(m.role === 'model' ? 'bot' : 'user', m.text);
-  if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. (z. B. „schneller laufen, aber stabil bleiben")');
+  if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. Ich kann auch EIGENE MODS/PLUGINS für die App schreiben (Werkstatt unten) und den Roboter direkt steuern. (z. B. „schreibe ein Plugin, das ihn alle 10 s schubst“)');
+  renderPluginList(); // Werkstatt-Stand auffrischen (v2.8.0)
   updateAIKeyStatus();
   await updateAIModelLabel();
 }
@@ -759,11 +985,15 @@ function startTraining() {
     log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
   }
   S.task.reset(S.trainer.rng, S.sim);
+  pluginHost.fireReset();
   S.training = true;
   S.epReward = 0;
   ui.$('tStart').textContent = 'Training pausieren';
   ui.$('tStart').classList.add('btn-stop');
-  log('Training läuft — rollout + update auf der CPU', 'ok');
+  const tInfo = S.task.kind === 'recovery'
+    ? (S.task.mode === 'getup' ? 'Aufstehen — Start liegend' : 'Abwurf — Start in der Luft')
+    : S.task.kind === 'motion' ? 'GLB-Motion-Tracking' : 'Tempo-Tracking';
+  log('Training läuft (' + tInfo + ') — rollout + update auf der CPU', 'ok');
 }
 
 function stopTraining(silent = false) {
@@ -782,13 +1012,17 @@ function trainCtrlStep() {
   if (task.stepsLeft <= 0) task.sampleCmd(trainer.rng);
 
   const o = task.observe(sim, S.obsBuf);
-  if (!finiteArr(S.obsBuf)) { sim.reset(); task.reset(trainer.rng, sim); return; }
+  if (!finiteArr(S.obsBuf)) { sim.reset(); task.reset(trainer.rng, sim); pluginHost.fireReset(); return; }
   trainer.norm.update(S.obsBuf);
   const { act, logp, value } = trainer.act(S.obsBuf, false);
   task.actionToCtrl(sim, act);
+  pluginHost.fireAct(sim, sim.ctrl); // Plugins dürfen ctrl umschreiben (v2.8.0)
   sim.stepN(substeps);
   if (task.kind === 'motion') task.advance(CTRL_DT);
-  const { r, done } = task.reward(sim);
+  let { r, done } = task.reward(sim);
+  // Reward-Hook (v2.8.0): Plugins formen Belohnungen um (Bonus/done)
+  const rw = pluginHost.fireReward(sim, { r, done, task });
+  r = rw.r; done = rw.done;
   for (let i = 0; i < act.length; i++) task.lastAct[i] = act[i];
   S.epReward += r;
 
@@ -799,6 +1033,7 @@ function trainCtrlStep() {
     S.epReward = 0;
     sim.reset();
     task.reset(trainer.rng, sim);
+    pluginHost.fireReset();
   }
   if (full) {
     const lastObs = task.observe(sim, S.obsBuf);
@@ -853,6 +1088,7 @@ function policyCtrlStep() {
   if (!finiteArr(S.obsBuf)) { sim.reset(); if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0; return; }
   trainer.actDeterministic(S.obsBuf, S.actBuf);
   task.actionToCtrl(sim, S.actBuf);
+  pluginHost.fireAct(sim, sim.ctrl); // v2.8.0
   for (let i = 0; i < S.actBuf.length; i++) task.lastAct[i] = S.actBuf[i];
   sim.stepN(substeps);
   if (task.kind === 'motion') task.advance(CTRL_DT);
@@ -861,17 +1097,23 @@ function policyCtrlStep() {
 function resetRobot() {
   if (!S.sim) return;
   S.sim.reset();
+  pluginHost.fireReset();
   if (S.task && S.task.kind === 'motion') S.task.reset(new RNG(4242), S.sim); // zurück auf den Bahn-Anfang
   if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
   S.epReward = 0;
   log('Roboter zurückgesetzt auf Keyframe „' + S.sim.cfg.keyName + '"');
 }
 
-// Sturz-Erkennung im Echtzeitbetrieb (sanfter Auto-Reset)
+// Sturz-Erkennung im Echtzeitbetrieb (v2.8.0: Verhalten wählbar)
+// 'reset' (alt): Auto-Reset = Teleport zurück zur Keyframe-Pose.
+// 'stay': kein Teleport — der Roboter bleibt liegen (Aufstehen üben).
+// Recovery-Szenarien (getup/drop) haben IMMER kein Auto-Reset — dort ist
+// der Sturz ja der Startzustand bzw. Bestandteil der Aufgabe.
 let lastFallLog = 0;
 function checkFall() {
   const sim = S.sim;
   if (!sim) return;
+  if (S.task && S.task.kind === 'recovery') return; // Sturz gehört zur Aufgabe
   const o = 4 * sim.baseBody;
   const x = sim._xquat[o + 1], y = sim._xquat[o + 2]; // (x,y) der Quaternion [w,x,y,z]
   const upz = 1 - 2 * (x * x + y * y);
@@ -879,6 +1121,14 @@ function checkFall() {
   const limit = sim.cfg.drone ? 0.35 : 0.32;
   const zMin = sim.cfg.drone ? 0.05 : sim.cfg.done.zMin * 0.8;
   if (upz < limit || height < zMin) {
+    if (S.fallMode === 'stay') {
+      const now = performance.now();
+      if (now - lastFallLog > 4000) {
+        log('Sturz — Roboter bleibt liegen („Liegen lassen“): Aufgabe → Aufstehen trainieren oder Reset-Button', 'warn');
+        lastFallLog = now;
+      }
+      return;
+    }
     const now = performance.now();
     if (now - lastFallLog > 2500) {
       log('Sturz erkannt — Auto-Reset', 'warn');
@@ -887,6 +1137,7 @@ function checkFall() {
     sim.reset();
     if (S.gait && S.gait.ph !== undefined) S.gait.ph = 0;
     S.epReward = 0;
+    pluginHost.fireReset();
   }
 }
 
@@ -907,6 +1158,16 @@ async function boot() {
     S.animTraining = localStorage.getItem('tr_animOn') !== '0';
     const animTog = document.getElementById('animTrainToggle');
     if (animTog) animTog.checked = S.animTraining;
+    // Werkstatt (v2.8.0): Beispiele einspeisen, API aufschalten, aktivierte
+    // Plugins starten (Hooks feuern erst mit der Hauptschleife)
+    pluginHost.setApiFactory(pluginApiFor);
+    for (const b of BUILTIN_PLUGINS) pluginHost.addOrReplaceBuiltin(b);
+    for (const p of pluginHost.list) {
+      if (!p.enabled) continue;
+      const r = pluginHost.install(p.id);
+      if (!r.ok) log('Plugin „' + p.name + '” startet nicht: ' + r.error, 'err');
+    }
+    renderPluginList();
     controls.onPush = (dir, strength) => doPush(dir, strength);
     renderAIButtons();
     ui.splash('Prüfe WebAssembly …', 0.08);
@@ -966,6 +1227,7 @@ function loop(now) {
 
   if (!S.sim) return;
   controls.tick(dt, r3d);
+  pluginHost.fireFrame(dt); // Plugin-Hook: je Bild (v2.8.0)
   if (controls.consumeReset()) resetRobot();
 
   if (S.training) {
@@ -1000,6 +1262,7 @@ function loop(now) {
         if (S.task && S.task.kind === 'motion') S.task.advance(cdt);
       }
       checkFall();
+      pluginHost.fireStep(cdt); // Plugin-Hook: je Regelzyklus, Echtzeit (v2.8.0)
     }
     S.stepsPerSec = Math.max(1, Math.round(CTRL_DT)) * 0 + fps * Math.max(1, Math.round(CTRL_DT / S.sim.timestep));
   }
@@ -1133,6 +1396,13 @@ function wireUI() {
     controls.buzz();
     if (S.training) stopTraining(); else startTraining();
   });
+  // ── Szenarien + Sturz-Verhalten (v2.8.0) ────────────────
+  for (const b of document.querySelectorAll('.scn-chip')) {
+    b.addEventListener('click', () => { controls.buzz(); switchScenario(b.dataset.scn); });
+  }
+  for (const b of document.querySelectorAll('.fall-chip')) {
+    b.addEventListener('click', () => { controls.buzz(); setFallMode(b.dataset.fall); });
+  }
   document.getElementById('tReset').addEventListener('click', () => {
     controls.buzz();
     stopTraining(true);
@@ -1583,7 +1853,7 @@ function deactivateClip() {
   r3d.removeSourceGhost();
   if (S.sim) {
     const cfg = S.sim.cfg;
-    S.task = cfg.task(cfg);
+    S.task = makeTaskFor(S.robotId, cfg, S.sim); // v2.8.0: Szenario respektieren
     S.task.reset(new RNG(4242), S.sim);
     S.obsBuf = new Float32Array(S.task.obsDim);
     S.actBuf = new Float32Array(S.task.actDim);
@@ -1618,6 +1888,22 @@ Object.defineProperty(window, '__trainrobot', {
     get switching() { return S.switching; },
     doPush: (dir, strength) => doPush(dir, strength),
     setTrigger: (i) => S.task && S.task.kind === 'motion' ? S.task.setTrigger(i) : false,
+    // v2.8.0: Szenarien, Sturz-Modus, Werkstatt
+    get scenario() { return scenarioOf(S.robotId); },
+    get fallMode() { return S.fallMode; },
+    setScenario: (s) => switchScenario(s),
+    setFallMode: (m) => setFallMode(m),
+    get pluginHost() { return pluginHost; },
+    get plugins() { return pluginHost.list; },
+    installPlugin: (name, code, enabled = true) => {
+      try { compilePlugin(code); } catch (e) { return { ok: false, error: e.message }; }
+      const rec = pluginHost.add({ name, desc: 'Test-Plugin', code, enabled: false });
+      const en = pluginHost.enable(rec.id, !!enabled);
+      renderPluginList();
+      return en.ok ? { ok: true, id: rec.id } : { ok: false, error: en.error };
+    },
+    removePlugin: (id) => { pluginHost.remove(id); renderPluginList(); return true; },
+    pluginChips: () => document.querySelectorAll('#pluginChips .ai-btn').length,
     executeAction: (action) => executeAction(action),
     applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
     ui,

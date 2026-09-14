@@ -445,13 +445,37 @@ export class RobotSim {
    * damit AUF der Referenz-Bahn statt im Ursprung.
    */
   placeBase(x, y, yaw = 0) {
-    const adr = this._baseQposAdr || (this._baseQposAdr = (() => {
-      const m = this.model;
-      return m.jnt_qposadr[m.body_jntadr[this.baseBody]];
-    })());
+    const adr = this._baseQposAdr2 || (this._baseQposAdr2 = this._baseQposAdrOf());
     this._qpos[adr] = x; this._qpos[adr + 1] = y;
     const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
     this._qpos[adr + 3] = cy; this._qpos[adr + 4] = 0; this._qpos[adr + 5] = 0; this._qpos[adr + 6] = sy;
+    this._mjApi.mj_forward(this.model, this.data);
+  }
+
+  _baseQposAdrOf() {
+    const m = this.model;
+    return m.jnt_qposadr[m.body_jntadr[this.baseBody]];
+  }
+  _baseDofAdrOf() {
+    const m = this.model;
+    return m.jnt_dofadr[m.body_jntadr[this.baseBody]];
+  }
+
+  /**
+   * Basis KOMPLETT versetzen (v2.7.0): Position (x, y, z), volle
+   * Orientierung als Quaternion (w, x, y, z — MuJoCo-qpos-Konvention)
+   * und Basis-Geschwindigkeiten auf null. Danach mj_forward.
+   * Grundlage für die Aufstehen-/Abwurf-Szenarien (recoverytask.js) und
+   * für Plugins (api.teleport — „Roboter von oben runter werfen").
+   */
+  placeBaseFull(x, y, z, qw = 1, qx = 0, qy = 0, qz = 0) {
+    const adr = this._baseQposAdr2 || (this._baseQposAdr2 = this._baseQposAdrOf());
+    this._qpos[adr] = x; this._qpos[adr + 1] = y; this._qpos[adr + 2] = z;
+    const n = Math.hypot(qw, qx, qy, qz) || 1;
+    this._qpos[adr + 3] = qw / n; this._qpos[adr + 4] = qx / n;
+    this._qpos[adr + 5] = qy / n; this._qpos[adr + 6] = qz / n;
+    const dadr = this._baseDofAdr2 || (this._baseDofAdr2 = this._baseDofAdrOf());
+    for (let i = 0; i < 6; i++) this._qvel[dadr + i] = 0; // freies Gelenk: 6 Dofs
     this._mjApi.mj_forward(this.model, this.data);
   }
 }
