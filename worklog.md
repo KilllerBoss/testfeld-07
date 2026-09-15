@@ -367,3 +367,24 @@ Stage Summary:
 - Soft-MoE-Motion-Intelligenz (neuer MASTER-PROMPT §34) auf dem ECHTEN Pollen-MicroDuck implementiert und voll verifiziert (Gradient-Check, Physik-E2E, Browser-Worker-E2E, 14 Testsuiten)
 - Übergangs-Training + weiche Skill-Kommandos + Routing-Glättung + Curriculum sind Trainingsinhalt; Router reagiert nachweislich auf Skill-/Style-Kommandos
 - v2.12.0 (versionCode 22) — nächster Schritt: Geräte-Training über Nacht (L1→L5), dann Phase 4 (Styles/Motion-Prior)
+
+---
+Task ID: 32
+Agent: Super Z (Hauptagent)
+Task: "Bist du fertig?" — Stand-Rekonsolidierung nach Environment-Reset: v2.7.0-APK verifiziert, Remote-Fork entdeckt, lokal auf v2.12.0 ausgerichtet
+
+Work Log:
+- Environment war erneut zurückgesetzt: SDK/Gradle weg, lokales Git auf v2.7.0-Stand (09c77b5) stehengeblieben, Remote aber weit voraus
+- Verifikation des lokalen v2.7.0-Codes: Syntax-Check aller www/js GRÜN, gradcheck.mjs OK (PPO-Loop NaN-frei, 1920 Schritte)
+- APK-Neubau v2.7.0 (SDK cmdline-tools 11076708 + platform 34 + build-tools 34.0.0 neu installiert, Gradle 8.7 manuell): versionCode 17 / 2.7.0, fpv.js + skill.js + mcp/ im APK verifiziert, Signatur 1c0422b9… (stabil)
+- Push-Versuch deckte ABZWEIFUNG auf: Remote main hat v2.8–v2.12.0 (Parallel-Sessions), lokales 09c77b5 KEIN Vorfahre davon → KEIN Force-Push, lokal übernommen
+- v2.7.0-Release existiert bereits LIVE (id 388056274, CI-Build aus Tag 09c77b5, 41.594.877 bytes) — Nutzer-Anfragen damit vollständig abgedeckt
+- Release-Audit: v2.7.0 → v2.12.0 ALLE LIVE (5 Releases, je ~41,6 MB, CI grün: Tag-Runs + main success)
+- git reset --hard FETCH_HEAD → lokal = Remote main 98ddc8a (v2.12.0, versionCode 22); v2.7.0-APK-Commit (0007254) verworfen (überflüssig, CI-Asset ist autoritativ)
+- MicroDuck-Sensor-Frage final geklärt: models/pollen_microduck/microduck.xml hat MUJOCO-KAMERA <camera name="head_camera"> (Kopf-Mount, quat 0 0 -1 0) — KEIN Infrarot-Sensor (Sensorik = framequat/gyro/velocimeter/accelerometer IMU + subtreeangmom). FPV-Feature (v2.7.0) zeigt die Kopf-Sicht im Rechteck, togglebar, bewusst KEIN Policy-Eingang; Vision-Modell-Hook bleibt dokumentiert frei (Canvas → ONNX, Phase später)
+- download/Trainrobot.apk aktualisiert auf CI-Release v2.12.0: 41.642.998 bytes, aapt versionCode 22/2.12.0, Signatur 1c0422b9… identisch (Update-fähig), anonymous HTTP 200 verifiziert
+
+Stage Summary:
+- ALLE Nutzer-Anfragen sind implementiert UND released: Art-MCP/.md-Wissen + konfigurierbare Architektur + Experten-/Router-Belohnungen + Steuerung (alle Roboter) + FPV-Kamera + Über-Nacht-Auto-Save = v2.7.0; echte MicroDuck + Worker-Parallelisierung = v2.8–v2.10; Domain Randomization = v2.11; Soft-MoE-Motion-Intelligence (MASTER-PROMPT §34) = v2.12.0
+- Neueste Version: v2.12.0 (versionCode 22), LIVE + anonym downloadbar; lokal = Remote synchron (98ddc8a)
+- MicroDuck: Kamera JA (head_camera, wird für FPV-Anzeige genutzt), Infrarot NEIN (IMU-Sensorik)
