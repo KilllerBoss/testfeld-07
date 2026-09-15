@@ -135,6 +135,16 @@
         <button class="speed-chip active" data-speed="max">MAX</button>
       </div>
     </div>
+    <div class="train-actions" id="duckRow" style="display:none;">
+      <div class="speed-group" role="group" aria-label="Soft-MoE Routing">
+        <span class="stat-k" style="align-self:center;margin-right:6px;">Router</span>
+        <span class="route-bar"><span id="routeBal" class="route-fill rf-bal"></span><span class="route-lbl">Bal</span></span>
+        <span class="route-bar"><span id="routeWalk" class="route-fill rf-walk"></span><span class="route-lbl">Walk</span></span>
+        <span class="route-bar"><span id="routeTurn" class="route-fill rf-turn"></span><span class="route-lbl">Turn</span></span>
+        <span class="route-bar"><span id="routeRec" class="route-fill rf-rec"></span><span class="route-lbl">Rec</span></span>
+      </div>
+      <span id="duckLevel" class="stat-k" style="align-self:center;">Lv 1</span>
+    </div>
     <div class="train-actions">
       <button id="tSave" class="btn small">Speichern</button>
       <button id="tLoad" class="btn small">Laden</button>

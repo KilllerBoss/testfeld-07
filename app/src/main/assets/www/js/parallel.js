@@ -178,16 +178,21 @@ export class ParallelTrainer {
     const ppo = this.getPPO();
     if (!ppo) return;
     const net = ppo.net, norm = ppo.norm;
+    // v2.12.0: Soft-MoE-Netze seriell übergeben (fmt 'softmoe-1'),
+    // MLP-Netze wie bisher als Feld-Schnappschuss.
+    const netPayload = net.kind === 'moe'
+      ? net.toJSON()
+      : {
+          W1: net.W1, b1: net.b1, W2: net.W2, b2: net.b2,
+          Wm: net.Wm, bm: net.bm, Wv: net.Wv, bv: net.bv, logStd: net.logStd,
+        };
     this.version++;
     for (const [i, entry] of this.workers) {
       if (!entry.ready) continue;
       entry.rolling = true;
       entry.w.postMessage({
         cmd: 'weights', version: this.version, T: ppo.h.T,
-        net: {
-          W1: net.W1, b1: net.b1, W2: net.W2, b2: net.b2,
-          Wm: net.Wm, bm: net.bm, Wv: net.Wv, bv: net.bv, logStd: net.logStd,
-        },
+        net: netPayload,
         norm: { mean: norm.mean, M2: norm.M2, count: norm.count },
         env: this.envCfg || null,
       });

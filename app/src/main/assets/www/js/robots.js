@@ -410,6 +410,362 @@ function makeHoverTask(cfg) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════
+// v2.12.0 — MicroDuck Soft-MoE-Task (MASTER-PROMPT §1/§3/§34)
+//   Beobachtung = 61er-Basis der v2.7.0-Sensorik (Gyro, projizierte
+//   Gravitation, Höhe, Fußkontakte, Phasen-Uhr — Schnittstellenkompatibel)
+//   (61 Dims) + 13 SOFT-KOMMANDO-Kanäle: vx, vy, wz, skill[4], style[6] → 74 obs.
+//   Skills: balance · walk · turn · recover (weiche Gewichte, §5);
+//   Styles: neutral/elegant/energetic/careful/playful/minimal — v2.12.0
+//   ist nur 'neutral' belegt (weitere: Architektur bereit, Phase 4).
+//   Übergangs-Training (§7): Kommando-Scheduler erzwingt Skill-Wechsel
+//   und blendet sie weich. Curriculum (§18): Level 1–5 mit wachsenden
+//   Störungen (DR-Specs wie v2.11.0), Aufstieg nur bei stabiler
+//   Episodenlänge. Reward (§11/§12/§13): modular, alle Gewichte in
+//   cfg.rW — KI-tunbar; Fußgeschwindigkeit + ECHTE Fußkontakte
+//   (Kontaktwechsel-Strafe gegen unnötige Schritte).
+// ═══════════════════════════════════════════════════════════
+export const DUCK_SKILLS = ['balance', 'walk', 'turn', 'recover'];
+export const DUCK_STYLES = ['neutral', 'elegant', 'energetic', 'careful', 'playful', 'minimal'];
+
+// Curriculum-Stufen (§18): DR-Spec im v2.11.0-Format + Kommando-Bereiche
+// + Aktionsamplitude (§33: erst Balance mit kleinen Bewegungen, dann mehr)
+const DUCK_MOE_LEVELS = [
+  { name: 'L1 flach',      dr: { level: 'aus',    mass: 0,    motor: 0,    friction: 0,   damping: 0,   gravity: 0,    pose: 0,    vel: 0,    sensor: 0,    delay: 0, pushEvery: [0, 0] },     vxMax: 0.10, wzMax: 0.3, span: 0.16 },
+  { name: 'L2 Tempo',      dr: { level: 'leicht', mass: 0.05, motor: 0.05, friction: 0.1, damping: 0,   gravity: 0,    pose: 0.02, vel: 0,    sensor: 0,    delay: 0, pushEvery: [0, 0] },     vxMax: 0.15, wzMax: 0.5, span: 0.22 },
+  { name: 'L3 Lenken',     dr: { level: 'leicht', mass: 0.08, motor: 0.08, friction: 0.2, damping: 0,   gravity: 0,    pose: 0.03, vel: 0,    sensor: 0.005, delay: 0, pushEvery: [700, 1400] }, vxMax: 0.2,  wzMax: 0.8, span: 0.28 },
+  { name: 'L4 Störungen',  dr: { level: 'mittel', mass: 0.12, motor: 0.12, friction: 0.3, damping: 0.1, gravity: 0.03, pose: 0.05, vel: 0.02, sensor: 0.01, delay: 1, pushEvery: [500, 1000] }, vxMax: 0.25, wzMax: 1.0, span: 0.32 },
+  { name: 'L5 kombiniert', dr: { level: 'stark',  mass: 0.2,  motor: 0.2,  friction: 0.4, damping: 0.2, gravity: 0.06, pose: 0.08, vel: 0.04, sensor: 0.02, delay: 2, pushEvery: [350, 800] },  vxMax: 0.3,  wzMax: 1.0, span: 0.35 },
+];
+
+export function makeDuckMoeTask(cfg) {
+  const nu = cfg.nu;
+  const J = cfg.jointResidual;
+  const nFeet = Array.isArray(cfg.footBodies) ? cfg.footBodies.length : 0;
+  const CMD_DIMS = 13; // vx, vy, wz, skill[4], style[6]
+  const baseObs = 3 * nu + 8 + (9 + nFeet); // v2.7.0-Basis (Speed-Task-Layout inkl. Phasen-Uhr)
+  const obsDim = baseObs + CMD_DIMS;
+  return {
+    kind: 'speed', // bleibt 'speed': KI-Patches (rW/cmd/done/actSpan) greifen unverändert
+    moe: true,
+    obsDim, actDim: nu,
+    cmd: { vx: 0, yaw: 0 },           // Legacy-Block (Position 3·nu+6/7)
+    softCmd: { vx: 0, vy: 0, wz: 0 }, // Soft-Block
+    skillW: new Float64Array([1, 0, 0, 0]),
+    styleW: new Float64Array([1, 0, 0, 0, 0, 0]),
+    stepsLeft: 0,
+    level: 1,
+    epMax: 1000, // 20 s @ 50 Hz
+    _curSkill: 'balance',
+    _tgt: { vx: 0, vy: 0, wz: 0, w: [1, 0, 0, 0] },
+    _blend: 1, _blendDur: 30,
+    _recoverMode: false, _recSteps: 0,
+    _footIds: null, _prevFoot: null, _prevContacts: null,
+    _routeW: new Float64Array(4), _routePen: 0,
+    _rng: null, _tick: 0,
+    _epLen: 0, _emaLen: 0, _epSinceUp: 0,
+    lastAct: new Float64Array(nu), // Legacy-Alias (simworker/train_smoke schreiben hier)
+    _curAct: new Float32Array(nu),
+    _ref: new Float64Array(nu),
+    _gy: null, _pg: null, _hp: null, _fc: null, _bq: null, _bv: null, _jq: null,
+
+    // ── Curriculum (§18) ──
+    _applyLevel(lvl) {
+      const L = DUCK_MOE_LEVELS[Math.max(0, Math.min(4, lvl - 1))];
+      this.drSpec = sanitizeDr(L.dr);
+      // Alias: dr.js-Helfer (drDelayedAct/drPushDue) lesen task._dr
+      this._dr = this.drSpec;
+      this._nextPush = null; this._dlyBuf = null;
+      this.vxMax = L.vxMax; this.wzMax = L.wzMax;
+      this.spanScale = L.span / cfg.actSpan; // Aktionsamplitude wächst mit dem Level
+    },
+    setLevel(l, silent = false) {
+      this.level = Math.max(1, Math.min(5, Math.round(l)));
+      this._applyLevel(this.level);
+      try { localStorage.setItem('tr_duck_lvl', String(this.level)); } catch (e) { /* ok */ }
+      if (!silent && this.onLevelUp) this.onLevelUp(this.level);
+    },
+
+    reset(rng, sim) {
+      this._rng = rng;
+      // Fuß-Körper-IDs einmalig auflösen (Geschwindigkeit + Kontaktwechsel)
+      if (!this._footIds && sim._mjApi) {
+        this._footIds = [];
+        const m = sim._mjApi, mod = sim.model;
+        for (let b = 0; b < sim.nbody; b++) {
+          const nm = m.mj_id2name(mod, 1 /* BODY */, b);
+          if (cfg.footBodies && cfg.footBodies.includes(nm)) this._footIds.push(b);
+        }
+      }
+      // Referenzpose = Keyframe (wie Speed-Task)
+      for (let a = 0; a < nu; a++) this._ref[a] = sim.keyCtrl ? sim.keyCtrl[a] : 0;
+      // Curriculum-Level restaurieren + DR anwenden (v2.11.0-Helfer)
+      if (this._levelLoaded === undefined) {
+        let l = 1;
+        try { l = parseInt(localStorage.getItem('tr_duck_lvl') || '1', 10) || 1; } catch (e) { /* ok */ }
+        this.level = Math.max(1, Math.min(5, l));
+        this._levelLoaded = true;
+      }
+      this._applyLevel(this.level);
+      if (this.drSpec.mass + this.drSpec.motor + this.drSpec.friction + this.drSpec.damping + this.drSpec.gravity > 0) {
+        applyDrModel(sim, this.drSpec, rng);
+      }
+      // Basis-Zustand
+      sim.resetToKeyframe();
+      if (this.drSpec.pose > 0) applyDrStart(sim, this.drSpec, rng);
+      this._epLen = 0;
+      this._recoverMode = false; this._recSteps = 0;
+      this.lastAct.fill(0);
+      if (!this._prevFoot) this._prevFoot = new Float64Array(3 * Math.max(1, this._footIds ? this._footIds.length : 0));
+      if (!this._prevContacts) this._prevContacts = new Uint8Array(Math.max(1, this._footIds ? this._footIds.length : 0));
+      if (!this._q) { this._q = new Float64Array(nu); this._dq = new Float64Array(nu); }
+      this._routeW.set([1, 0, 0, 0]); this._routePen = 0;
+      // Erstes Kommando-Segment
+      this.skillW.set([1, 0, 0, 0]);
+      this._curSkill = 'balance';
+      this.stepsLeft = 0;
+      this._pushContacts(sim);
+      this._nextSeg(rng, true);
+    },
+
+    // ── Kommando-Scheduler (§7 TRANSITIONS) ──
+    _setCmd(vx, vy, wz, w) {
+      this._tgt.vx = vx; this._tgt.vy = vy; this._tgt.wz = wz; this._tgt.w = w;
+      this._blend = 0;
+    },
+    _nextSeg(rng, first = false) {
+      const skills = ['balance', 'walk', 'turn'];
+      let next;
+      // §7: Übergänge ERZWINGEN (60 %) — stand→walk, walk→turn, turn→stop …
+      if (!first && rng.next() < 0.6) {
+        do { next = skills[rng.int(skills.length)]; } while (next === this._curSkill && rng.next() < 0.9);
+      } else {
+        next = skills[rng.int(skills.length)];
+      }
+      this._curSkill = next;
+      if (next === 'balance') {
+        this._setCmd(0, 0, 0, [1, 0, 0, 0]);
+      } else if (next === 'walk') {
+        this._setCmd(rng.range(0.08, this.vxMax), 0, rng.range(-0.15, 0.15), [0.08, 0.88, 0.04, 0]);
+      } else { // turn — inkl. auf der Stelle
+        this._setCmd(rng.range(0, 0.08), 0, rng.range(-this.wzMax, this.wzMax), [0.30, 0.06, 0.64, 0]);
+      }
+      // Zufällige Übergangspunkte (§7): 1,5–3,5 s Segmente, Blend 0,5–0,9 s
+      this.stepsLeft = Math.round(rng.range(1.5, 3.5) / 0.02);
+      this._blendDur = Math.max(8, Math.round(rng.range(0.5, 0.9) / 0.02));
+    },
+    _advanceCmd() {
+      if (this._blend < this._blendDur) {
+        this._blend++;
+        const a = this._blend / this._blendDur;
+        const lerp = (x, y) => x + (y - x) * a;
+        this.softCmd.vx = lerp(this.softCmd.vx, this._tgt.vx);
+        this.softCmd.vy = lerp(this.softCmd.vy, this._tgt.vy);
+        this.softCmd.wz = lerp(this.softCmd.wz, this._tgt.wz);
+        for (let i = 0; i < 4; i++) this.skillW[i] = lerp(this.skillW[i], this._tgt.w[i]);
+      } else {
+        this.softCmd.vx = this._tgt.vx; this.softCmd.vy = this._tgt.vy; this.softCmd.wz = this._tgt.wz;
+        for (let i = 0; i < 4; i++) this.skillW[i] = this._tgt.w[i];
+      }
+      this.cmd.vx = this.softCmd.vx;  // Legacy-Block synchron halten
+      this.cmd.yaw = this.softCmd.wz;
+    },
+    afterAct(sim, act) {
+      // a_{t−1} ← a_t, Kommando-Blending, Segmentende (REIHENFOLGE wie
+      // trainCtrlStep: observe → act → actionToCtrl → stepN → reward → afterAct)
+      if (act) for (let i = 0; i < nu; i++) this.lastAct[i] = act[i];
+      this._advanceCmd();
+      if (this.stepsLeft > 0) this.stepsLeft--;
+      if (this.stepsLeft <= 0 && !this._recoverMode && this._rng) this._nextSeg(this._rng);
+    },
+    sampleCmd(rng) { /* Segment-Scheduler übernimmt das (afterAct) */ },
+
+    // Fuß-Referenz für Geschwindigkeits-Strafe (Weltframe, horizontal)
+    _pushContacts(sim) {
+      if (!this._footIds || !this._footIds.length) return;
+      for (let f = 0; f < this._footIds.length; f++) {
+        const bi = this._footIds[f];
+        this._prevFoot[f * 3] = sim._xpos[3 * bi];
+        this._prevFoot[f * 3 + 1] = sim._xpos[3 * bi + 1];
+        this._prevFoot[f * 3 + 2] = sim._xpos[3 * bi + 2];
+      }
+      if (this._fc) for (let f = 0; f < this._footIds.length; f++) this._prevContacts[f] = this._fc[f] ? 1 : 0;
+    },
+
+    observe(sim, out) {
+      let o = 0;
+      // ── 1:1 das Speed-Task-Layout (Schnittstellenkompatibilität) ──
+      const q = this._q, dq = this._dq;
+      sim.jointPositions(q); sim.jointVelocities(dq);
+      for (let i = 0; i < nu; i++) out[o++] = q[i] - this._ref[i];
+      for (let i = 0; i < nu; i++) out[o++] = dq[i];
+      sim.baseQuat(this._bq || (this._bq = new Float64Array(4)));
+      const bq = this._bq, w = bq[0], x = bq[1], y = bq[2], z = bq[3];
+      out[o++] = 2 * (x * z + w * y);
+      out[o++] = 2 * (y * z - w * x);
+      out[o++] = 1 - 2 * (x * x + y * y);
+      out[o++] = sim._qvel[5];
+      const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+      sim.baseVelWorld(this._bv || (this._bv = new Float64Array(3)));
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      out[o++] = c * this._bv[0] + s * this._bv[1];
+      out[o++] = -s * this._bv[0] + c * this._bv[1];
+      out[o++] = this.cmd.vx; out[o++] = this.cmd.yaw;
+      for (let i = 0; i < nu; i++) out[o++] = this.lastAct[i];
+      // Sensorblock (v2.7.0)
+      sim.gyroBody(this._gy || (this._gy = new Float64Array(3)));
+      out[o++] = this._gy[0]; out[o++] = this._gy[1]; out[o++] = this._gy[2];
+      sim.projectedGravity(this._pg || (this._pg = new Float64Array(3)));
+      out[o++] = this._pg[0]; out[o++] = this._pg[1]; out[o++] = this._pg[2];
+      sim.basePos(this._hp || (this._hp = new Float64Array(3)));
+      out[o++] = this._hp[2];
+      if (nFeet) {
+        sim.footContacts(this._fc || (this._fc = new Float64Array(nFeet)));
+        for (let f = 0; f < nFeet; f++) out[o++] = this._fc[f] ? 1 : 0;
+      }
+      // Sensorrauschen (DR, v2.11.0) über die letzten 7 IMU-Kanäle
+      if (this.drSpec && this.drSpec.sensor > 0) {
+        const nR = this._rng || { next: Math.random };
+        for (let k = o - 7; k < o; k++) out[k] += drSensor(nR, this.drSpec.sensor);
+      }
+      // Phasen-Uhr
+      this._tick++;
+      const ph = (this._tick * 0.02 * (cfg.gaitFreq || 1.2)) % 1;
+      out[o++] = Math.sin(2 * Math.PI * ph);
+      out[o++] = Math.cos(2 * Math.PI * ph);
+      // ── v2.12.0 SOFT-KOMMANDO-BLOCK (13) ──
+      out[o++] = this.softCmd.vx; out[o++] = this.softCmd.vy; out[o++] = this.softCmd.wz;
+      for (let i = 0; i < 4; i++) out[o++] = this.skillW[i];
+      for (let i = 0; i < 6; i++) out[o++] = this.styleW[i];
+      return o;
+    },
+
+    reward(sim) {
+      const rW = cfg.rW;
+      sim.baseQuat(this._bq);
+      const q = this._bq, w = q[0], x = q[1], y = q[2], z = q[3];
+      const upz = 1 - 2 * (x * x + y * y);
+      const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+      sim.baseVelWorld(this._bv);
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      const vFwd = c * this._bv[0] + s * this._bv[1];
+      const yawRate = sim._qvel[5];
+      sim.basePos(this._hp);
+      const gz = this._hp[2];
+
+      let r = 0;
+      // Task-Tracking (Soft-Block: vx + wz; vy bleibt 0 in v2.12.0)
+      r += -rW.vel * Math.abs(vFwd - this.softCmd.vx);
+      r += -rW.yaw * Math.abs(yawRate - this.softCmd.wz);
+      // Balance
+      r += rW.up * (upz - 0.7);
+      r += -rW.height * (gz - cfg.h0) * (gz - cfg.h0);
+      r += rW.alive;
+      // Energie + Rauigkeit (v2.11.0-Semantik)
+      let e = 0;
+      for (let i = 0; i < nu; i++) { e += this.lastAct[i] * this.lastAct[i]; }
+      r += -rW.energy * e;
+      if (rW.smooth > 0) {
+        let sm = 0;
+        for (let i = 0; i < nu; i++) { const dd = this._curAct[i] - this.lastAct[i]; sm += dd * dd; }
+        r += -rW.smooth * sm;
+      }
+      // Gelenk-Rand (v2.11.0)
+      if (rW.jlimit > 0) {
+        const jq = this._jq || (this._jq = new Float64Array(nu));
+        sim.jointPositions(jq);
+        let jl = 0;
+        for (let a = 0; a < nu; a++) {
+          const lo = sim.actRange[2 * a], hi = sim.actRange[2 * a + 1];
+          const mrg = 0.05 * (hi - lo);
+          if (jq[a] < lo + mrg) { const ex = lo + mrg - jq[a]; jl += ex * ex; }
+          else if (jq[a] > hi - mrg) { const ex = jq[a] - (hi - mrg); jl += ex * ex; }
+        }
+        r += -rW.jlimit * jl;
+      }
+      // ── §12/§13 UNNÖTIGE SCHRITTE: Fuß-Geschwindigkeit + Kontaktwechsel ──
+      if (rW.foot > 0 && this._footIds && this._footIds.length) {
+        let fp = 0, flips = 0;
+        for (let f = 0; f < this._footIds.length; f++) {
+          const bi = this._footIds[f];
+          const vx = (sim._xpos[3 * bi] - this._prevFoot[f * 3]) / 0.02;
+          const vy = (sim._xpos[3 * bi + 1] - this._prevFoot[f * 3 + 1]) / 0.02;
+          fp += vx * vx + vy * vy;
+          const cc = this._fc ? (this._fc[f] ? 1 : 0) : 0;
+          if (cc !== this._prevContacts[f]) flips++;
+          this._prevContacts[f] = cc;
+          this._prevFoot[f * 3] = sim._xpos[3 * bi];
+          this._prevFoot[f * 3 + 1] = sim._xpos[3 * bi + 1];
+          this._prevFoot[f * 3 + 2] = sim._xpos[3 * bi + 2];
+        }
+        r += -rW.foot * fp;
+        r += -rW.foot * 0.5 * flips;
+      }
+      // ── §5 ROUTING-GLÄTTUNG: ||Δw||² der Expertengewichte ──
+      if (rW.route > 0) r += -rW.route * this._routePen;
+      // ── Recovery-Formung (EXPERIMENTELL) ──
+      if (this._recoverMode) {
+        r += rW.recover * upz * upz;
+        this._recSteps--;
+        if (upz > 0.85 && gz > cfg.h0 * 0.7) {
+          this._recoverMode = false;
+          this._nextSeg(this._rng, false);
+        }
+      }
+      // DR-Schübe (v2.11.0)
+      if (this.drSpec && this.drSpec.pushEvery[1] > 0) {
+        const dv = drPushDue(this, null);
+        if (dv > 0) {
+          const ang = Math.random() * 2 * Math.PI;
+          let mass = 0;
+          for (let b = 0; b < sim.nbody; b++) mass += sim.model.body_mass[b];
+          const Jv = dv * Math.max(1, mass);
+          sim.pushImpulse(Math.cos(ang) * Jv, Math.sin(ang) * Jv, 0);
+        }
+      }
+      // Abbruch
+      let done = false;
+      if (this._recoverMode) {
+        done = (upz < 0.05 && gz < 0.04) || this._recSteps <= 0;
+      } else {
+        done = upz < cfg.done.upMin || gz < cfg.done.zMin || gz > cfg.done.zMax;
+      }
+      if (done && !this._recoverMode && rW.fall > 0) r -= rW.fall;
+      // Timeout + Curriculum-Gate (§18)
+      this._epLen++;
+      if (!done && this._epLen >= this.epMax) done = true;
+      if (done) {
+        this._emaLen = this._emaLen ? this._emaLen * 0.85 + this._epLen * 0.15 : this._epLen;
+        this._epSinceUp++;
+        if (this._epSinceUp >= 10) {
+          this._epSinceUp = 0;
+          const gate = this.epMax * (0.5 + 0.07 * this.level);
+          if (this.level < 5 && this._emaLen >= gate) this.setLevel(this.level + 1);
+        }
+      }
+      return { r, done };
+    },
+
+    // Routing-Gewichte der Policy (main/worker je Schritt, §5)
+    setRouting(w4) {
+      let pen = 0;
+      for (let i = 0; i < 4; i++) { const d = w4[i] - this._routeW[i]; pen += d * d; }
+      this._routePen = pen;
+      this._routeW.set(w4);
+    },
+
+    actionToCtrl(sim, act) {
+      // v2.11.0 DR-Aktionsverzögerung
+      const a2 = drDelayedAct(this, act);
+      this._curAct.set(a2);
+      const span = cfg.actSpan * (this.spanScale || 1);
+      for (let a = 0; a < nu; a++) {
+        sim.ctrl[a] = this._ref[a] + span * Math.tanh(a2[a] * J);
+      }
+    },
+  };
+}
+
 // ── Die vier Roboter ────────────────────────────────────────
 // Alle gleichberechtigt (ungebunden) — dieselbe Stick-Steuerung.
 
@@ -521,10 +877,11 @@ const ROBOTS = {
   },
   duck: {
     id: 'duck', dir: 'pollen_microduck', scene: 'testfeld.xml', modelXml: 'microduck.xml', keyName: 'STAND', keyIndex: 1,
-    name: 'MICRODUCK', sub: 'Biped · 14 Akt.', longName: 'Microduck (Pollen Robotics · Hugging Face)',
+    name: 'MICRODUCK', sub: 'Biped · 14 Akt. · Soft-MoE', longName: 'Microduck (Pollen Robotics · Hugging Face)',
     color: '#ffe066', dist: 1.3, zTarget: 0.12,
     speedMax: 0.25, yawMax: 1.0, timestep: 0.002,
     nActuators: 14,
+    moe: true, // v2.12.0: Soft-MoE-Politik (MASTER-PROMPT §1/§34)
     footBodies: ['ankle_left', 'ankle_right'],
     gaitFreq: 2.2,
     waddle: {
@@ -533,11 +890,12 @@ const ROBOTS = {
       act(side, part) { return side + '_' + part; },
     },
     gait: makeWaddle,
-    task: makeTrackTask,
+    task: makeDuckMoeTask, // v2.12.0: Soft-MoE-Task (61er-Sensorbasis + 13 Kommando-Kanäle = 74 obs)
     nu: 14, actSpan: 0.35, jointResidual: 1.0,
+    h0: 0.12, // Soll-Basishöhe (STAND-Keyframe)
     cmd: { vx: [-0.15, 0.3], yaw: [-0.8, 0.8] },
-    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0 },
-    dr: null,
+    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0.5, height: 0.5, foot: 0.02, route: 0.15, recover: 0.1 },
+    dr: null, // v2.12.0: Curriculum des MoE-Tasks steckt die DR-Stufen (§18) — Störungs-Chips gelten hier nicht
     done: { upMin: 0.45, zMin: 0.045, zMax: 0.45 },
   },
 };

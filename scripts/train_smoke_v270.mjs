@@ -56,7 +56,8 @@ async function trainSmoke(id, worldId = 'testfeld', seed = 7) {
   }
   check(`${id}/${worldId}: 3000 Trainingschritte endlich`, finite && steps === 3000, `${steps} Schritte, ${episodes} Episoden`);
   check(`${id}/${worldId}: PPO-Updates vollzogen`, updated >= 2, `${updated} Updates, stepCount=${trainer.stepCount}`);
-  check(`${id}/${worldId}: obsDim = ${3 * cfg.nu + 8 + 9 + cfg.footBodies.length}`, task.obsDim === 3 * cfg.nu + 17 + cfg.footBodies.length, task.obsDim + '');
+  const expObs = cfg.moe ? 3 * cfg.nu + 17 + cfg.footBodies.length + 13 : 3 * cfg.nu + 17 + cfg.footBodies.length; // v2.12.0: MoE-Task +13 Kommando-Kanäle
+  check(`${id}/${worldId}: obsDim = ${expObs}`, task.obsDim === expObs, task.obsDim + '');
   sim.dispose();
 }
 

@@ -10,7 +10,7 @@ import { buildWorldXML, WORLDS, getWorld } from './worlds.js';
 import { Renderer3D } from './render3d.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
-import { PPO, finiteArr } from './train.js';
+import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
 import { retargetToG1, RT_ALG } from './retarget.js';
@@ -24,7 +24,7 @@ import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 
-const VERSION = '2.11.0';
+const VERSION = '2.12.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -176,6 +176,7 @@ async function loadRobot(id, first = false) {
       syncBtnRow();
       renderClipButtons();
     }
+    if (S.task.kind === 'speed' && cfg.moe) S.task.onLevelUp = (lv) => log(`Curriculum: Level ${lv} erreicht (MicroDuck)`, 'ok'); // v2.12.0
     S.task.reset(new RNG(4242), sim);
     pluginHost.fireReset(); // v2.9.0: Plugins (z. B. Kopfstand) dürfen die Startpose formen
     S.obsBuf = new Float32Array(S.task.obsDim);
@@ -260,7 +261,7 @@ function loadPolicy(id) {
     let raw = localStorage.getItem(policyKey(id));
     if (!raw && S.task && S.task.kind === 'motion') raw = localStorage.getItem(legacyPolicyKey(id));
     if (!raw) return null;
-    const p = PPO.fromJSON(JSON.parse(raw));
+    const p = PPO.fromAny(JSON.parse(raw)); // v2.12.0: MLP + Soft-MoE ladbar
     // Format-Wache: Policy muss zur AKTUELLEN Aufgabe passen (Motion hat
     // seit Root-Folgen einen anderen Beobachtungsraum als Speed; v2.7.0
     // kam +9 Sensorik-Kanäle hinzu)
@@ -410,6 +411,10 @@ function applyAIPatch(patch, opts = {}) {
       }
       if (patch.done) for (const [k, v] of Object.entries(patch.done)) { cfg.done[k] = v; touched.push('done.' + k); }
       if (patch.actSpan !== undefined) { cfg.actSpan = patch.actSpan; touched.push('actSpan'); }
+      // v2.12.0: MicroDuck-Curriculum-Level (ersetzt die DR-Chips für den Duck)
+      if (patch.duckLevel !== undefined && S.task && S.task.setLevel) {
+        S.task.setLevel(patch.duckLevel); touched.push('duckLevel=' + S.task.level);
+      }
     } else if (kind === 'hover') {
       if (patch.hoverR) for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
       if (patch.cmd && patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx'); }
@@ -1054,7 +1059,8 @@ function onParallelSegment(info) {
   for (const r of info.epRewards) ui.pushEpisodeReward(r);
   if (info.round <= 3 || info.round % 10 === 0) {
     const mm = info.metrics || {};
-    log(`PPO-Runde ${info.round}: ${info.steps} Schritte aus ${S.parallel ? S.parallel.n : '?'} Workern gemischt · clipFrac ${(100 * (mm.clipFrac || 0)).toFixed(0)}% · ${Math.round(info.rate)} Schritte/s`, 'ok');
+    const rw = mm.routeW ? (' · Router ' + mm.routeW.map((v) => v.toFixed(2)).join('/')) : '';
+    log(`PPO-Runde ${info.round}: ${info.steps} Schritte aus ${S.parallel ? S.parallel.n : '?'} Workern gemischt · clipFrac ${(100 * (mm.clipFrac || 0)).toFixed(0)}%${rw} · ${Math.round(info.rate)} Schritte/s`, 'ok');
   }
   // Plugin wurde während des Paralleltrainings aktiviert? → sauber zurück
   // auf Inline (Plugins greifen nur im Haupt-Thread-Rollout).
@@ -1071,8 +1077,14 @@ function onParallelSegment(info) {
 function startTraining() {
   if (!S.sim || !S.task) return;
   if (!S.trainer) {
-    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId));
-    log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
+    const moe = !!S.sim.cfg.moe;
+    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId), moe ? SoftMoEPolicy : undefined);
+    if (moe) {
+      log(`PPO initialisiert: SOFT-MOE — obs ${S.task.obsDim} → Encoder 128/128 → 4 Soft-Experts (Balance/Walk/Turn/Recovery) → Decoder → act ${S.task.actDim} · ${S.trainer.net.paramCount()} Parameter`, 'warn');
+      log('MicroDuck: automatisches Curriculum Level ' + (S.task.level || 1) + ' (Störungs-Chips gelten hier nicht; Styles: nur neutral aktiv)', 'warn');
+    } else {
+      log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
+    }
   }
   // v2.10.0: Tempo „MAX“ = PARALLELES TRAINING — mehrere MuJoCo-WASM-
   // Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro
@@ -1143,6 +1155,7 @@ function trainCtrlStep() {
   if (!finiteArr(S.obsBuf)) { sim.reset(); task.reset(trainer.rng, sim); pluginHost.fireReset(); return; }
   trainer.norm.update(S.obsBuf);
   const { act, logp, value } = trainer.act(S.obsBuf, false);
+  if (task.setRouting && trainer.lastW) task.setRouting(trainer.lastW); // v2.12.0 §5
   task.actionToCtrl(sim, act);
   pluginHost.fireAct(sim, sim.ctrl); // Plugins dürfen ctrl umschreiben (v2.8.0)
   sim.stepN(substeps);
@@ -1163,6 +1176,7 @@ function trainCtrlStep() {
   r = rw.r; done = rw.done;
   S.plgBonus = (S.plgBonus || 0) + (r - rBefore);
   for (let i = 0; i < act.length; i++) task.lastAct[i] = act[i];
+  if (task.afterAct) task.afterAct(sim, act); // v2.12.0: Duck-Scheduler/Obs-Verkettung
   S.epReward += r;
 
   const full = trainer.store(S.obsBuf, act, logp, r, done, value);
@@ -1260,6 +1274,7 @@ function policyCtrlStep() {
   for (let i = 0; i < S.actBuf.length; i++) task.lastAct[i] = S.actBuf[i];
   sim.stepN(substeps);
   if (task.kind === 'motion') task.advance(CTRL_DT);
+  if (task.afterAct) task.afterAct(sim, S.actBuf); // v2.12.0: Duck-Scheduler
 }
 
 function resetRobot() {
@@ -1493,7 +1508,21 @@ function loop(now) {
         episodes: S.episodes,
         steps: S.trainer ? S.trainer.stepCount : 0,
         rate: S.training ? S.stepsPerSec : 0,
-      });
+      });      // v2.12.0 Soft-MoE-Dashboard (MicroDuck): Routing-Bars + Level
+      const duckRow = document.getElementById('duckRow');
+      if (duckRow) duckRow.style.display = (S.robotId === 'duck') ? 'flex' : 'none';
+      if (duckRow && S.robotId === 'duck' && S.task && S.task.kind === 'speed' && S.task.moe) {
+        const w = (S.trainer && S.trainer.lastW) ? S.trainer.lastW : null;
+        if (w) {
+          const ids = ['routeBal', 'routeWalk', 'routeTurn', 'routeRec'];
+          for (let i = 0; i < 4; i++) {
+            const el = document.getElementById(ids[i]);
+            if (el) el.style.width = Math.max(3, Math.min(100, w[i] * 100)) + '%';
+          }
+        }
+        const lv = document.getElementById('duckLevel');
+        if (lv) lv.textContent = 'Lv ' + S.task.level;
+      }
     }
   }
   chartT += dt;
@@ -1655,8 +1684,7 @@ function wireUI() {
     if (!f) return;
     try {
       const data = JSON.parse(await f.text());
-      if (data.fmt !== 'trainrobot-ppo-1') throw new Error('Unbekanntes Format');
-      const p = PPO.fromJSON(data);
+      const p = PPO.fromAny(data); // v2.12.0: MLP + Soft-MoE
       if (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim) throw new Error('Policy passt nicht zu diesem Roboter');
       S.trainer = p;
       ui.policyAvailable(true);

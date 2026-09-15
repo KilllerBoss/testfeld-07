@@ -28,11 +28,11 @@ if (typeof localStorage === 'undefined') {
 }
 
 import { initEngine, fetchModelIntoFS, RobotSim, writeWorldFile } from './engine.js';
-import { getRobot, makeTrackTask } from './robots.js';
+import { getRobot, makeTrackTask, makeDuckMoeTask } from './robots.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost } from './plugins.js';
-import { PPO, finiteArr } from './train.js';
+import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 
 const CTRL_DT = 0.02;
 const _noop = () => {};
@@ -47,6 +47,7 @@ function post(msg, transfer) { self.postMessage(msg, transfer || []); }
 function buildTask(spec, cfg, simRef) {
   if (spec.kind === 'motion') return makeMotionTask(cfg, spec.clip, simRef);
   if (spec.kind === 'recovery') return makeRecoveryTask(cfg, spec.mode || 'getup');
+  if (cfg.moe) return makeDuckMoeTask(cfg); // v2.12.0: Soft-MoE (MicroDuck)
   return makeTrackTask(cfg); // 'speed' (Tempo-Tracking / Laufen lernen)
 }
 
@@ -71,7 +72,8 @@ self.onmessage = async (e) => {
       task.reset({ range: (a, b) => a + Math.random() * (b - a), int: (n) => Math.floor(Math.random() * n), next: Math.random }, sim);
       pluginHost.fireReset();
       segLen = Math.max(64, Math.min(4096, (m.hyper && m.hyper.T) || 512));
-      ppo = new PPO(task.obsDim, task.actDim, { T: segLen }, (m.seed || 1) + workerId * 7919);
+      // v2.12.0: Soft-MoE-Politik, wenn der Roboter sie nutzt
+      ppo = new PPO(task.obsDim, task.actDim, { T: segLen }, (m.seed || 1) + workerId * 7919, cfg.moe ? SoftMoEPolicy : undefined);
       substeps = Math.max(1, Math.round(CTRL_DT / sim.timestep));
       post({
         cmd: 'ready', workerId, obsDim: task.obsDim, actDim: task.actDim,
@@ -97,11 +99,18 @@ self.onmessage = async (e) => {
 
 function applyWeights(m) {
   const net = ppo.net, norm = ppo.norm;
-  net.W1.set(m.net.W1); net.b1.set(m.net.b1);
-  net.W2.set(m.net.W2); net.b2.set(m.net.b2);
-  net.Wm.set(m.net.Wm); net.bm.set(m.net.bm);
-  net.Wv.set(m.net.Wv); net.bv.set(m.net.bv);
-  net.logStd.set(m.net.logStd);
+  if (net.kind === 'moe') {
+    // v2.12.0 Soft-MoE: Netz aus dem seriellen Format übernehmen
+    const src = m.net && m.net.net ? m.net.net : m.net;
+    if (src.fmt !== 'softmoe-1') throw new Error('Netz-Format passt nicht (softmoe erwartet)');
+    net.applyFromJSON(src);
+  } else {
+    net.W1.set(m.net.W1); net.b1.set(m.net.b1);
+    net.W2.set(m.net.W2); net.b2.set(m.net.b2);
+    net.Wm.set(m.net.Wm); net.bm.set(m.net.bm);
+    net.Wv.set(m.net.Wv); net.bv.set(m.net.bv);
+    net.logStd.set(m.net.logStd);
+  }
   norm.mean.set(m.norm.mean); norm.M2.set(m.norm.M2); norm.count = m.norm.count;
 }
 
@@ -144,6 +153,7 @@ function runSegment() {
       continue; // Schritt wiederholen
     }
     const a = ppo.act(obsBuf, false);
+    if (task.setRouting && ppo.lastW) task.setRouting(ppo.lastW); // v2.12.0 §5 Routing-Glättung
     task.actionToCtrl(sim, a.act);
     pluginHost.fireAct(sim, sim.ctrl); // Plugins dürfen ctrl umschreiben (hier: leer)
     sim.stepN(substeps);
@@ -158,6 +168,7 @@ function runSegment() {
     });
     r = rw.r; dn = rw.done;
     for (let i = 0; i < A; i++) task.lastAct[i] = a.act[i];
+    if (task.afterAct) task.afterAct(sim, a.act); // v2.12.0: Duck-Scheduler/Obs-Verkettung
     epReward += r;
     obs.set(obsBuf, t * D);
     act.set(a.act, t * A);

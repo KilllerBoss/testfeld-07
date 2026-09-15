@@ -542,3 +542,22 @@ html, body {
 }
 .plugin-row.active { border-color: var(--amber-dim); background: rgba(255, 157, 33, 0.08); }
 .plugin-row .btn.small { min-width: 46px; padding: 7px 8px; font-size: 10px; flex: 0 0 auto; }
+
+/* ── v2.12.0 Soft-MoE Routing-Dashboard (MicroDuck) ── */
+.route-bar {
+  position: relative; flex: 1; height: 14px; background: #1a1f2b;
+  border-radius: 7px; overflow: hidden; min-width: 42px;
+}
+.route-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 25%;
+  border-radius: 7px; transition: width 0.25s ease;
+}
+.rf-bal  { background: #4f8cff; }
+.rf-walk { background: #35c46f; }
+.rf-turn { background: #ff9d21; }
+.rf-rec  { background: #e0567b; }
+.route-lbl {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 9px; color: #eef2f8;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.7); letter-spacing: 0.4px;
+}

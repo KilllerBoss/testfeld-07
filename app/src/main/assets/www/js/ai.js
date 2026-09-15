@@ -191,6 +191,7 @@ Jede Hook-Registrierung gibt eine Abmelde-Funktion zurück. Ein Fehler in einem 
 
 BEDEUTUNG DER KONFIG-FELDER
 - rW.vel: Bestrafung des Geschwindigkeitsfehlers |v_fahrt − v_soll|. Höher = Policy hält Tempo genauer (zu hoch = zögerlich).
+- rW (MicroDuck Soft-MoE zusätzlich): height = Höhen-Treue, foot = UNNÖTIGE Schritte (Fuß-Geschwindigkeit + Kontaktwechsel), route = Routing-Sprünge der 4 Soft-MoE-Experten, recover = Aufrichte-Formung (experimentell). duckLevel 1–5 = Curriculum des MicroDuck (flach → kombinierte Störungen), ersetzt die globalen Störungs-Chips für den Duck.
 - rW.yaw: Bestrafung des Drehfehlers. rW.up: Belohnung für Aufrechtsein. rW.alive: Grundbelohnung pro Schritt. rW.energy: Bestrafung des Aktionsaufwands (höher = sparsamere, ruhigere Bewegung).
 - rW.smooth: Bestrafung des Aktions-Ruckelns (Änderung zwischen zwei Zyklen — ruhigere Gaits). rW.jlimit: Bestrafung nahe der Gelenk-Anschläge. rW.fall: einmaliger Malus beim Sturz (0 = aus).
 - Störungen (Domain Randomization) stellt der NUTZER im Trainings-Panel ein (Chips „Störungen"): Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose, Sensorrauschen, Schübe, Aktions-Verzögerung. Du kannst sie nicht direkt setzen — aber rW-Anteile auf die Störungen abstimmen.
@@ -244,7 +245,8 @@ const _clampObj = (src, bounds, dst) => {
 export function validatePatch(raw) {
   const out = {};
   if (!raw || typeof raw !== 'object') return out;
-  if (raw.rW) { out.rW = {}; _clampObj(raw.rW, { vel: [0, 5], yaw: [0, 5], up: [0, 5], alive: [0, 2], energy: [0, 0.01], smooth: [0, 0.5], jlimit: [0, 2], fall: [0, 10] }, out.rW); }
+  if (raw.rW) { out.rW = {}; _clampObj(raw.rW, { vel: [0, 5], yaw: [0, 5], up: [0, 5], alive: [0, 2], energy: [0, 0.01], smooth: [0, 0.5], jlimit: [0, 2], fall: [0, 10], height: [0, 5], foot: [0, 1], route: [0, 3], recover: [0, 1] }, out.rW); }
+  if (raw.duckLevel !== undefined) out.duckLevel = Math.round(_num(raw.duckLevel, 1, 5, 1));
   if (raw.cmd) {
     out.cmd = {};
     if (Array.isArray(raw.cmd.vx) && raw.cmd.vx.length === 2) {
