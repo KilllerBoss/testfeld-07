@@ -1,0 +1,209 @@
+﻿2026-09-16T16:06:28.5256538Z Current runner version: '2.337.0'
+2026-09-16T16:06:28.5282393Z ##[group]Runner Image Provisioner
+2026-09-16T16:06:28.5283251Z Hosted Compute Agent
+2026-09-16T16:06:28.5283919Z Version: 20260828.587
+2026-09-16T16:06:28.5284615Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T16:06:28.5285359Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T16:06:28.5286102Z Worker ID: {fcbb5402-ee5e-48d4-96fc-57b5d38e4bf5}
+2026-09-16T16:06:28.5286809Z Azure Region: westus2
+2026-09-16T16:06:28.5287425Z ##[endgroup]
+2026-09-16T16:06:28.5289663Z ##[group]Operating System
+2026-09-16T16:06:28.5290299Z Ubuntu
+2026-09-16T16:06:28.5290890Z 24.04.5
+2026-09-16T16:06:28.5291383Z LTS
+2026-09-16T16:06:28.5291904Z ##[endgroup]
+2026-09-16T16:06:28.5292505Z ##[group]Runner Image
+2026-09-16T16:06:28.5293136Z Image: ubuntu-24.04
+2026-09-16T16:06:28.5293733Z Version: 20260907.300.1
+2026-09-16T16:06:28.5295076Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-16T16:06:28.5296671Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-16T16:06:28.5297633Z ##[endgroup]
+2026-09-16T16:06:28.5299003Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T16:06:28.5301399Z Contents: write
+2026-09-16T16:06:28.5302099Z Metadata: read
+2026-09-16T16:06:28.5302658Z ##[endgroup]
+2026-09-16T16:06:28.5305091Z Secret source: Actions
+2026-09-16T16:06:28.5306199Z Cache mode: write
+2026-09-16T16:06:28.5306874Z Prepare workflow directory
+2026-09-16T16:06:28.5646567Z Prepare all required actions
+2026-09-16T16:06:28.5696224Z Getting action download info
+2026-09-16T16:06:28.9806965Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T16:06:29.1537776Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
+2026-09-16T16:06:29.6587652Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-16T16:06:29.8174703Z Download action repository 'softprops/action-gh-release@v2' (SHA:3bb12739c298aeb8a4eeaf626c5b8d85266b0e65)
+2026-09-16T16:06:30.3632133Z Complete job name: build
+2026-09-16T16:06:30.4423998Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T16:06:30.4432567Z ##[group]Run actions/checkout@v4
+2026-09-16T16:06:30.4433289Z with:
+2026-09-16T16:06:30.4433760Z   repository: KilllerBoss/testfeld-07
+2026-09-16T16:06:30.4436854Z   token: ***
+2026-09-16T16:06:30.4437541Z   ssh-strict: true
+2026-09-16T16:06:30.4438082Z   ssh-user: git
+2026-09-16T16:06:30.4438860Z   persist-credentials: true
+2026-09-16T16:06:30.4439472Z   clean: true
+2026-09-16T16:06:30.4440048Z   sparse-checkout-cone-mode: true
+2026-09-16T16:06:30.4440601Z   fetch-depth: 1
+2026-09-16T16:06:30.4441207Z   fetch-tags: false
+2026-09-16T16:06:30.4441753Z   show-progress: true
+2026-09-16T16:06:30.4442322Z   lfs: false
+2026-09-16T16:06:30.4442989Z   submodules: false
+2026-09-16T16:06:30.4443555Z   set-safe-directory: true
+2026-09-16T16:06:30.4444177Z   allow-unsafe-pr-checkout: false
+2026-09-16T16:06:30.4445137Z ##[endgroup]
+2026-09-16T16:06:30.5506512Z Syncing repository: KilllerBoss/testfeld-07
+2026-09-16T16:06:30.5509678Z ##[group]Getting Git version info
+2026-09-16T16:06:30.5510820Z Working directory is '/home/runner/work/testfeld-07/testfeld-07'
+2026-09-16T16:06:30.5512749Z [command]/usr/bin/git version
+2026-09-16T16:06:30.6659582Z git version 2.55.0
+2026-09-16T16:06:30.6684147Z ##[endgroup]
+2026-09-16T16:06:30.6699221Z Temporarily overriding HOME='/home/runner/work/_temp/264f7eb3-55e8-41c2-b71f-fad5e8dbbca2' before making global git config changes
+2026-09-16T16:06:30.6705346Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T16:06:30.6706818Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/testfeld-07/testfeld-07
+2026-09-16T16:06:30.6927877Z Deleting the contents of '/home/runner/work/testfeld-07/testfeld-07'
+2026-09-16T16:06:30.6933103Z ##[group]Initializing the repository
+2026-09-16T16:06:30.6938045Z [command]/usr/bin/git init /home/runner/work/testfeld-07/testfeld-07
+2026-09-16T16:06:30.7483000Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-16T16:06:30.7484412Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-16T16:06:30.7485449Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-16T16:06:30.7486388Z hint: call:
+2026-09-16T16:06:30.7486941Z hint:
+2026-09-16T16:06:30.7487611Z hint: 	git config --global init.defaultBranch <name>
+2026-09-16T16:06:30.7488810Z hint:
+2026-09-16T16:06:30.7489567Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-16T16:06:30.7490671Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-16T16:06:30.7491605Z hint:
+2026-09-16T16:06:30.7492176Z hint: 	git branch -m <name>
+2026-09-16T16:06:30.7492889Z hint:
+2026-09-16T16:06:30.7493703Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-16T16:06:30.7499839Z Initialized empty Git repository in /home/runner/work/testfeld-07/testfeld-07/.git/
+2026-09-16T16:06:30.7510253Z [command]/usr/bin/git remote add origin https://github.com/KilllerBoss/testfeld-07
+2026-09-16T16:06:30.7899869Z ##[endgroup]
+2026-09-16T16:06:30.7901092Z ##[group]Disabling automatic garbage collection
+2026-09-16T16:06:30.7904186Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-16T16:06:30.7939787Z ##[endgroup]
+2026-09-16T16:06:30.7940692Z ##[group]Setting up auth
+2026-09-16T16:06:30.7946381Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T16:06:30.7981298Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T16:06:30.9692151Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T16:06:30.9729527Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-16T16:06:30.9962962Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T16:06:31.0002366Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-16T16:06:31.0235661Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-16T16:06:31.0276688Z ##[endgroup]
+2026-09-16T16:06:31.0278793Z ##[group]Fetching the repository
+2026-09-16T16:06:31.0288037Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +5927678ccb4336656fab707f1ca79d5f0f35e94e:refs/tags/v2.14.0
+2026-09-16T16:06:39.5864387Z From https://github.com/KilllerBoss/testfeld-07
+2026-09-16T16:06:39.5865875Z  * [new ref]         5927678ccb4336656fab707f1ca79d5f0f35e94e -> v2.14.0
+2026-09-16T16:06:39.5872121Z ##[endgroup]
+2026-09-16T16:06:39.5872811Z ##[group]Determining the checkout info
+2026-09-16T16:06:39.5942569Z ##[endgroup]
+2026-09-16T16:06:39.5943497Z [command]/usr/bin/git sparse-checkout disable
+2026-09-16T16:06:39.6123135Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-16T16:06:39.6161128Z ##[group]Checking out the ref
+2026-09-16T16:06:39.6166242Z [command]/usr/bin/git checkout --progress --force refs/tags/v2.14.0
+2026-09-16T16:06:40.5411222Z Note: switching to 'refs/tags/v2.14.0'.
+2026-09-16T16:06:40.5411968Z 
+2026-09-16T16:06:40.5412470Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-16T16:06:40.5413877Z changes and commit them, and you can discard any commits you make in this
+2026-09-16T16:06:40.5414707Z state without impacting any branches by switching back to a branch.
+2026-09-16T16:06:40.5415209Z 
+2026-09-16T16:06:40.5415565Z If you want to create a new branch to retain commits you create, you may
+2026-09-16T16:06:40.5416345Z do so (now or later) by using -c with the switch command. Example:
+2026-09-16T16:06:40.5416842Z 
+2026-09-16T16:06:40.5417035Z   git switch -c <new-branch-name>
+2026-09-16T16:06:40.5417394Z 
+2026-09-16T16:06:40.5417631Z Or undo this operation with:
+2026-09-16T16:06:40.5417895Z 
+2026-09-16T16:06:40.5418057Z   git switch -
+2026-09-16T16:06:40.5418489Z 
+2026-09-16T16:06:40.5418843Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-16T16:06:40.5419345Z 
+2026-09-16T16:06:40.5422051Z HEAD is now at 5927678 v2.14.0: Roster auf MicroDuck/G1/X2 (107 MB weniger), Gemini-Tools setAppearance (Farben+Material je Teil) / setWorld (KI-Welt) / setUI (Designs+Chips) / setMoE (2-8 Experten), rWx-Komplexterme (goTo/stayNear/heightBand/...), Tempo-Slider statt MAX (Freeze-Fix), Live-Kurven (Tempo+Loss), Policy-Export mit Meta, mcp/WORLD.md. Tests: v2140 53/53, ui 17/17, moe/dr 41/41/duck_sync 24/24/duck E2E grün
+2026-09-16T16:06:40.5450826Z ##[endgroup]
+2026-09-16T16:06:40.5501656Z [command]/usr/bin/git log -1 --format=%H
+2026-09-16T16:06:40.5531013Z 5927678ccb4336656fab707f1ca79d5f0f35e94e
+2026-09-16T16:06:40.5841069Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T16:06:40.5843034Z ##[group]Run actions/setup-java@v4
+2026-09-16T16:06:40.5843361Z with:
+2026-09-16T16:06:40.5843611Z   distribution: temurin
+2026-09-16T16:06:40.5843883Z   java-version: 21
+2026-09-16T16:06:40.5844166Z   java-package: jdk
+2026-09-16T16:06:40.5844425Z   check-latest: false
+2026-09-16T16:06:40.5844705Z   server-id: github
+2026-09-16T16:06:40.5844964Z   server-username: GITHUB_ACTOR
+2026-09-16T16:06:40.5845270Z   server-password: GITHUB_TOKEN
+2026-09-16T16:06:40.5845572Z   overwrite-settings: true
+2026-09-16T16:06:40.5845853Z   job-status: success
+2026-09-16T16:06:40.5848702Z   token: ***
+2026-09-16T16:06:40.5848977Z ##[endgroup]
+2026-09-16T16:06:40.7623397Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
+2026-09-16T16:06:40.7636297Z ##[group]Installed distributions
+2026-09-16T16:06:40.7774709Z Resolved Java 21.0.12+1 from tool-cache
+2026-09-16T16:06:40.7785223Z Setting Java 21.0.12+1 as the default
+2026-09-16T16:06:40.7792315Z (node:2236) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T16:06:40.7793179Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T16:06:40.7796228Z Creating toolchains.xml for JDK version 21 from temurin
+2026-09-16T16:06:40.7873997Z Writing to /home/runner/.m2/toolchains.xml
+2026-09-16T16:06:40.7876446Z 
+2026-09-16T16:06:40.7876597Z Java configuration:
+2026-09-16T16:06:40.7876879Z   Distribution: temurin
+2026-09-16T16:06:40.7877150Z   Version: 21.0.12+1
+2026-09-16T16:06:40.7877529Z   Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.12-1/x64
+2026-09-16T16:06:40.7877913Z 
+2026-09-16T16:06:40.7878554Z ##[endgroup]
+2026-09-16T16:06:40.7900987Z Creating settings.xml with server-id: github
+2026-09-16T16:06:40.7928105Z Writing to /home/runner/.m2/settings.xml
+2026-09-16T16:06:40.8094397Z ##[group]Run ANDROID_HOME=/usr/local/lib/android/sdk
+2026-09-16T16:06:40.8094853Z [36;1mANDROID_HOME=/usr/local/lib/android/sdk[0m
+2026-09-16T16:06:40.8095417Z [36;1myes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true[0m
+2026-09-16T16:06:40.8096454Z [36;1m"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null[0m
+2026-09-16T16:06:40.8097185Z [36;1mecho "SDK-Komponenten bereit: platform 34, build-tools 34.0.0"[0m
+2026-09-16T16:06:40.8140281Z shell: /usr/bin/bash -e {0}
+2026-09-16T16:06:40.8140580Z env:
+2026-09-16T16:06:40.8140910Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.12-1/x64
+2026-09-16T16:06:40.8141440Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.12-1/x64
+2026-09-16T16:06:40.8141835Z ##[endgroup]
+2026-09-16T16:06:49.8359121Z yes: standard output: Broken pipe
+2026-09-16T16:06:51.5463126Z SDK-Komponenten bereit: platform 34, build-tools 34.0.0
+2026-09-16T16:06:51.5503571Z ##[group]Run set -e
+2026-09-16T16:06:51.5503877Z [36;1mset -e[0m
+2026-09-16T16:06:51.5504087Z [36;1m# 1. WASM-Magie[0m
+2026-09-16T16:06:51.5504576Z [36;1mhead -c 4 app/src/main/assets/www/vendor/mujoco.wasm | od -A n -t x1 | tr -d ' \n' | grep -q '^0061736d$'[0m
+2026-09-16T16:06:51.5505121Z [36;1mecho "WASM-Magie OK (0061736d)"[0m
+2026-09-16T16:06:51.5505436Z [36;1m# 2. Keine Alt-Elemente / kein Pre-Order[0m
+2026-09-16T16:06:51.5506050Z [36;1m! grep -ri "pre-order\|predator\|Armbot\|Original (ONNX)" app/src/main/assets/www/js app/src/main/assets/www/index.html[0m
+2026-09-16T16:06:51.5506620Z [36;1mecho "Keine Alt-Elemente OK"[0m
+2026-09-16T16:06:51.5506891Z [36;1m# 3. Sechs Roboter vorhanden[0m
+2026-09-16T16:06:51.5507353Z [36;1mfor r in unitree_g1 unitree_a1 unitree_go2 boston_dynamics_spot skydio_x2 pollen_microduck; do[0m
+2026-09-16T16:06:51.5507913Z [36;1m  test -f "app/src/main/assets/www/models/$r/manifest.json"[0m
+2026-09-16T16:06:51.5508507Z [36;1mdone[0m
+2026-09-16T16:06:51.5508903Z [36;1mecho "6 Modelle OK (Menagerie + Microduck)"[0m
+2026-09-16T16:06:51.5509229Z [36;1m# 4. GLB-Pipeline vorhanden[0m
+2026-09-16T16:06:51.5509540Z [36;1mtest -f app/src/main/assets/www/js/retarget.js[0m
+2026-09-16T16:06:51.5509898Z [36;1mtest -f app/src/main/assets/www/js/glb.js[0m
+2026-09-16T16:06:51.5510214Z [36;1mecho "GLB-Pipeline OK"[0m
+2026-09-16T16:06:51.5546504Z shell: /usr/bin/bash -e {0}
+2026-09-16T16:06:51.5546760Z env:
+2026-09-16T16:06:51.5547080Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.12-1/x64
+2026-09-16T16:06:51.5547608Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.12-1/x64
+2026-09-16T16:06:51.5548008Z ##[endgroup]
+2026-09-16T16:06:51.5778137Z WASM-Magie OK (0061736d)
+2026-09-16T16:06:51.5806336Z Keine Alt-Elemente OK
+2026-09-16T16:06:51.5812537Z ##[error]Process completed with exit code 1.
+2026-09-16T16:06:51.5953316Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T16:06:51.5954690Z Post job cleanup.
+2026-09-16T16:06:51.7441884Z (node:2412) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T16:06:51.7443139Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T16:06:51.7782003Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T16:06:51.7784373Z Post job cleanup.
+2026-09-16T16:06:51.8786947Z [command]/usr/bin/git version
+2026-09-16T16:06:51.8835957Z git version 2.55.0
+2026-09-16T16:06:51.8881077Z Temporarily overriding HOME='/home/runner/work/_temp/3807e95c-c2ff-4cb8-9976-600ce76eeb2a' before making global git config changes
+2026-09-16T16:06:51.8907155Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T16:06:51.8919256Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/testfeld-07/testfeld-07
+2026-09-16T16:06:51.8941272Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T16:06:51.9007472Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T16:06:51.9299495Z fatal: No url found for submodule path 'menagerie' in .gitmodules
+2026-09-16T16:06:51.9324884Z ##[warning]The process '/usr/bin/git' failed with exit code 128
+2026-09-16T16:06:51.9448565Z Cleaning up orphan processes
+2026-09-16T16:06:51.9927631Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-java@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
