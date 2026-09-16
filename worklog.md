@@ -433,3 +433,30 @@ Stage Summary:
 - v2.13.1: Kollisions-Geoms (group 3) werden nicht mehr gerendert — Würfel weg bei MicroDuck UND alle anderen Roboter (Plus: Performance), Aufsteh-Physik unverändert
 - Release via Tag v2.13.1 (CI auto-release)
 - ADDENDUM Task 34: Release v2.13.1 live — CI run 35102996559 SUCCESS; Asset Trainrobot.apk 41.660.678 bytes, anonym HTTP 200 ladbar; versionCode 24 / versionName 2.13.1 (scripts/apk_version.py, AXML-Parser); Signatur via apksigner (build-tools r34, nach SDK-Reset neu geladen): Signer #1 SHA-256 1c0422b9251e47ce… IDENTISCH mit v2.13.0 und allen v2.x → Update-Installation garantiert; render3d.js mit _skipCollision im APK verifiziert. Hinweis: scripts/apk_cert_sha.py (Hand-Parser) war fehlerhaft und wurde entfernt — apksigner ist maßgeblich
+
+---
+Task ID: 35
+Agent: Super Z (Hauptagent)
+Task: v2.14.0 — Roster auf 3 Roboter, Gemini-Aussehen-/Welt-/UI-/MoE-Editor, komplexe Reward-Terme, Tempo-Slider, Live-Kurven, Policy-Export mit Meta
+
+Work Log:
+- NUTZER-FRAGE „Vorschläge?" → AskUserQuestion-Batch; Antworten: Farben+Material je Teil (nur Gemini), Roster-Kürzung (Empfehlung übernommen: komplett löschen), Extras: Live-Kurven + Touch-Joystick + Policy-Export, EIN Release; Freitext: Gemini soll Welt neu generieren + Objekte hinzufügen, komplexere Belohnungen, UI anpassen, Soft-MoE-Experten anpassen, „max Geschwindigkeit weg (Handy hängt) → Slider"
+- ROSTER: a1/spot/go2 aus robots.js entfernt (scripts/roster_cut.py) + Modelldirs gelöscht — 107 MB Assets gespart (166→59 MB); boot lädt jetzt G1; ROBOT_ORDER = ['g1','duck','x2']
+- SETAPPEARANCE (neu appearance.js + render3d.js): Teile = Material-/Body-/Geom-Namen; color #rrggbb, shine 0–1 (→roughness), metal 0–1; Meshes tragen userData.geomIndex, setAppearance() wirkt LIVE am geladenen Modell; persistiert tr_look_v1_<robot>, in loadRobot restauriert; partCatalog() liefert Gemini den Katalog; Physik unangetastet
+- SETWORLD (worlds.js + main.js): KI-WELT (id 'ki') — Objekttypen box/ball/cyl/ramp/tilt/gate/stair, hart validiert (max 40, Spawn 0,9 m frei, x/y ±12, Farben #rrggbb), replace=true = Welt NEU bauen / false = hinzufügen; persistiert tr_world_ki_v1; buildWorldXML 4. Param kiObjects (auch Parallel-Start); Weltwechsel hält das Training im Speicher
+- RWX KOMPLEXE TERME (neu rewardx.js): goTo/stayNear/heightBand/faceYaw/paceMax/paceMin/uprightMin (+symmetric reserviert), je {kind, w 0–5, hard}; hard = Episoden-Abbruch bei grober Verletzung; in Speed-Task UND Duck-Task (resetTermState je Episode); KI-Pfad: validatePatch → applyAIPatch → cfg.rWx, persistiert in tr_ai_speed_<id>, an Worker via env.rWx (simworker applyEnv)
+- SETUI: Designs standard/neon/amber/ice/wald (body[data-theme], CSS-Variablen), eigene Vorschlags-Chips (renderAISuggestions, max 6, hart validiert, persistiert); restoreAISuggestions in boot + aiOnOpen
+- SETMOE: SoftMoEPolicy E=2–8 (constructor opts + fromJSON aus net.E); PPO übergibt hyper.policyOpts; Experten-Namen an E angepasst (skill.js längenagnostisch); task.setRouting E-flexibel (realloc); Router-Bars UI blendet >E aus; Persistenz tr_ai_moeE; Policy wird verworfen (ehrlich gemeldet)
+- TEMPO-SLIDER: Chips 1×/4×/16×/MAX ENTFERNT („MAX" = Parallel-Training blockierte Handys) → Slider 1–16 Schritte/Frame, persistiert tr_speed_v2 ('max'-Migration → 4); Not-Aus 34 ms/Bild; Parallel-Code bleibt, aber UI-erreichbar nie mehr MAX
+- LIVE-KURVEN: zweites Canvas rateChart (Schritte/s-Fläche amber + Policy-Loss cyan); trainer._lastMetrics gesetzt; ui.pushRate/drawRateChart; resetRewards leert Historie
+- POLICY-EXPORT: {meta:{app,version,robot,task,obsDim,actDim,stepCount,moeE,saved}, policy} — Import akzeptiert Wrapper + altes Naked-Format; Dateiname mit Schrittanzahl
+- ai.js: 4 neue Werkzeuge (setAppearance/setWorld/setUI/setMoE) mit validateToolCall-Klemmen + Prompt (3 Roboter, rWx-Doku, Kombi-Beispiel Welt+goTo); AI_DOCS + mcp/ um WORLD.md erweitert, ROBOTS/REWARDS/CONTROL/ARCHITECTURE/TRAINING/README auf v2.14.0 umgeschrieben
+- JOYSTICK: active-Glow + Richtungsmarken (CSS), active-Klasse in controls.js
+- TESTS: scripts/test_v2140.mjs NEU — 53 Checks GRÜN (Roster, rewardx-Mathematik, KI-WELT-Sanitizing+XML, Appearance am ECHTEN Modell, SoftMoE E=3 Roundtrip + PPO-Interplay, Tool-Validierung, Duck-Rollout in KI-Welt ohne NaN); scripts/ui_v2140_test.mjs NEU — 17 Browser-Checks GRÜN (Boot, Chips=3, Slider, Charts, Theme, KI-WELT-Chip, setAppearance ändert Meshfarben LIVE, keine JS-Fehler); Regressionen: moe_test GRÜN, dr_test 41/41 (a1→g1 umgestellt), duck_sync 24/24, duck_test (WASM-E2E) GRÜN
+- Version: 2.14.0 / versionCode 25
+
+Stage Summary:
+- v2.14.0: 3 Roboter (MicroDuck/G1/X2), Gemini kann jetzt AUSSEHEN (Farben+Material je Teil), WELT (KI-Welt bauen), UI (Designs+Chips) und SOFT-MOE-EXPERTEN (2–8) steuern; komplexe Reward-Ziele (rWx) kombinierbar mit Weltobjekten („läuf zum Turm")
+- Handy-Freeze behoben: Tempo-Slider 1–16 statt MAX; Live-Kurven zeigen Tempo+Loss
+- Policy-Export/Import mit Metadaten; APK 107 MB kleiner
+- Release via Tag v2.14.0 (CI auto-release)

@@ -47,6 +47,7 @@ export class Controls {
       if (this._joyId !== null) return;
       this._joyId = e.pointerId;
       zone.setPointerCapture(e.pointerId);
+      zone.classList.add('active'); // v2.14.0: aktive Hervorhebung
       this.buzz(8);
       this._joyMove(e, zone, R, setStick);
     });
@@ -57,6 +58,7 @@ export class Controls {
     const end = (e) => {
       if (e.pointerId !== this._joyId) return;
       this._joyId = null;
+      zone.classList.remove('active');
       this.stickX = 0; this.stickY = 0;
       setStick(0, 0);
     };

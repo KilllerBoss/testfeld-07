@@ -3,6 +3,28 @@
    Dunkle Werkstatt-Konsole, amber Akzent, mobile-nativ.
    ═══════════════════════════════════════════════════════════ */
 
+/* ── v2.14.0: APP-DESIGNS (setUI → theme) — Akzent-Variablen umfärben ── */
+body[data-theme='neon'] {
+  --amber: #b44dff; --amber-dim: #7a2fb3;
+  --cyan: #4dffdf; --line: rgba(180, 77, 255, 0.22);
+  --bg: #07030f;
+}
+body[data-theme='amber'] {
+  --amber: #ffd166; --amber-dim: #b3913f;
+  --cyan: #ff9d21; --line: rgba(255, 209, 102, 0.2);
+  --bg: #0c0904;
+}
+body[data-theme='ice'] {
+  --amber: #7bd3ff; --amber-dim: #4a8fb0;
+  --cyan: #b6f09c; --line: rgba(123, 211, 255, 0.2);
+  --bg: #04090f;
+}
+body[data-theme='wald'] {
+  --amber: #7ddf7d; --amber-dim: #4a9a4a;
+  --cyan: #c9e265; --line: rgba(125, 223, 125, 0.18);
+  --bg: #050c07;
+}
+
 :root {
   --bg: #0a0e14;
   --panel: rgba(13, 18, 26, 0.86);
@@ -233,6 +255,20 @@ html, body {
   box-shadow: 0 6px 22px rgba(255, 157, 33, 0.35), inset 0 -3px 8px rgba(0,0,0,0.35);
   transition: transform .05s linear;
 }
+/* v2.14.0: Joystick aktiv hervorheben + Richtungs-Marken */
+#joyZone.active #joyBase {
+  border-color: rgba(255, 157, 33, 0.55);
+  box-shadow: 0 0 18px rgba(255, 157, 33, 0.25), inset 0 0 24px rgba(255,157,33,0.08);
+}
+#joyBase::before {
+  content: ""; position: absolute; inset: 0;
+  background:
+    radial-gradient(circle 2.5px at 50% 9%, rgba(232,238,245,0.5) 0 45%, transparent 50%),
+    radial-gradient(circle 2.5px at 50% 91%, rgba(232,238,245,0.5) 0 45%, transparent 50%),
+    radial-gradient(circle 2.5px at 9% 50%, rgba(232,238,245,0.5) 0 45%, transparent 50%),
+    radial-gradient(circle 2.5px at 91% 50%, rgba(232,238,245,0.5) 0 45%, transparent 50%);
+  pointer-events: none;
+}
 #actionCol {
   position: fixed; right: calc(var(--sa-r) + 18px);
   bottom: calc(var(--sa-b) + 46px);
@@ -286,7 +322,37 @@ html, body {
 #rewardChart {
   width: 100%; height: auto; border-radius: 12px;
   background: rgba(148, 180, 220, 0.04); border: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+}
+#rateChart {
+  width: 100%; height: auto; border-radius: 12px;
+  background: rgba(148, 180, 220, 0.04); border: 1px solid var(--line-soft);
   margin-bottom: 12px;
+}
+/* ── v2.14.0: TEMPO-SLIDER (ersetzt 1×/4×/16×/MAX) ── */
+.speed-slider-row { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 220px; }
+.speed-slider {
+  flex: 1; height: 34px; appearance: none; -webkit-appearance: none;
+  background: transparent; cursor: pointer;
+}
+.speed-slider::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, rgba(56,214,224,0.55), rgba(255,157,33,0.75));
+  border: 1px solid var(--line-soft);
+}
+.speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 26px; height: 26px; border-radius: 50%;
+  margin-top: -11px; border: 2px solid var(--amber);
+  background: radial-gradient(circle at 35% 30%, #ffc879, var(--amber) 65%, #c47a12);
+  box-shadow: 0 3px 12px rgba(255, 157, 33, 0.45);
+}
+.speed-slider::-moz-range-track {
+  height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, rgba(56,214,224,0.55), rgba(255,157,33,0.75));
+}
+.speed-slider::-moz-range-thumb {
+  width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--amber);
+  background: var(--amber); box-shadow: 0 3px 12px rgba(255, 157, 33, 0.45);
 }
 .train-actions { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .btn {

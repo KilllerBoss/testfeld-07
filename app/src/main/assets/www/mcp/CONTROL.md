@@ -1,7 +1,7 @@
 # CONTROL — Steuerung & Betrieb
 
 ## POLICY-Modus (Policy an = gelerntes fahren)
-- **v2.13.0: Der ECHTE Stick steuert ALLE Speed-Policies** (A1/Spot/Go2/G1/Go2/Duck).
+- **v2.13.0: Der ECHTE Stick steuert ALLE Speed-Policies** (G1/Duck).
   Vorher kam der Stick hier nie an — Policies fuhren mit dem letzten Trainingskommando weiter.
 - MicroDuck: Stick → Soft-Kommandos (vx auf Level-Band geklemmt, z. B. L1 max 0.10 m/s!),
   skill-Form (balance/walk/turn) geht weich aus dem Befehl hervor; Zufalls-Scheduler pausiert.
@@ -23,3 +23,12 @@
 - fov 40–110°, pitch −20…35°; JEDER 2. Frame gedrosselt
 - **NIE ein Policy-Eingang** — obsDim ändert sich nicht; Vision-Modell-Hook bewusst leer (Canvas → ONNX später)
 ## Schubsen (btnPush / push tool): Δv-basiert, strength = m/s
+
+
+## AUSSEHEN (setAppearance, v2.14.0) — nur Rendering, persistiert
+- Erst {list:true} → Katalog aus Material-/Body-Namen. Dann {parts:[{part, color:"#rrggbb", shine 0–1, metal 0–1}], all:{...}}.
+- Beispiele: „Schnabel orange“ → part noenoeil_material color #ff8c00 · „Chrome-Ente“ → all {metal:1, shine:1} · Reset: {reset:true}.
+
+## APP-LOOK (setUI, v2.14.0)
+- theme: standard | neon | amber | ice | wald (Akzentfarben der ganzen App).
+- suggestions: [{label ≤20 Zeichen, q ≤120}] ersetzt die Vorschlags-Chips im KI-Chat (max 6) — nimm KONKRETE Kurzbefehle.

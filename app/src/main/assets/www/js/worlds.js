@@ -15,6 +15,7 @@ export const WORLDS = [
   { id: 'treppen', name: 'Treppen', desc: 'Auf- & Abwärtstreppen mit Podest' },
   { id: 'huegel', name: 'Hügel', desc: 'Unregelmäßiger Kopfsteinboden (Terrain)' },
   { id: 'zufall', name: 'Zufall', desc: 'Neu würfeln: gemischte Hinderniswelt mit Seed' },
+  { id: 'ki', name: 'KI-WELT', desc: 'Von Gemini gebaute Welt (setWorld): eigene Objekte + Farben' },
 ];
 
 export function getWorld(id) {
@@ -215,14 +216,111 @@ function zufallBodies(s, rng) {
   return b;
 }
 
+// ── v2.14.0: KI-WELT — Objekte von Gemini (setWorld-Tool) ──────
+// Objekt-Format (hart validiert, siehe sanitizeKiObjects):
+//   { type:'box'|'ball'|'cyl'|'ramp'|'tilt'|'gate'|'stair',
+//     x, y, [z], size:{x,y,z} | r,h | w,l,h, color:'#rrggbb', euler:[rx,ry,rz] }
+// Spawn-Bereich bleibt immer frei (kein Objekt näher als 0,9 m am Ursprung).
+export const KI_OBJ_TYPES = ['box', 'ball', 'cyl', 'ramp', 'tilt', 'gate', 'stair'];
+
+const _hexOk = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c.trim());
+
+export function sanitizeKiObjects(raw) {
+  const out = [];
+  if (!Array.isArray(raw)) return { objects: out, errors: ['objects muss eine Liste sein'] };
+  const errors = [];
+  const num = (v, lo, hi, dflt) => {
+    const x = typeof v === 'number' && Number.isFinite(v) ? v : parseFloat(v);
+    if (!Number.isFinite(x)) return dflt;
+    return Math.min(hi, Math.max(lo, x));
+  };
+  for (let i = 0; i < Math.min(raw.length, 40); i++) {
+    const o = raw[i];
+    if (!o || typeof o !== 'object') { errors.push(`#${i}: kein Objekt`); continue; }
+    const type = KI_OBJ_TYPES.includes(o.type) ? o.type : null;
+    if (!type) { errors.push(`#${i}: unbekannter Typ "${o.type}" (erlaubt: ${KI_OBJ_TYPES.join(', ')})`); continue; }
+    const x = num(o.x, -12, 12, 0), y = num(o.y, -12, 12, 0);
+    if (Math.hypot(x, y) < 0.9) { errors.push(`#${i}: zu nah am Spawn (min. 0,9 m Abstand)`); continue; }
+    const col = _hexOk(o.color) ? o.color.trim() : null;
+    const e = Array.isArray(o.euler) ? [num(o.euler[0], -1.2, 1.2, 0), num(o.euler[1], -1.2, 1.2, 0), num(o.euler[2], -3.15, 3.15, 0)] : null;
+    const obj = { type, x: +x.toFixed(3), y: +y.toFixed(3), color: col, euler: e };
+    if (type === 'ball') {
+      obj.r = num(o.r, 0.03, 0.8, 0.12);
+      obj.z = num(o.z, obj.r, 3, obj.r);
+    } else if (type === 'cyl') {
+      obj.r = num(o.r, 0.03, 0.8, 0.1);
+      obj.h = num(o.h, 0.05, 2, 0.5);
+      obj.z = num(o.z, obj.h / 2, 3, obj.h / 2);
+    } else {
+      const sx = num(o.w !== undefined ? o.w : (o.size && o.size[0]), 0.05, 2.5, 0.5);
+      const sy = num(o.l !== undefined ? o.l : (o.size && o.size[1]), 0.05, 2.5, 0.5);
+      const sz = num(o.h !== undefined ? o.h : (o.size && o.size[2]), 0.02, 1.2, 0.1);
+      obj.w = sx; obj.l = sy; obj.h = sz;
+      obj.z = num(o.z, sz / 2, 3, sz / 2);
+    }
+    out.push(obj);
+  }
+  if (Array.isArray(raw) && raw.length > 40) errors.push('maximal 40 Objekte — Rest verworfen');
+  return { objects: out, errors };
+}
+
+function kiBodies(objects) {
+  let b = '';
+  let k = 0;
+  const box = (id, x, y, z, hw, hl, hh, col, e, fr) => {
+    const et = e ? ` euler="${e[0].toFixed(3)} ${e[1].toFixed(3)} ${e[2].toFixed(3)}"` : '';
+    const f = fr ? ' friction="0.9"' : '';
+    return `    <body name="ki_${id}" pos="${x.toFixed(3)} ${y.toFixed(3)} ${z.toFixed(3)}"${et}>\n` +
+      `      <geom name="ki_${id}_g" type="box" size="${hw.toFixed(3)} ${hl.toFixed(3)} ${hh.toFixed(3)}" rgba="${col}" condim="3"${f}/>\n    </body>\n`;
+  };
+  for (const o of objects) {
+    const c = o.color || CLR.obs;
+    const e = o.euler;
+    if (o.type === 'ball') {
+      b += `    <body name="ki_b${k}" pos="${o.x.toFixed(3)} ${o.y.toFixed(3)} ${o.z.toFixed(3)}">\n` +
+        `      <geom name="ki_b${k}_g" type="sphere" size="${o.r.toFixed(3)}" rgba="${c}" condim="3" friction="0.6"/>\n    </body>\n`;
+    } else if (o.type === 'cyl') {
+      b += `    <body name="ki_c${k}" pos="${o.x.toFixed(3)} ${o.y.toFixed(3)} ${o.z.toFixed(3)}">\n` +
+        `      <geom name="ki_c${k}_g" type="cylinder" size="${o.r.toFixed(3)} ${o.h.toFixed(3)}" rgba="${c}" condim="3"/>\n    </body>\n`;
+    } else if (o.type === 'box') {
+      b += box(`x${k}`, o.x, o.y, o.z, o.w / 2, o.l / 2, o.h / 2, c, e);
+    } else if (o.type === 'ramp' || o.type === 'tilt') {
+      const tilt = o.type === 'tilt' ? 0.3 : 0.18;
+      const ey = e ? e[1] + tilt : tilt;
+      const ee = [e ? e[0] : 0, ey, e ? e[2] : 0];
+      b += box(`r${k}`, o.x, o.y, o.z, Math.max(o.w, 0.6) / 2, Math.max(o.l, 0.6) / 2, Math.max(o.h, 0.08) / 2, c, ee, true);
+    } else if (o.type === 'gate') {
+      // Zwei Pfosten + Querbalken, Ausrichtung über euler-z
+      const rot = e ? e[2] : 0;
+      const ca = Math.cos(rot), sa = Math.sin(rot);
+      const px = 0.45 * sa, py = 0.45 * -ca;
+      const ph = Math.max(o.h, 0.5);
+      b += box(`g${k}l`, o.x - px, o.y - py, ph / 2, 0.075, 0.075, ph / 2, c, null);
+      b += box(`g${k}r`, o.x + px, o.y + py, ph / 2, 0.075, 0.075, ph / 2, c, null);
+      b += box(`g${k}t`, o.x, o.y, ph + 0.04, 0.06, 0.55, 0.04, o.color || CLR.mark, e ? [0, 0, rot] : [0, 0, rot]);
+    } else if (o.type === 'stair') {
+      const N = 4, sh = Math.max(0.03, Math.min(0.08, o.h)), sd = Math.max(0.22, Math.min(0.4, o.l));
+      const rot = e ? e[2] : 0;
+      const dirx = Math.cos(rot), diry = Math.sin(rot);
+      for (let i = 0; i < N; i++) {
+        const sx = o.x + dirx * i * sd, sy = o.y + diry * i * sd;
+        b += box(`s${k}_${i}`, sx, sy, (i + 1) * sh / 2, Math.max(o.w, 0.4) / 2, sd / 2, (i + 1) * sh / 2, c, rot ? [0, 0, rot] : null);
+      }
+    }
+    k++;
+  }
+  return b;
+}
+
 /**
  * Erzeugt die Welt-Szenen-XML (include des Roboter-XMLs).
  * @param cfg    Roboter-Konfiguration (zTarget skaliert die Hindernisse)
  * @param worldId einer aus WORLDS
  * @param seed   Seed für 'zufall' (default 1)
+ * @param kiObjects v2.14.0: für worldId 'ki' — Liste von KI-Objekten
  * @returns MJCF-XML-String
  */
-export function buildWorldXML(cfg, worldId, seed = 1) {
+export function buildWorldXML(cfg, worldId, seed = 1, kiObjects = null) {
   const s = (cfg.zTarget || 0.75) / 0.75; // Skala relativ zum G1
   const rng = mulberry32(seed || 1);
   let bodies = '';
@@ -232,6 +330,7 @@ export function buildWorldXML(cfg, worldId, seed = 1) {
     case 'treppen': bodies = treppenBodies(s); break;
     case 'huegel': bodies = huegelBodies(s, rng); break;
     case 'zufall': bodies = zufallBodies(s, rng); break;
+    case 'ki': bodies = kiBodies(Array.isArray(kiObjects) ? kiObjects : []); break;
     case 'testfeld':
     default: bodies = testfeldBodies(s); break;
   }

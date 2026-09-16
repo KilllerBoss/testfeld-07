@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════
 
 import * as THREE from '../vendor/three.module.js';
+import { resolveAppearance } from './appearance.js'; // v2.14.0: Aussehen-Editor
 
 // mjGEOM-Typen
 const G_PLANE = 0, G_HFIELD = 1, G_SPHERE = 2, G_CAPSULE = 3, G_ELLIPSOID = 4,
@@ -197,12 +198,18 @@ export class Renderer3D {
       const geo = this._geometryFor(sim, gI, type);
       if (!geo) continue;
       const c4 = 4 * gI; rgba[0]=mod.geom_rgba[c4]; rgba[1]=mod.geom_rgba[c4+1]; rgba[2]=mod.geom_rgba[c4+2]; rgba[3]=mod.geom_rgba[c4+3];
+      // v2.14.0: Aussehen-Overrides (Gemini setAppearance) — NUR Rendering
+      const look = this._lookMap ? this._lookMap.get(gI) : null;
       const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
-        metalness: 0.22, roughness: 0.62,
+        color: look && look.color
+          ? new THREE.Color(look.color[0], look.color[1], look.color[2])
+          : new THREE.Color(rgba[0], rgba[1], rgba[2]),
+        metalness: look && look.metal !== undefined ? look.metal : 0.22,
+        roughness: look && look.rough !== undefined ? look.rough : 0.62,
         transparent: rgba[3] < 0.99, opacity: rgba[3],
       });
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.userData.geomIndex = gI; // v2.14.0: Look-Live-Updates je Geom
       mesh.castShadow = true; mesh.receiveShadow = true;
       // Lokale Geom-Lage im Körper
       const gp = new Float64Array(3), gq = new Float64Array(4);
@@ -215,6 +222,30 @@ export class Renderer3D {
       grp.add(mesh);
     }
     this.sim = sim;
+  }
+
+  // v2.14.0: Aussehen-Overrides live anwenden (nach setAppearance-Änderung)
+  setAppearance(sim, spec) {
+    this._lookMap = spec ? resolveAppearance(sim, spec) : null;
+    if (this._lookMap) this._applyLook();
+    return this._lookMap;
+  }
+
+  _applyLook() {
+    if (!this._lookMap || !this.bodyGroups) return;
+    for (const grp of this.bodyGroups) {
+      if (!grp) continue;
+      for (const mesh of grp.children) {
+        const gi = mesh.userData.geomIndex;
+        if (gi === undefined) continue;
+        const st = this._lookMap.get(gi);
+        if (!st) continue;
+        if (st.color) mesh.material.color.setRGB(st.color[0], st.color[1], st.color[2]);
+        if (st.rough !== undefined) mesh.material.roughness = st.rough;
+        if (st.metal !== undefined) mesh.material.metalness = st.metal;
+        mesh.material.needsUpdate = true;
+      }
+    }
   }
 
   _geometryFor(sim, gI, type) {

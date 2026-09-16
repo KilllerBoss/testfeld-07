@@ -5,14 +5,20 @@ Smartphone (CPU, ohne CUDA)**.
 
 ## Inhalt
 
-- **Vier offizielle Google-DeepMind-Menagerie-Modelle**, alle gleichberechtigt
-  (ungebunden) mit einheitlicher Stick-Steuerung:
-  - Unitree **G1** (Humanoid, 29 Aktuatoren)
-  - Unitree **A1** (Quadruped, 12)
-  - Boston Dynamics **Spot** (Quadruped, 12)
+- **Drei Roboter** (v2.14.0 — A1/Spot/Go2 wurden entfernt, APK deutlich kleiner),
+  alle gleichberechtigt (ungebunden) mit einheitlicher Stick-Steuerung:
+  - **MicroDuck** (Pollen Robotics · Hugging Face, Biped, 14 Servos, Soft-MoE-Politik
+    mit 2–8 KI-tunbaren Experten, Curriculum L1–L5, FPV-Kopf-Kamera)
+  - Unitree **G1** (Humanoid, 29 Aktuatoren, GLB-Motion-Tracking)
   - Skydio **X2** (Quadrocopter, 4 Rotoren, echter Kaskaden-Flugregler)
-- **PPO-Policy-Training** (64×64-MLP, GAE, Adam) — reines JS/WASM auf der CPU,
-  Belohnungskurve live, Speichern/Laden/Export/Import.
+- **PPO-Policy-Training** (64×64-MLP bzw. Soft-MoE, GAE, Adam) — reines JS/WASM
+  auf der CPU, Live-Kurven (Reward + Tempo/Loss), Tempo-Slider 1–16,
+  Speichern/Laden/Export/Import (Policy-Datei mit Metadaten).
+- **KI-Trainer (Gemini) mit Werkzeugen**: Trainingskonfiguration, Buttons/Makros,
+  **setAppearance** (Farben + Glanz/Metallik je Roboter-Teil), **setWorld**
+  (KI-Welt mit eigenen Objekten bauen), **setUI** (App-Designs + Vorschlags-Chips),
+  **setMoE** (Expertenanzahl), **rWx-Zielterme** (goTo/stayNear/Höhenband/…),
+  Plugins (Werkstatt), Art-MCP-Wissbasis (mcp/*.md).
 - **GLB-Animations-Training (G1)**: eigene `.glb`-Clips (Mixamo-ähnlich)
   importieren → automatisches Retargeting auf die G1-Kinematik
   (Quaternion-Weltdelta → Gelenkachse, Fuß-Boden-Anpassung) →

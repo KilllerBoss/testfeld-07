@@ -136,6 +136,7 @@ export class PPO {
   /**
    * obsDim, actDim — Raumdimensionen
    * hyper — Hyperparameter (T, gamma, lam, clip, epochs, mb, lr, cV, cE, maxGrad)
+   *         + policyOpts: {E} — v2.14.0 Soft-MoE-Expertenanzahl (2–8)
    */
   constructor(obsDim, actDim, hyper = {}, seed = 1234, PolicyClass = PolicyNet) {
     this.obsDim = obsDim; this.actDim = actDim;
@@ -144,7 +145,7 @@ export class PPO {
       epochs: 4, mb: 256, lr: 3e-4, cV: 0.5, cE: 0.005, maxGrad: 0.5,
     }, hyper);
     this.rng = new RNG(seed);
-    this.net = new PolicyClass(obsDim, actDim, this.rng);
+    this.net = new PolicyClass(obsDim, actDim, this.rng, this.h.policyOpts || null);
     this.norm = new ObsNorm(obsDim);
     this.stepCount = 0;      // Umweltschritte insgesamt
     this.updateCount = 0;    // PPO-Updates
@@ -710,12 +711,15 @@ export class PPO {
 // KEINE harten if/else-Experten — kontinuierliche Mischung (§5).
 // ═══════════════════════════════════════════════════════════
 export class SoftMoEPolicy {
-  constructor(obsDim, actDim, rng) {
+  constructor(obsDim, actDim, rng, opts = null) {
     this.kind = 'moe';
     this.obsDim = obsDim; this.actDim = actDim;
     if (obsDim < 13) throw new Error('SoftMoE benötigt ≥ 13 Obs (Kommando-Block)');
     this.H = 128; this.RH = 64; this.HL = 64; this.EL = 32; this.SL = 32; this.DH = 64;
-    this.E = 4; this.NS = 6;
+    // v2.14.0: Expertenanzahl KI-tunbar (2–8) — 4 = Master-Prompt-Standard
+    const Eopt = opts && Number.isFinite(opts.E) ? Math.round(opts.E) : 4;
+    this.E = Math.max(2, Math.min(8, Eopt));
+    this.NS = 6;
     this.CMD_OFF = obsDim - 13;      // vx,vy,wz, skill×4, style×6
     this.kPrior = 1.2;               // Router-Vorspülung durch Skill-Kommando
 
@@ -1037,7 +1041,7 @@ export class SoftMoEPolicy {
     return o;
   }
   static fromJSON(src) {
-    const p = new SoftMoEPolicy(src.obsDim, src.actDim, new RNG(1));
+    const p = new SoftMoEPolicy(src.obsDim, src.actDim, new RNG(1), { E: src.E });
     for (const n of p.pNames) {
       if (!src[n]) throw new Error('SoftMoE-Feld fehlt: ' + n);
       p[n].set(src[n]);

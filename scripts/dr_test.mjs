@@ -11,7 +11,7 @@
 //      identisch (DR aus)
 //   6) Aktions-Verzögerung: zweiter Aufruf führt die VORHERIGE Aktion aus
 //   7) Schübe: fälliger Schubs ändert qvel sofort (Impuls = Δv × Masse)
-//   8) Rollout-Stabilität: 300 Regelzyklen STARK auf duck + a1 — keine NaN
+//   8) Rollout-Stabilität: 300 Regelzyklen STARK auf duck + g1 — keine NaN
 //   9) Track-Task akzeptiert rohen Worker-Spec (env.dr aus parallel.js)
 // Usage: node scripts/dr_test.mjs
 //
@@ -46,9 +46,9 @@ const fricOf = (sim, g) => sim.model.geom_friction[3 * g];
 const firstRobotGeom = (sim) => { for (let g = 0; g < sim.ngeom; g++) { const b = sim.model.geom_bodyid[g]; if (b && sim._robotBody[b]) return g; } return -1; };
 
 const duck = getRobot('duck');
-const a1 = getRobot('a1');
+const g1r = getRobot('g1'); // v2.14.0: a1/spot/go2 entfernt — g1 als Zweitroboter
 await fetchModelIntoFS('models/' + duck.dir);
-await fetchModelIntoFS('models/' + a1.dir);
+await fetchModelIntoFS('models/' + g1r.dir);
 
 console.log('\n■ 1) sanitizeDr — Müll rein, sauber raus');
 {
@@ -184,9 +184,9 @@ console.log('\n■ 7) Schübe — fälliger Stör-Impuls ändert qvel sofort');
   ok(Number.isFinite(r) && typeof done === 'boolean', 'Reward finite, done bool');
 }
 
-console.log('\n■ 8) Rollout-Stabilität — 300 Regelzyklen STARK, duck + a1, keine NaN');
+console.log('\n■ 8) Rollout-Stabilität — 300 Regelzyklen STARK, duck + g1, keine NaN');
 {
-  for (const [id, cfg] of [['duck', duck], ['a1', a1]]) {
+  for (const [id, cfg] of [['duck', duck], ['g1', g1r]]) {
     const sim = new RobotSim(cfg, 'testfeld.xml');
     sim.reset();
     const task = makeTask(cfg, drFromLevel('stark'));

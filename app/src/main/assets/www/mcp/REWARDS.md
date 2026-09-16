@@ -1,6 +1,6 @@
 # REWARDS — Felder (KI-tunbar via applyConfig/patch)
 
-## Speed-Tasks (A1/Spot/Go2/G1): rW = { vel, yaw, up, alive, energy, smooth, jlimit, fall }
+## Speed-Tasks (G1, Drohne analog mit hoverR): rW = { vel, yaw, up, alive, energy, smooth, jlimit, fall }
 - vel/yaw = Tracking-Fehler |v−v_soll|, |yawRate−wz_soll|; up = Aufrecht (upz−0.7); alive = Grundbonus
 - energy = Σ a²; smooth = Σ Δa² (Ruckeln); jlimit = Anschlag-Nähe; fall = einmaliger Sturz-Malus
 
@@ -28,6 +28,20 @@ descend/climb/turn/move/hover (Drohne).
   Fenster-Ende = Episode-Ende; Wieder-oben (upz > 0.85 & gz > 0.065) = normal weiter.
 - Aufsteh-Episoden zählen NICHT zum Curriculum-Aufstieg; Level steigt bei EMA ≥ epMax·(0.5+0.07·L),
   sinkt wieder bei EMA < Gate/2 (Selbstkorrektur gegen Instant-Kollaps-Level).
+
+
+
+## rWx — KOMPLEXE ZIELTERME (v2.14.0, rewardx.js): patch.rWx = {on:1, terms:[…]}
+Termbibliothek (max 8, je {kind, w 0–5, hard?, …}):
+- goTo {x, y, tol} — Fortschritt zur Annäherung + Halt-Bonus im Zielkreis (w = 0.5 sinnvoll)
+- stayNear {x, y, r} — Strafe für Abstand > r; hard = Abbruch bei > r+0.5
+- heightBand {zMin, zMax} — Basis-Höhe im Band (Ducken/Hüpfen); hard = Abbruch bei 0.25 Abweichung
+- faceYaw {yaw} — Blickrichtung halten (rad)
+- paceMax {v} / paceMin {v} — Tempo-Deckel/-Mindest (m/s, horizontal)
+- uprightMin {up} — Mindest-Aufrecht (upz)
+- hard:true = Episode endet bei grober Verletzung (Constraints), sonst nur Reward-Formung.
+Terme wirken ZUSÄTZLICH zur Basis-Belohnung, auf G1 (Speed-Task) UND MicroDuck (Soft-MoE-Task).
+Kombiniere mit setWorld: Objekte an bekannten Koordinaten + goTo-Term = Navigations-Aufgabe.
 
 ## Domain Randomization (v2.11.0, Störungs-Chips; beim Duck = Curriculum-DR)
 Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen,

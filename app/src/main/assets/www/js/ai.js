@@ -8,6 +8,8 @@
 // KI-Tafel jederzeit ersetzbar. Keine Fallbacks: Fehler klar melden.
 // ═══════════════════════════════════════════════════════════
 
+import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
+
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const EMBEDDED_KEY = 'AQ.Ab8RN6Lu6QU8a1X9fk201_fhWku_ZOobtSO4aHM8X1xhGLWwNw';
 const LS_KEY = 'tr_ai_key_v1';
@@ -145,17 +147,18 @@ export function currentModels() { return _models; }
 // Hier steht nur der Katalog + Kurztitel.
 export const AI_DOCS = [
   { doc: 'README', title: 'Index + Nutzung der Dokumente' },
-  { doc: 'ROBOTS', title: 'Alle 6 Roboter: Aktuatoren, Eingaben (obs), Ausgaben (actions), Sensoren, Kamera' },
-  { doc: 'ARCHITECTURE', title: 'Policy-Architektur: MLP + Soft-MoE (MicroDuck), Parameter, Grenzen' },
-  { doc: 'REWARDS', title: 'Belohnungen: rW-Felder + Experten-/Router-Belohnungen (expertR) + DR' },
-  { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera' },
-  { doc: 'TRAINING', title: 'PPO-Ablauf, Parallel-Worker, Domain Randomization, Curriculum, Grenzen' },
+  { doc: 'ROBOTS', title: 'Alle 3 Roboter: Aktuatoren, Eingaben (obs), Ausgaben (actions), Sensoren, Kamera' },
+  { doc: 'ARCHITECTURE', title: 'Policy-Architektur: MLP + Soft-MoE (MicroDuck, Experten 2–8), Parameter, Grenzen' },
+  { doc: 'REWARDS', title: 'Belohnungen: rW-Felder + rWx-Zielterme + expertR + DR' },
+  { doc: 'WORLD', title: 'Welten: Presets + KI-WELT (setWorld — Objekte bauen, Farben, Regeln)' },
+  { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera, AUSSEHEN (setAppearance), UI (setUI)' },
+  { doc: 'TRAINING', title: 'PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen' },
 ];
 
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Sechs Roboter: Unitree A1 (Quadruped), Boston Dynamics Spot (Quadruped), Unitree Go2 (Quadruped), Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm), Unitree G1 (Humanoid, 29 Gelenke, optional GLB-Motion-Tracking), Skydio X2 (Drohne).
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, optional GLB-Motion-Tracking), Skydio X2 (Drohne).
 
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
@@ -183,6 +186,10 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 9. tool="writePlugin" — eigenen MOD/PLUGIN SCHREIBEN und dauerhaft installieren. args = {name:"≤32 Zeichen", desc:"≤200 Zeichen", code:"…"}. Der Code wird geprüft (Syntax) und sofort aktiviert; bleibt gespeichert und startet künftig mit der App. Bei Syntax-/Laufzeit-Fehlern bekommst du die Meldung als TOOL-ERGEBNIS und kannst writePlugin mit korrigiertem Code erneut aufrufen.
 10. tool="readDoc" — ART-MCP: Wissensdatei lesen. args = {doc:"README"|"ROBOTS"|"ARCHITECTURE"|"REWARDS"|"CONTROL"|"TRAINING"}. LIES das passende Dokument, BEVOR du bei obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung rätst.
 11. tool="setCamera" — FPV-Kamerabild an/aus/einstellen (nur ANZEIGE — die Policy sieht das Bild NICHT). args = {on:<bool>, fov:40…110, pitch:-20…35 (Grad nach unten)}.
+12. tool="setAppearance" — AUSSEHEN ändern (nur Rendering — Physik bleibt). ERST args={list:true} rufen, um gültige Teil-Namen zu sehen (Material-/Body-Namen). Dann args = {parts:[{part:"jaw_material", color:"#ff6600", shine:0.8, metal:0.2}…], all:{color,shine,metal}}. color="#rrggbb", shine = Glanz 0–1, metal = Metallik 0–1; Felder optional (nur geänderte setzen). args={reset:true} = Original. Änderungen bleiben gespeichert.
+13. tool="setWorld" — WELT bauen. args = {preset:"testfeld"|"flach"|"parkour"|"treppen"|"huegel"} schaltet um. Eigene Objekte: args = {objects:[{type:"box"|"ball"|"cyl"|"ramp"|"tilt"|"gate"|"stair", x, y, w,l,h (bzw. r für ball/cyl), color:"#rrggbb", euler:[rx,ry,rz]}…], replace:<bool>} — replace:true = WELT NEU bauen (nur die gelisteten Objekte), replace:false = Objekte HINZUFÜGEN. Regeln: max 40 Objekte, Spawn (0,0) bleibt frei (min 0,9 m), x/y −12…12. LIES doc "WORLD" bei Unsicherheit.
+14. tool="setUI" — APP-LOOK anpassen. args = {theme:"standard"|"neon"|"amber"|"ice"|"wald", suggestions:[{label:"≤20 Zeichen", q:"Chat-Nachricht"}…max 6]} — theme ist das Farbschema der App, suggestions ersetzt die Vorschlags-Buttons im KI-Chat (sinnvolle Kurzbefehle vorschlagen!). Beide Felder optional.
+15. tool="setMoE" — Soft-MoE-EXPERTENANZAHL ändern (NUR MicroDuck). args = {experts:2…8}. Die Policy wird neu aufgesetzt (Training startet von Null — vorher fragen/warnen!). 4 = Standard (Balance/Walk/Turn/Recover).
 
 PLUGIN-API (das Objekt „api" in runCode/writePlugin):
 - api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
@@ -210,6 +217,7 @@ BEDEUTUNG DER KONFIG-FELDER
 - rW.yaw: Bestrafung des Drehfehlers. rW.up: Belohnung für Aufrechtsein. rW.alive: Grundbelohnung pro Schritt. rW.energy: Bestrafung des Aktionsaufwands (höher = sparsamere, ruhigere Bewegung).
 - rW.smooth: Bestrafung des Aktions-Ruckelns (Änderung zwischen zwei Zyklen — ruhigere Gaits). rW.jlimit: Bestrafung nahe der Gelenk-Anschläge. rW.fall: einmaliger Malus beim Sturz (0 = aus).
 - expertR (MicroDuck, Soft-MoE): Experten-/Router-Belohnungen. expertR.on = 1 (an). expertR.routerBonus: Bonus, wenn der Router im passenden Zustand den passenden Experten wählt — z. B. liegender Roboter wählt „recover" (aufstehen). expertR.wrongPenalty: sanfte Strafe für klar falsche Router-Wahl. expertR.recover.rise: Belohnung für echten Aufricht-Fortschritt, expertR.recover.uprightOnce: Einmal-Bonus nach Sturz. expertR.stand.up/quiet: aufrecht + ruhig stehen. expertR.walk.speed: tatsächliche Fahrt. expertR.turn.rate: tatsächliche Drehung. expertR.domMin: Router-Gewicht ab dem ein Experte „dominiert".
+- rWx (KOMPLEXE TERME, v2.14.0): eigene Ziel-/Bedingungsterme OBEN DRAUF. patch.rWx = {on:1, terms:[…]}. Term-Arten: {kind:"goTo", x, y, tol} = dorthin bewegen; {kind:"stayNear", x, y, r} = im Umkreis bleiben; {kind:"heightBand", zMin, zMax} = Höhe im Band; {kind:"faceYaw", yaw} = Blickrichtung halten; {kind:"paceMax"|"paceMin", v} = Tempo-Deckel/-Mindest; {kind:"uprightMin", up} = Mindest-Aufrecht. Jeder Term mit w = Gewicht 0–5, optional hard:true = Abbruch bei grober Verletzung. Beispiel: „er soll zum Turm laufen“ → erst setWorld (Turm bauen), dann applyConfig mit rWx goTo auf die Turm-Koordinate.
 - Störungen (Domain Randomization) stellt der NUTZER im Trainings-Panel ein (Chips „Störungen"): Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose, Sensorrauschen, Schübe, Aktions-Verzögerung. Du kannst sie nicht direkt setzen — aber rW-Anteile auf die Störungen abstimmen.
 - cmd.vx: geforderte Zielgeschwindigkeiten [min,max] in m/s (schneller laufen = max erhöhen). cmd.yaw: geforderte Drehraten [min,max] in rad/s. Bei der Drohne: cmd.alt = geforderte Höhen [min,max] in m.
 - actSpan: Aktionsamplitude um die Ruhepose (Bewegungsumfang der Policy).
@@ -221,7 +229,7 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|runCode|writePlugin   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
@@ -229,6 +237,7 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 
 WANN WAS?
 - Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
+- AUSSEHEN („mach die Ente pink“, „Chrome-Ente“, „G1 Kopf rot“) → setAppearance (erst {list:true}). WELT („bau einen Turm“, „stell einen Ball hin“, „mach die Welt leer“) → setWorld. APP-DESIGN/Schnellstart-Buttons („Neon-Design“) → setUI. MicroDuck-Experten („nur 3 Experten“) → setMoE (Policy startet neu — vorher warnen!).
 - Fragen zu obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung → erst readDoc (ART-MCP), dann antworten/handeln.
 - „Zeig, was der Roboter sieht" → setCamera on:true (nur Anzeige).
 - Router-/Experten-Belohnungen anpassen („Router soll belohnt werden, wenn der liegende Roboter aufstehen wählt") → applyConfig mit expertR.routerBonus / expertR.recover.rise.
@@ -312,13 +321,15 @@ export function validatePatch(raw) {
     }
     if (Object.keys(o).length) out.expertR = o;
   }
+  // v2.14.0: KOMPLEXE BELohnungsterme (rewardx.js) — Ziel-/Bedingungs-Bibliothek
+  if (raw.rWx !== undefined) out.rWx = sanitizeRwx(raw.rWx);
   // Leere Unterobjekte entfernen
   for (const k of Object.keys(out)) if (!Object.keys(out[k]).length) delete out[k];
   return out;
 }
 
 // ── Tool-Aufruf validieren (Agent-Vollzugriff, hart geklemmt) ─
-const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera'];
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera', 'setAppearance', 'setWorld', 'setUI', 'setMoE'];
 export function validateToolCall(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const tool = typeof parsed.tool === 'string' ? parsed.tool.trim() : '';
@@ -363,6 +374,34 @@ export function validateToolCall(parsed) {
       fov: Number.isFinite(parseFloat(args.fov)) ? parseFloat(args.fov) : undefined,
       pitch: Number.isFinite(parseFloat(args.pitch)) ? parseFloat(args.pitch) : undefined,
     } };
+  }
+  // v2.14.0: AUSSEHEN — {list} | {reset} | {all:{color,shine,metal}, parts:[{part,color,shine,metal}]}
+  if (tool === 'setAppearance') {
+    return { tool, args: {
+      list: !!args.list,
+      reset: !!args.reset,
+      all: (args.all && typeof args.all === 'object') ? args.all : undefined,
+      parts: Array.isArray(args.parts) ? args.parts : undefined,
+    } };
+  }
+  // v2.14.0: WELT — {preset} | {objects:[…], replace:<bool>}
+  if (tool === 'setWorld') {
+    return { tool, args: {
+      preset: typeof args.preset === 'string' ? args.preset : undefined,
+      objects: Array.isArray(args.objects) ? args.objects : undefined,
+      replace: !!args.replace,
+    } };
+  }
+  // v2.14.0: UI — {theme, suggestions:[{label,q}]}
+  if (tool === 'setUI') {
+    return { tool, args: {
+      theme: args.theme === null ? null : (typeof args.theme === 'string' ? args.theme : undefined),
+      suggestions: Array.isArray(args.suggestions) ? args.suggestions : undefined,
+    } };
+  }
+  // v2.14.0: SOFT-MOE — {experts: 2–8}
+  if (tool === 'setMoE') {
+    return { tool, args: { experts: Number.isFinite(parseFloat(args.experts)) ? parseFloat(args.experts) : null } };
   }
   return { tool, args: {} }; // observe
 }

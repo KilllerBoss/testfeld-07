@@ -6,7 +6,7 @@
 
 import { initEngine, fetchModelIntoFS, removeModelFromFS, hasModelInFS, RobotSim, setModelProgress, mj, writeWorldFile } from './engine.js';
 import { ROBOT_ORDER, getRobot, HOVER_R } from './robots.js';
-import { buildWorldXML, WORLDS, getWorld } from './worlds.js';
+import { buildWorldXML, WORLDS, getWorld, sanitizeKiObjects } from './worlds.js';
 import { Renderer3D } from './render3d.js';
 import { Controls } from './controls.js';
 import { UI } from './ui.js';
@@ -25,8 +25,10 @@ import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveH
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
 import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnungen (KI-tunbar)
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
+import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
+import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 
-const VERSION = '2.13.0';
+const VERSION = '2.14.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -58,7 +60,7 @@ const S = {
   trainer: null,     // PPO
   mode: 'manuell',   // 'manuell' | 'policy'
   training: false,
-  speedMode: 'max',
+  speedMode: loadSpeed(), // v2.14.0: Slider 1–16 (Schritte/Frame) statt 1×/4×/16×/MAX
   acc: 0,            // Zeitakkumulator für Regelrate
   epReward: 0,       // laufende Episode
   episodes: 0,
@@ -88,6 +90,29 @@ try {
   if (sc && typeof sc === 'object') S.scenario = sc;
 } catch (e) { /* defekt → Standard */ }
 S.fallMode = localStorage.getItem('tr_fallMode') === 'stay' ? 'stay' : 'reset';
+
+// v2.14.0 — TRAININGS-TEMPO: Slider (1–16 Schritte/Frame). „MAX" (paralleles
+// Training) ist ENTFERNT — es hat auf Handys das UI blockiert. Slider-Wert
+// persistiert; alter 'max'-Bestand wird auf 4× abgebildet.
+function loadSpeed() {
+  try {
+    const v = parseInt(localStorage.getItem('tr_speed_v2') || '', 10);
+    if (Number.isFinite(v)) return String(Math.min(16, Math.max(1, v)));
+    if (localStorage.getItem('tr_speed_v1') === 'max') return '4'; // Migration
+  } catch (e) { /* egal */ }
+  return '2';
+}
+
+// v2.14.0 — KI-WELT: Objektliste für worldId 'ki' (setWorld-Tool)
+function loadKiObjects() {
+  try {
+    const o = JSON.parse(localStorage.getItem('tr_world_ki_v1') || 'null');
+    return (o && Array.isArray(o.objects)) ? o.objects : [];
+  } catch (e) { return []; }
+}
+function saveKiObjects(objects) {
+  try { localStorage.setItem('tr_world_ki_v1', JSON.stringify({ objects })); } catch (e) { /* voll */ }
+}
 
 // v2.7.0 — Welt-Auswahl (persistiert): Preset-Welten + Zufallsgenerator
 function loadWorldState() {
@@ -148,7 +173,8 @@ async function loadRobot(id, first = false) {
     else await fetchModelIntoFS('models/' + cfg.dir);
     // v2.7.0 — WELT GENERIEREN: prozedurale MJCF (skaliert auf die
     // Robotergröße), in den Modellordner schreiben und kompilieren.
-    const worldXml = buildWorldXML(cfg, S.world.id, S.world.seed);
+    // v2.14.0: worldId 'ki' = von Gemini gebaute Objektwelt (setWorld)
+    const worldXml = buildWorldXML(cfg, S.world.id, S.world.seed, S.world.id === 'ki' ? loadKiObjects() : null);
     writeWorldFile(cfg.dir, 'welt_live.xml', worldXml);
     const sim = new RobotSim(cfg, 'welt_live.xml');
     cfg.dr = drCfg(); // v2.11.0: DR-Spec je Roboter-Cfg (wirkt je Episode in task.reset)
@@ -204,6 +230,12 @@ async function loadRobot(id, first = false) {
 
     // Welt & Optik
     r3d.buildFromModel(sim);
+    // v2.14.0: Gespeichertes AUSSEHEN (Farben/Material) anwenden — nur Rendering
+    try {
+      const look = loadAppearance(id);
+      r3d.setAppearance(sim, look);
+      if (look && (look.all || look.parts.length)) log('Aussehen geladen (' + (look.parts.length ? look.parts.length + ' Teil(e)' : 'Grundfarbe') + ')');
+    } catch (e) { /* Look ist optional */ }
     r3d.camDist = cfg.dist; controls._camDist = cfg.dist;
     sim.reset();
     S.epReward = 0; S.episodes = 0;
@@ -410,6 +442,8 @@ function applyAIPatch(patch, opts = {}) {
   if (cfg) {
     if (kind === 'speed') {
       if (patch.rW) for (const [k, v] of Object.entries(patch.rW)) { cfg.rW[k] = v; touched.push('rW.' + k); }
+      // v2.14.0: KOMPLEXE TERME (Ziele/Bedingungen) — ersetzen die bisherigen
+      if (patch.rWx) { cfg.rWx = patch.rWx; touched.push('rWx(' + patch.rWx.terms.length + ' Terme, ' + (patch.rWx.on ? 'AN' : 'AUS') + ')'); }
       if (patch.cmd) {
         if (patch.cmd.vx) { cfg.cmd.vx = patch.cmd.vx.slice(); touched.push('cmd.vx=' + patch.cmd.vx.map(x => x.toFixed(2)).join('..')); }
         if (patch.cmd.yaw) { cfg.cmd.yaw = patch.cmd.yaw.slice(); touched.push('cmd.yaw'); }
@@ -459,7 +493,7 @@ function saveAICfg() {
     const cfg = S.sim ? S.sim.cfg : null;
     const kind = aiTaskKind();
     if (cfg && kind === 'speed') {
-      localStorage.setItem('tr_ai_speed_' + S.robotId, JSON.stringify({ rW: cfg.rW, cmd: cfg.cmd, done: cfg.done, actSpan: cfg.actSpan }));
+      localStorage.setItem('tr_ai_speed_' + S.robotId, JSON.stringify({ rW: cfg.rW, cmd: cfg.cmd, done: cfg.done, actSpan: cfg.actSpan, rWx: cfg.rWx || null }));
     }
     localStorage.setItem('tr_ai_motion', JSON.stringify(MOTION_R));
     localStorage.setItem('tr_ai_hover', JSON.stringify(HOVER_R));
@@ -478,6 +512,8 @@ function loadGlobalAICfg() {
     if (p) { const v = validatePatch({ ppo: p }); Object.assign(PPO_OVERRIDES, v.ppo || {}); }
     const er = JSON.parse(localStorage.getItem('tr_ai_expertR') || 'null'); // v2.13.0
     if (er) { const v = validatePatch({ expertR: er }); if (v.expertR) for (const [k, val] of Object.entries(v.expertR)) { if (typeof val === 'object' && typeof EXPERT_R[k] === 'object') Object.assign(EXPERT_R[k], val); else EXPERT_R[k] = val; } }
+    const me = parseInt(localStorage.getItem('tr_ai_moeE') || '', 10); // v2.14.0: Soft-MoE-Experten
+    if (Number.isFinite(me) && me >= 2 && me <= 8) PPO_OVERRIDES.moeE = me;
   } catch (e) { /* defekt → Standardwerte */ }
 }
 
@@ -488,11 +524,12 @@ function applySavedAICfg(id) {
   try {
     const raw = JSON.parse(localStorage.getItem('tr_ai_speed_' + id) || 'null');
     if (!raw) return;
-    const v = validatePatch({ rW: raw.rW, cmd: raw.cmd, done: raw.done, actSpan: raw.actSpan });
+    const v = validatePatch({ rW: raw.rW, cmd: raw.cmd, done: raw.done, actSpan: raw.actSpan, rWx: raw.rWx });
     if (v.rW) Object.assign(cfg.rW, v.rW);
     if (v.cmd) { if (v.cmd.vx) cfg.cmd.vx = v.cmd.vx; if (v.cmd.yaw) cfg.cmd.yaw = v.cmd.yaw; }
     if (v.done) Object.assign(cfg.done, v.done);
     if (v.actSpan !== undefined) cfg.actSpan = v.actSpan;
+    if (v.rWx) cfg.rWx = v.rWx; // v2.14.0: Zielterme restaurieren
   } catch (e) { /* defekt → Standardwerte */ }
 }
 
@@ -707,11 +744,15 @@ function observeState() {
     robot: S.robotId,
     mode: S.mode,
     training: S.training,
+    speedMode: S.speedMode + '× (Schritte/Frame)',
     speed: sim ? +sim.baseSpeed().toFixed(2) : null,
     height: sim ? +sim.baseHeight().toFixed(2) : null,
     upright: up !== null ? +up.toFixed(2) : null,
     episodes: S.episodes,
     policySaved: !!S.trainer,
+    moeExperts: (S.trainer && S.trainer.net && S.trainer.net.E) || (PPO_OVERRIDES.moeE || null),
+    rWx: (S.sim && S.sim.cfg && S.sim.cfg.rWx) || null,
+    look: (function () { try { const l = loadAppearance(S.robotId); return l ? { teile: l.parts.map(p => p.part), grund: !!l.all } : null; } catch (e) { return null; } })(),
     motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
     activeClip: S.motionClip ? S.motionClip.name : null,
     motionCtrl: S.task && S.task.kind === 'motion'
@@ -832,6 +873,88 @@ async function execTool(tool, args) {
       const fpvWrap = document.getElementById('fpvWrap');
       if (fpvWrap) fpvWrap.classList.toggle('hidden', !fpv.on);
       return 'FPV-Kamera: ' + (fpv.on ? 'AN' : 'AUS') + ' (FOV ' + fpv.fov + '°, Pitch ' + fpv.pitch + '°) — reine Anzeige, kein Policy-Eingang';
+    }
+    // ── v2.14.0: AUSSEHEN-EDITOR (Farben + Material je Teil, nur Rendering) ──
+    if (tool === 'setAppearance') {
+      if (args.list) {
+        return 'TEILE-KATALOG: ' + JSON.stringify(partCatalog(S.sim));
+      }
+      if (args.reset) {
+        clearAppearance(S.robotId);
+        r3d.setAppearance(S.sim, null);
+        return 'Aussehen zurückgesetzt (Original-Farben)';
+      }
+      const spec = sanitizeAppearance(args);
+      if (!spec.all && !spec.parts.length) {
+        return 'Fehler: keine gültigen Änderungen (color als "#rrggbb", shine/metal 0–1). Verfügbare Teile: ' + JSON.stringify(partCatalog(S.sim));
+      }
+      const saved = saveAppearance(S.robotId, spec);
+      const hits = r3d.setAppearance(S.sim, saved);
+      const unmatched = (saved.parts || []).filter(p => p._unmatched).map(p => p.part);
+      return 'Aussehen gesetzt: ' + hits.size + ' Geoms übernommen. Teile: [' + saved.parts.map(p => p.part).join(', ') + ']' +
+        (saved.all ? ' + Grundfarbe' : '') +
+        (unmatched.length ? ' — UNBEKANNT: ' + unmatched.join(', ') + ' (verfügbare Teile: ' + JSON.stringify(partCatalog(S.sim)) + ')' : '') +
+        ' — bleibt gespeichert. Physik unverändert.';
+    }
+    // ── v2.14.0: WELT-EDITOR (KI-Welt neu bauen / Objekte hinzufügen) ──
+    if (tool === 'setWorld') {
+      if (args.preset && WORLDS.some(w => w.id === args.preset)) {
+        await setWorld(args.preset, S.world.seed);
+        return 'Welt: Preset "' + args.preset + '" geladen (Training bleibt im Speicher erhalten)';
+      }
+      const current = loadKiObjects();
+      const incoming = sanitizeKiObjects(args.replace ? args.objects : [].concat(current, args.objects || []));
+      if (args.replace && !Array.isArray(args.objects)) return 'Fehler: replace=true braucht objects=[…]';
+      if (!incoming.objects.length) {
+        return 'Fehler: keine gültigen Objekte. ' + incoming.errors.join(' | ') + ' — Format: {type:"box"|"ball"|"cyl"|"ramp"|"tilt"|"gate"|"stair", x, y, w/l/h oder r, color:"#rrggbb", euler}';
+      }
+      saveKiObjects(incoming.objects);
+      await setWorld('ki', S.world.seed);
+      const w = getWorld('ki');
+      return 'KI-WELT gebaut: ' + incoming.objects.length + ' Objekte' + (incoming.errors.length ? ' | Verworfen: ' + incoming.errors.join(' | ') : '') + ' — Welt "' + w.name + '" aktiv. Training pausiert — bitte neu starten (Policy bleibt gespeichert).';
+    }
+    // ── v2.14.0: UI-ANPASSUNG (Design + KI-Vorschläge) ──
+    if (tool === 'setUI') {
+      const done = [];
+      const THEMES = ['standard', 'neon', 'amber', 'ice', 'wald'];
+      if (args.theme !== undefined) {
+        if (args.theme === null || args.theme === '' || args.theme === 'standard') {
+          document.body.dataset.theme = '';
+          try { localStorage.removeItem('tr_ui_theme'); } catch (e) { /* egal */ }
+          done.push('Design: Standard');
+        } else if (THEMES.includes(args.theme)) {
+          document.body.dataset.theme = args.theme;
+          try { localStorage.setItem('tr_ui_theme', args.theme); } catch (e) { /* egal */ }
+          done.push('Design: ' + args.theme);
+        } else return 'Fehler: unbekanntes Design "' + args.theme + '" (erlaubt: ' + THEMES.join(', ') + ')';
+      }
+      if (args.suggestions !== undefined) {
+        const sug = Array.isArray(args.suggestions) ? args.suggestions.slice(0, 6)
+          .filter(s => s && typeof s.label === 'string' && typeof s.q === 'string' && s.label.trim() && s.q.trim())
+          .map(s => ({ label: s.label.trim().slice(0, 20), q: s.q.trim().slice(0, 120) })) : [];
+        renderAISuggestions(sug);
+        try { localStorage.setItem('tr_ai_suggest_v1', JSON.stringify(sug)); } catch (e) { /* voll */ }
+        done.push(sug.length + ' Vorschlags-Chips');
+      }
+      return done.length ? 'UI angepasst: ' + done.join(', ') : 'Fehler: nichts angegeben (theme und/oder suggestions)';
+    }
+    // ── v2.14.0: SOFT-MOE-EXPERTEN (Anzahl 2–8, braucht Policy-Neustart) ──
+    if (tool === 'setMoE') {
+      if (S.robotId !== 'duck') return 'Fehler: Soft-MoE gibt es nur beim MicroDuck (aktiver Roboter: ' + S.robotId + ')';
+      const E = Math.round(parseFloat(args.experts));
+      if (!Number.isFinite(E) || E < 2 || E > 8) return 'Fehler: experts muss 2–8 sein';
+      stopTraining(true);
+      S.trainer = null;
+      PPO_OVERRIDES.moeE = E;
+      try { localStorage.setItem('tr_ai_moeE', String(E)); } catch (e) { /* voll */ }
+      ui.resetRewards();
+      S.episodes = 0;
+      if (S.sim) S.sim.reset();
+      ui.$('tStart').textContent = 'Training starten';
+      ui.$('tStart').classList.remove('btn-stop');
+      ui.trainStats({ reward: '–', episodes: 0, steps: 0, rate: 0 });
+      ui.drawChart();
+      return 'Soft-MoE auf ' + E + ' Experten gesetzt. Die alte Policy wurde verworfen (Architektur-Änderung) — starte das Training neu. Experten-Namen: ' + ['balance', 'walk', 'turn', 'recover'].slice(0, E).join(', ') + (E > 4 ? ' + ' + (E - 4) + ' weitere (experte5…)' : '');
     }
     if (tool === 'runCode') {
       if (!args.code || !args.code.trim()) return 'Fehler: code ist leer';
@@ -1013,6 +1136,32 @@ async function sendAIMessage(text) {
   }
 }
 
+// ── v2.14.0: KI-Vorschlags-Chips (von setUI austauschbar) ───
+function renderAISuggestions(sug) {
+  const wrap = document.querySelector('.ai-suggest');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  for (const s of (sug && sug.length ? sug : [])) {
+    const b = document.createElement('button');
+    b.className = 'ai-sug';
+    b.dataset.q = s.q;
+    b.textContent = s.label;
+    b.addEventListener('click', () => { controls.buzz(); sendAIMessage(s.q); });
+    wrap.appendChild(b);
+  }
+}
+
+function restoreAISuggestions() {
+  try {
+    const sug = JSON.parse(localStorage.getItem('tr_ai_suggest_v1') || 'null');
+    if (Array.isArray(sug) && sug.length) renderAISuggestions(sug);
+  } catch (e) { /* egal */ }
+  try {
+    const th = localStorage.getItem('tr_ui_theme');
+    if (th && th !== 'standard') document.body.dataset.theme = th;
+  } catch (e) { /* egal */ }
+}
+
 async function aiOnOpen() {
   // Verlauf anzeigen (ohne Apply-Buttons)
   const logEl = document.getElementById('aiLog');
@@ -1020,6 +1169,7 @@ async function aiOnOpen() {
   for (const m of S.aiHistory.slice(-10)) aiPush(m.role === 'model' ? 'bot' : 'user', m.text);
   if (!S.aiHistory.length) aiPush('bot', 'Sag mir, was dein Roboter lernen soll — ich stelle Belohnungen, Zieltempo und Training dafür ein. Ich kann auch EIGENE MODS/PLUGINS für die App schreiben (Werkstatt unten) und den Roboter direkt steuern. (z. B. „schreibe ein Plugin, das ihn alle 10 s schubst“)');
   renderPluginList(); // Werkstatt-Stand auffrischen (v2.8.0)
+  restoreAISuggestions(); // v2.14.0: eigene Chips + Design
   updateAIKeyStatus();
   await updateAIModelLabel();
 }
@@ -1082,6 +1232,7 @@ function parallelEnvCfg() {
   if (cfg.done) env.done = { ...cfg.done };
   if (cfg.cmd) env.cmd = JSON.parse(JSON.stringify(cfg.cmd));
   if (cfg.actSpan !== undefined) env.actSpan = cfg.actSpan;
+  if (cfg.rWx) env.rWx = sanitizeRwx(cfg.rWx); // v2.14.0: Zielterme an Worker
   if (S.task && S.task.kind === 'motion') env.motionR = { ...MOTION_R };
   if (S.task && S.task.kind === 'recovery') env.recoveryR = { ...RECOVERY_R };
   env.fallMode = S.fallMode;
@@ -1114,19 +1265,24 @@ function startTraining() {
   if (!S.sim || !S.task) return;
   if (!S.trainer) {
     const moe = !!S.sim.cfg.moe;
-    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES }, 1337 + ROBOT_ORDER.indexOf(S.robotId), moe ? SoftMoEPolicy : undefined);
+    // v2.14.0: moeE (KI-tunbar über setMoE) steuert die Soft-MoE-Expertenanzahl
+    const moeE = Math.max(2, Math.min(8, Math.round(PPO_OVERRIDES.moeE || 4)));
+    S.trainer = new PPO(S.task.obsDim, S.task.actDim, { ...PPO_OVERRIDES, policyOpts: { E: moeE } }, 1337 + ROBOT_ORDER.indexOf(S.robotId), moe ? SoftMoEPolicy : undefined);
     if (moe) {
-      log(`PPO initialisiert: SOFT-MOE — obs ${S.task.obsDim} → Encoder 128/128 → 4 Soft-Experts (Balance/Walk/Turn/Recovery) → Decoder → act ${S.task.actDim} · ${S.trainer.net.paramCount()} Parameter`, 'warn');
+      // v2.14.0: Experten-Namen an E anpassen (skill.js ist längenagnostisch)
+      if (S.task.setRouting) {
+        const base = ['balance', 'walk', 'turn', 'recover'];
+        S.task.expertNames = Array.from({ length: S.trainer.net.E }, (_, i) => base[i] || ('experte' + (i + 1)));
+      }
+      log(`PPO initialisiert: SOFT-MOE — obs ${S.task.obsDim} → Encoder 128/128 → ${S.trainer.net.E} Soft-Experts → Decoder → act ${S.task.actDim} · ${S.trainer.net.paramCount()} Parameter`, 'warn');
       log('MicroDuck: automatisches Curriculum Level ' + (S.task.level || 1) + ' (Störungs-Chips gelten hier nicht; Styles: nur neutral aktiv)', 'warn');
     } else {
       log(`PPO initialisiert: obs ${S.task.obsDim} → 64×64 → act ${S.task.actDim} · CPU`, 'warn');
     }
   }
-  // v2.10.0: Tempo „MAX“ = PARALLELES TRAINING — mehrere MuJoCo-WASM-
-  // Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro
-  // Runde für das gemeinsame PPO-Update gemischt. Voraussetzungen: kein
-  // Plugin aktiv (Plugins wirken nur im Haupt-Thread-Rollout) und
-  // Worker-Support. Sonst: Inline-Training wie bisher.
+  // v2.10.0: PARALLEL-Training startete bei Tempo „MAX“ — v2.14.0 ist MAX
+  // ENTFERNT (blockierte Handys); der Parallel-Code bleibt für den expliziten
+  // Weg über runCode/debug erhalten, der UI-Slider nutzt NUR Inline-Training.
   if (S.speedMode === 'max' && !S.parallel && !pluginsActive()) {
     try {
       const par = new ParallelTrainer({
@@ -1140,7 +1296,7 @@ function startTraining() {
       par.start({
         robotId: S.robotId,
         taskSpec: workerTaskSpec(),
-        worldXml: buildWorldXML(S.sim.cfg, S.world.id, S.world.seed),
+        worldXml: buildWorldXML(S.sim.cfg, S.world.id, S.world.seed, S.world.id === 'ki' ? loadKiObjects() : null),
         hyper: { T: Math.round(Math.min(2048, Math.max(128, S.trainer.h.T || 512))) },
         seed: 1337 + ROBOT_ORDER.indexOf(S.robotId),
         n,
@@ -1258,7 +1414,7 @@ function trainCtrlStep() {
     const lastObs = task.observe(sim, S.obsBuf);
     const lastVal = trainer.act(S.obsBuf, true).value;
     const m = trainer.finishAndUpdate(lastVal);
-    m._lastMetrics = m;
+    trainer._lastMetrics = m; // v2.14.0: Live-Kurven (Loss-Verlauf)
   }
 }
 
@@ -1393,6 +1549,7 @@ async function boot() {
     log('KI-Trainer: Gemini (nur auf Anfrage online)');
     initAITransport();
     loadGlobalAICfg();
+    restoreAISuggestions(); // v2.14.0: Design + eigene Chips sofort
     S.aiHistory = loadHistory();
     // KI-Agent-Zustand: Buttons, Joystick-Map, Schubs-Stärke
     S.aiButtons = loadButtons();
@@ -1475,12 +1632,12 @@ async function boot() {
       if (sp) ui.splash(`Lade Modelldateien (${done}/${total}) …`, 0.45 + 0.5 * (done / total));
     });
 
-    ui.splash('Kompiliere Unitree A1 …', 0.6);
-    await loadRobot('a1', true);
+    ui.splash('Kompiliere Unitree G1 …', 0.6);
+    await loadRobot('g1', true);
 
     ui.splash('Bereit.', 1);
     setTimeout(() => { ui.splashDone(); }, 250);
-    log('Bereit. Sechs Roboter · ' + WORLDS.length + ' Welten · Sensorik aktiv — gleiche Steuerung.', 'ok');
+    log('Bereit. Drei Roboter (G1 · MicroDuck · Drohne) · ' + WORLDS.length + ' Welten · Sensorik aktiv — gleiche Steuerung.', 'ok');
     requestAnimationFrame(loop);
   } catch (err) {
     console.error(err);
@@ -1513,15 +1670,16 @@ function loop(now) {
       // damit die Kerne für den Boot frei sind (sonst Timeout-Gefahr).
       S.stepsPerSec = 0;
     } else {
-      // Inline (Fallback / Tempo 1×–16×): Zeitbudget pro Frame
-      const budget = S.speedMode === 'max' ? 12e3 : 0; // µs
+      // Inline (Slider 1–16 Schritte/Frame, v2.14.0): fester Schritte-Soll
+      // pro Bild — das UI bleibt reagierfähig, PPO-Updates kommen seltener
+      // als bei „MAX“ (deshalb hängt nichts mehr).
+      const nSteps = Math.min(16, Math.max(1, parseInt(S.speedMode, 10) || 1));
       const t0 = performance.now();
-      const nSteps = S.speedMode === 'max' ? 1e9 : (S.speedMode === '16' ? 16 : S.speedMode === '4' ? 4 : 1);
       let done = 0;
       while (done < nSteps) {
         trainCtrlStep();
         done++;
-        if (budget && performance.now() - t0 > budget) break;
+        if (performance.now() - t0 > 34) break; // Not-Aus: max ~2 Frames
       }
       const el = performance.now() - t0;
       S._stepTimes.push({ n: done, ms: el });
@@ -1601,14 +1759,20 @@ function loop(now) {
         steps: S.trainer ? S.trainer.stepCount : 0,
         rate: S.training ? S.stepsPerSec : 0,
       });      // v2.12.0 Soft-MoE-Dashboard (MicroDuck): Routing-Bars + Level
+      // v2.14.0: E-flexibel — Bars über der Expertenanzahl ausblenden
       const duckRow = document.getElementById('duckRow');
       if (duckRow) duckRow.style.display = (S.robotId === 'duck') ? 'flex' : 'none';
       if (duckRow && S.robotId === 'duck' && S.task && S.task.kind === 'speed' && S.task.moe) {
+        const E = (S.trainer && S.trainer.net && S.trainer.net.E) || 4;
+        const barIds = ['routeBal', 'routeWalk', 'routeTurn', 'routeRec'];
+        for (let i = 0; i < barIds.length; i++) {
+          const el = document.getElementById(barIds[i]);
+          if (el) el.parentElement.style.visibility = (i < E) ? 'visible' : 'hidden';
+        }
         const w = (S.trainer && S.trainer.lastW) ? S.trainer.lastW : null;
         if (w) {
-          const ids = ['routeBal', 'routeWalk', 'routeTurn', 'routeRec'];
-          for (let i = 0; i < 4; i++) {
-            const el = document.getElementById(ids[i]);
+          for (let i = 0; i < Math.min(4, w.length); i++) {
+            const el = document.getElementById(barIds[i]);
             if (el) el.style.width = Math.max(3, Math.min(100, w[i] * 100)) + '%';
           }
         }
@@ -1620,7 +1784,13 @@ function loop(now) {
   chartT += dt;
   if (chartT > 0.35) {
     chartT = 0;
-    if (!ui.$('trainSheet').classList.contains('hidden')) ui.drawChart();
+    if (!ui.$('trainSheet').classList.contains('hidden')) {
+      ui.drawChart();
+      // v2.14.0 LIVE-KURVEN: Schritte/s + Policy-Loss als zweite Kurve
+      const lm = S.trainer ? S.trainer._lastMetrics : null;
+      ui.pushRate(S.training ? S.stepsPerSec : 0, lm ? lm.piLoss : null);
+      ui.drawRateChart();
+    }
   }
 }
 
@@ -1725,15 +1895,18 @@ function wireUI() {
     ui.drawChart();
     log('Training zurückgesetzt (Netz neu, Norm neu)', 'warn');
   });
-  // v2.7.0 FIX: Nur Chips mit data-speed sind Tempo-Chips — die Steuerungs-
-  // Chips (Keine/Joystick/Buttons) teilen die Klasse .speed-chip und setzten
-  // versehentlich speedMode=undefined → Training lief nur 1 Schritt/Frame!
-  for (const b of document.querySelectorAll('.speed-chip[data-speed]')) {
-    b.addEventListener('click', () => {
-      for (const x of document.querySelectorAll('.speed-chip[data-speed]')) x.classList.remove('active');
-      b.classList.add('active');
-      S.speedMode = b.dataset.speed;
-      controls.buzz();
+  // v2.14.0: Tempo-SLIDER (1–16 Schritte/Frame) ersetzt die Chips 1×/4×/16×/MAX
+  // („MAX“ = Parallel-Training hat auf Handys das UI blockiert — deshalb raus).
+  const speedSlider = document.getElementById('speedSlider');
+  const speedVal = document.getElementById('speedVal');
+  if (speedSlider) {
+    speedSlider.value = String(Math.min(16, Math.max(1, parseInt(S.speedMode, 10) || 2)));
+    if (speedVal) speedVal.textContent = speedSlider.value + '×';
+    speedSlider.addEventListener('input', () => {
+      const v = String(Math.min(16, Math.max(1, parseInt(speedSlider.value, 10) || 1)));
+      S.speedMode = v;
+      if (speedVal) speedVal.textContent = v + '×';
+      try { localStorage.setItem('tr_speed_v2', v); } catch (e) { /* voll */ }
     });
   }
   document.getElementById('tSave').addEventListener('click', () => { controls.buzz(); savePolicy(S.robotId); });
@@ -1748,8 +1921,19 @@ function wireUI() {
   });
   document.getElementById('tExport').addEventListener('click', () => {
     if (!S.trainer) { ui.toast('Keine Policy vorhanden', true); return; }
-    const json = JSON.stringify(S.trainer.toJSON());
-    const name = 'trainrobot_policy_' + S.robotId + '.json';
+    // v2.14.0: Export MIT Metadaten (Roboter, Aufgabe, Version) — Import
+    // akzeptiert weiterhin auch das alte Naked-Format.
+    const json = JSON.stringify({
+      meta: {
+        app: 'trainrobot', version: VERSION,
+        robot: S.robotId, task: S.task ? S.task.kind : null, scenario: scenarioOf(S.robotId),
+        obsDim: S.trainer.obsDim, actDim: S.trainer.actDim,
+        stepCount: S.trainer.stepCount, saved: new Date().toISOString(),
+        moeE: S.trainer.net && S.trainer.net.E ? S.trainer.net.E : undefined,
+      },
+      policy: S.trainer.toJSON(),
+    });
+    const name = 'trainrobot_policy_' + S.robotId + '_' + S.trainer.stepCount + 'steps.json';
     // APK: über Java-Bridge in den Download-Ordner schreiben
     // (blob-Anchor-Downloads sind in WebViews unzuverlässig)
     if (window.TrainrobotBridge && window.TrainrobotBridge.saveFile) {
@@ -1776,12 +1960,15 @@ function wireUI() {
     if (!f) return;
     try {
       const data = JSON.parse(await f.text());
-      const p = PPO.fromAny(data); // v2.12.0: MLP + Soft-MoE
-      if (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim) throw new Error('Policy passt nicht zu diesem Roboter');
+      // v2.14.0: Wrapper {meta, policy} ODER klassisches Naked-Format
+      const wrapped = data && data.policy && data.meta ? data.policy : data;
+      const p = PPO.fromAny(wrapped); // v2.12.0: MLP + Soft-MoE
+      if (p.obsDim !== S.task.obsDim || p.actDim !== S.task.actDim) throw new Error('Policy passt nicht zu diesem Roboter/Aufgabe');
       S.trainer = p;
       ui.policyAvailable(true);
+      const meta = data && data.meta ? ' (von ' + (data.meta.robot || '?') + ', ' + (data.meta.stepCount || 0) + ' Schritte)' : '';
       ui.toast('Import ok (' + p.stepCount + ' Schritte)');
-      log('Policy importiert: ' + f.name, 'ok');
+      log('Policy importiert: ' + f.name + meta, 'ok');
     } catch (err) {
       ui.toast('Import fehlgeschlagen: ' + err.message, true);
     }

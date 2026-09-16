@@ -10,6 +10,9 @@ export class UI {
     this.episodeRewards = [];   // roh
     this.episodeEma = [];       // geglättet
     this._ema = null;
+    // v2.14.0: LIVE-KURVEN — Schritte/s + Policy-Loss (zweites Chart)
+    this.rateHist = [];
+    this.lossHist = [];
   }
 
   init() {
@@ -140,7 +143,69 @@ export class UI {
     const cap = 480;
     if (this.episodeRewards.length > cap) { this.episodeRewards.shift(); this.episodeEma.shift(); }
   }
-  resetRewards() { this.episodeRewards = []; this.episodeEma = []; this._ema = null; }
+  resetRewards() { this.episodeRewards = []; this.episodeEma = []; this._ema = null; this.rateHist = []; this.lossHist = []; }
+
+  // v2.14.0: Tempo (Schritte/s) + Policy-Loss je Sample (~0,35 s) aufnehmen
+  pushRate(rate, loss) {
+    this.rateHist.push(rate || 0);
+    this.lossHist.push(Number.isFinite(loss) ? loss : null);
+    const cap = 240;
+    if (this.rateHist.length > cap) this.rateHist.shift();
+    if (this.lossHist.length > cap) this.lossHist.shift();
+  }
+
+  drawRateChart() {
+    const c = this.$('rateChart');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(148,180,220,0.10)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    const R = this.rateHist, L = this.lossHist;
+    if (R.length < 2) {
+      ctx.fillStyle = 'rgba(147,164,184,0.5)';
+      ctx.font = '12px monospace';
+      ctx.fillText('Tempo & Loss — wartet aufs Training …', 14, H / 2 + 4);
+      return;
+    }
+    // Tempo (amber, gefüllte Fläche)
+    let hiR = 1;
+    for (const v of R) if (v > hiR) hiR = v;
+    const X = (i) => 8 + (i / (R.length - 1)) * (W - 16);
+    const YR = (v) => H - 6 - (v / hiR) * (H - 20);
+    ctx.beginPath();
+    ctx.moveTo(X(0), H - 6);
+    for (let i = 0; i < R.length; i++) ctx.lineTo(X(i), YR(R[i]));
+    ctx.lineTo(X(R.length - 1), H - 6);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,157,33,0.20)'; ctx.fill();
+    ctx.strokeStyle = '#ff9d21'; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    for (let i = 0; i < R.length; i++) { const x = X(i), y = YR(R[i]); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+    ctx.stroke();
+    // Loss (cyan, normalisiert)
+    const Ls = L.filter(v => v !== null && Number.isFinite(v));
+    if (Ls.length >= 2) {
+      let lo = Infinity, hi = -Infinity;
+      for (const v of Ls) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      if (hi - lo < 1e-6) { hi += 0.001; lo -= 0.001; }
+      ctx.strokeStyle = '#38d6e0'; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < L.length; i++) {
+        const v = L[i];
+        if (v === null || !Number.isFinite(v)) continue;
+        const y = H - 6 - ((v - lo) / (hi - lo)) * (H - 20);
+        if (!started) { ctx.moveTo(X(i), y); started = true; } else ctx.lineTo(X(i), y);
+      }
+      ctx.stroke();
+    }
+    // Legende
+    ctx.fillStyle = 'rgba(147,164,184,0.75)'; ctx.font = '10px monospace';
+    ctx.fillText('Tempo ' + Math.round(R[R.length - 1]) + ' /s', 10, 12);
+    if (Ls.length) ctx.fillText('Loss ' + Ls[Ls.length - 1].toFixed(3), W - 84, 12);
+  }
 
   drawChart() {
     const c = this.$('rewardChart');

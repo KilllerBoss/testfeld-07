@@ -33,6 +33,7 @@ import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost } from './plugins.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
+import { sanitizeRwx } from './rewardx.js'; // v2.14.0
 
 const CTRL_DT = 0.02;
 const _noop = () => {};
@@ -121,6 +122,7 @@ function applyEnv(env) {
   if (env.done && sim.cfg.done) Object.assign(sim.cfg.done, env.done);
   if (env.cmd && sim.cfg.cmd) Object.assign(sim.cfg.cmd, env.cmd);
   if (env.actSpan !== undefined) sim.cfg.actSpan = env.actSpan;
+  if (env.rWx) sim.cfg.rWx = sanitizeRwx(env.rWx); // v2.14.0: Zielterme
   if (env.motionR) Object.assign(MOTION_R, env.motionR);
   if (env.recoveryR) Object.assign(RECOVERY_R, env.recoveryR);
   if (env.fallMode) envState.fallMode = env.fallMode;

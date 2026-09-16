@@ -11,6 +11,7 @@
 import { clamp } from './math.js';
 import { sanitizeDr, applyDrModel, applyDrStart, drSensor, drPushDue, drDelayedAct } from './dr.js';
 import { leggedSkillState, expertRouterReward } from './skill.js'; // v2.13.0: Experten-/Router-Belohnungen
+import { rewardTerms, resetTermState } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme (rWx)
 
 // Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
 export const HOVER_R = {
@@ -210,6 +211,7 @@ export function makeTrackTask(cfg) {
       this._curAct = new Float32Array(cfg.nu);
       this._nextPush = null; this._dlyBuf = null; // v2.11.0 DR-Zustand neu
       this._rng = (rng && typeof rng.next === 'function') ? rng : null; // Rausch-Quelle
+      resetTermState(this); // v2.14.0: rWx-Term-State (goTo-Distanzen) neu
       // Referenzpose = Keyframe-Reglerwerte (home/stand)
       for (let a = 0; a < cfg.nu; a++) this._ref[a] = sim.actCenter[a] * 0 + (sim.keyCtrl ? sim.keyCtrl[a] : 0);
       // ── v2.11.0 DOMAIN RANDOMIZATION — jede Episode andere Physik ──
@@ -335,6 +337,12 @@ export function makeTrackTask(cfg) {
       // fall_penalty: einmaliger Malus NUR beim echten Sturz (nicht bei
       // Höhen-Maximum) — hilft der Wertfunktion, Stürze vorherzusehen.
       if (done && cfg.rW.fall > 0 && (upz < cfg.done.upMin || this._bp[2] < cfg.done.zMin)) r -= cfg.rW.fall;
+      // ── v2.14.0 KOMPLEXE TERME (rWx, Gemini setzbar): Ziele + Bedingungen ──
+      if (cfg.rWx && cfg.rWx.on) {
+        const tx = rewardTerms(sim, cfg.rWx.terms, this._rwxState);
+        r += tx.r;
+        if (tx.done) done = true;
+      }
       return { r, done };
     },
     actionToCtrl(sim, act) {
@@ -579,6 +587,7 @@ export function makeDuckMoeTask(cfg) {
       this.stepsLeft = 0;
       this._pushContacts(sim);
       this._nextSeg(rng, true);
+      resetTermState(this); // v2.14.0: rWx-Term-State neu
     },
 
     // ── Kommando-Scheduler (§7 TRANSITIONS) ──
@@ -836,13 +845,22 @@ export function makeDuckMoeTask(cfg) {
           }
         }
       }
+      // ── v2.14.0 KOMPLEXE TERME (rWx, Gemini setzbar): Ziele + Bedingungen ──
+      if (cfg.rWx && cfg.rWx.on) {
+        const tx = rewardTerms(sim, cfg.rWx.terms, this._rwxState);
+        r += tx.r;
+        if (tx.done && !this._recoverMode) done = true; // hard-Term bricht ab (außer im Aufsteh-Fenster)
+      }
       return { r, done };
     },
 
     // Routing-Gewichte der Policy (main/worker je Schritt, §5)
+    // v2.14.0: E-flexibel — die Expertenanzahl ist KI-tunbar (setMoE 2–8)
     setRouting(w4) {
+      if (!w4) return;
+      if (w4.length !== this._routeW.length) this._routeW = new Float64Array(w4.length);
       let pen = 0;
-      for (let i = 0; i < 4; i++) { const d = w4[i] - this._routeW[i]; pen += d * d; }
+      for (let i = 0; i < this._routeW.length; i++) { const d = w4[i] - this._routeW[i]; pen += d * d; }
       this._routePen = pen;
       this._routeW.set(w4);
     },
@@ -859,56 +877,10 @@ export function makeDuckMoeTask(cfg) {
   };
 }
 
-// ── Die vier Roboter ────────────────────────────────────────
+// ── Die drei Roboter (v2.14.0: MicroDuck + G1 + Drohne) ────────────────────────────────────────
 // Alle gleichberechtigt (ungebunden) — dieselbe Stick-Steuerung.
 
 const ROBOTS = {
-  a1: {
-    id: 'a1', dir: 'unitree_a1', scene: 'testfeld.xml', modelXml: 'a1.xml', keyName: 'home', keyIndex: 0,
-    name: 'UNITREE A1', sub: 'Quadruped · 12 Akt.', longName: 'Unitree A1 (Menagerie)',
-    color: '#ff9d21', dist: 2.4, zTarget: 0.30,
-    speedMax: 1.2, yawMax: 1.6, timestep: 0.002,
-    nActuators: 12,
-    footBodies: ['FR_calf', 'FL_calf', 'RR_calf', 'RL_calf'],
-    gaitFreq: 1.3,
-    legs: [
-      { hip: 'FR_hip', thigh: 'FR_thigh', calf: 'FR_calf', phase: Math.PI, lr: +1, side: +1 },
-      { hip: 'FL_hip', thigh: 'FL_thigh', calf: 'FL_calf', phase: 0, lr: -1, side: -1 },
-      { hip: 'RR_hip', thigh: 'RR_thigh', calf: 'RR_calf', phase: 0, lr: +1, side: +1 },
-      { hip: 'RL_hip', thigh: 'RL_thigh', calf: 'RL_calf', phase: Math.PI, lr: -1, side: -1 },
-    ],
-    trot: { thigh0: 0.9, calf0: -1.8, hip0: 0, f0: 1.1, fv: 1.3, fy: 0.8, aSwing: 0.35, aLift: 0.42, aTurn: 0.2, aHip: 0.1, turnBias: 0.12 },
-    gait: makeTrot,
-    task: makeTrackTask,
-    nu: 12, actSpan: 0.55, jointResidual: 1.0,
-    cmd: { vx: [-0.6, 1.0], yaw: [-1.2, 1.2] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
-    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
-    done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
-  },
-  spot: {
-    id: 'spot', dir: 'boston_dynamics_spot', scene: 'testfeld.xml', modelXml: 'spot.xml', keyName: 'home', keyIndex: 0,
-    name: 'SPOT', sub: 'Quadruped · 12 Akt.', longName: 'Boston Dynamics Spot (Menagerie)',
-    color: '#ffd21e', dist: 2.8, zTarget: 0.46,
-    speedMax: 1.0, yawMax: 1.4, timestep: 0.002,
-    nActuators: 12,
-    footBodies: ['fr_lleg', 'fl_lleg', 'hr_lleg', 'hl_lleg'],
-    gaitFreq: 1.3,
-    legs: [
-      { hip: 'fr_hx', thigh: 'fr_hy', calf: 'fr_kn', phase: Math.PI, lr: +1, side: +1 },
-      { hip: 'fl_hx', thigh: 'fl_hy', calf: 'fl_kn', phase: 0, lr: -1, side: -1 },
-      { hip: 'hr_hx', thigh: 'hr_hy', calf: 'hr_kn', phase: 0, lr: +1, side: +1 },
-      { hip: 'hl_hx', thigh: 'hl_hy', calf: 'hl_kn', phase: Math.PI, lr: -1, side: -1 },
-    ],
-    trot: { thigh0: 1.04, calf0: -1.8, hip0: 0, f0: 1.1, fv: 1.3, fy: 0.8, aSwing: 0.33, aLift: 0.4, aTurn: 0.18, aHip: 0.08, turnBias: 0.1 },
-    gait: makeTrot,
-    task: makeTrackTask,
-    nu: 12, actSpan: 0.5, jointResidual: 1.0,
-    cmd: { vx: [-0.5, 0.9], yaw: [-1.0, 1.0] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
-    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
-    done: { upMin: 0.45, zMin: 0.2, zMax: 1.8 },
-  },
   g1: {
     id: 'g1', dir: 'unitree_g1', scene: 'testfeld.xml', modelXml: 'g1.xml', keyName: 'stand', keyIndex: 0,
     name: 'UNITREE G1', sub: 'Humanoid · 29 Akt.', longName: 'Unitree G1 (Menagerie)',
@@ -945,29 +917,6 @@ const ROBOTS = {
     nu: 4, actSpan: 4.0, jointResidual: 1.0,
     cmd: { vx: [-1.0, 1.5], alt: [0.4, 2.2] },
   },
-  go2: {
-    id: 'go2', dir: 'unitree_go2', scene: 'testfeld.xml', modelXml: 'go2.xml', keyName: 'home', keyIndex: 0,
-    name: 'UNITREE GO2', sub: 'Quadruped · 12 Akt.', longName: 'Unitree Go2 (Menagerie)',
-    color: '#7bd3ff', dist: 2.6, zTarget: 0.32,
-    speedMax: 1.4, yawMax: 1.6, timestep: 0.002,
-    nActuators: 12,
-    footBodies: ['FR_calf', 'FL_calf', 'RR_calf', 'RL_calf'],
-    gaitFreq: 1.3,
-    legs: [
-      { hip: 'FR_hip', thigh: 'FR_thigh', calf: 'FR_calf', phase: Math.PI, lr: +1, side: +1 },
-      { hip: 'FL_hip', thigh: 'FL_thigh', calf: 'FL_calf', phase: 0, lr: -1, side: -1 },
-      { hip: 'RR_hip', thigh: 'RR_thigh', calf: 'RR_calf', phase: 0, lr: +1, side: +1 },
-      { hip: 'RL_hip', thigh: 'RL_thigh', calf: 'RL_calf', phase: Math.PI, lr: -1, side: -1 },
-    ],
-    trot: { thigh0: 0.9, calf0: -1.8, hip0: 0, f0: 1.2, fv: 1.3, fy: 0.8, aSwing: 0.35, aLift: 0.42, aTurn: 0.2, aHip: 0.1, turnBias: 0.12 },
-    gait: makeTrot,
-    task: makeTrackTask,
-    nu: 12, actSpan: 0.55, jointResidual: 1.0,
-    cmd: { vx: [-0.6, 1.1], yaw: [-1.2, 1.2] },
-    rW: { vel: 0.25, yaw: 0.06, up: 0.1, alive: 0.05, energy: 0.00015, smooth: 0.01, jlimit: 0.05, fall: 0 },
-    dr: null, // Domain Randomization-Spec (main.js setzt je Stufe — v2.11.0)
-    done: { upMin: 0.45, zMin: 0.12, zMax: 1.5 },
-  },
   duck: {
     id: 'duck', dir: 'pollen_microduck', scene: 'testfeld.xml', modelXml: 'microduck.xml', keyName: 'STAND', keyIndex: 1,
     name: 'MICRODUCK', sub: 'Biped · 14 Akt. · Soft-MoE', longName: 'Microduck (Pollen Robotics · Hugging Face)',
@@ -994,5 +943,5 @@ const ROBOTS = {
   },
 };
 
-export const ROBOT_ORDER = ['a1', 'spot', 'g1', 'go2', 'duck', 'x2'];
+export const ROBOT_ORDER = ['g1', 'duck', 'x2'];
 export function getRobot(id) { return ROBOTS[id]; }

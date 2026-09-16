@@ -51,7 +51,7 @@
     </div>
   </header>
 
-  <!-- Roboter-Auswahl: dynamisch aus robots.js befüllt (v2.7.0, 6 Modelle) -->
+  <!-- Roboter-Auswahl: dynamisch aus robots.js befüllt (v2.14.0: 3 Modelle) -->
   <nav id="robotBar" class="ui hidden" aria-label="Roboter"></nav>
 
   <!-- Modus-Umschalter -->
@@ -131,17 +131,17 @@
     </div>
 
     <canvas id="rewardChart" width="640" height="200"></canvas>
+    <canvas id="rateChart" width="640" height="90"></canvas>
 
     <div class="train-actions">
       <button id="tStart" class="btn btn-solid">Training starten</button>
       <button id="tReset" class="btn">Zurücksetzen</button>
     </div>
     <div class="train-actions">
-      <div class="speed-group" role="group" aria-label="Tempo">
-        <button class="speed-chip" data-speed="1">1×</button>
-        <button class="speed-chip" data-speed="4">4×</button>
-        <button class="speed-chip" data-speed="16">16×</button>
-        <button class="speed-chip active" data-speed="max">MAX</button>
+      <div class="speed-slider-row" role="group" aria-label="Trainings-Tempo">
+        <span class="glb-ctrl-label">Tempo</span>
+        <input type="range" id="speedSlider" class="speed-slider" min="1" max="16" step="1" value="2" autocomplete="off">
+        <span id="speedVal" class="stat-k">2×</span>
       </div>
     </div>
     <div class="train-actions" id="duckRow" style="display:none;">
@@ -206,7 +206,7 @@
       <div id="glbList" class="glb-list"></div>
       <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Buttons“ = Joystick PLUS eigene Aktionstasten (z. B. Kicken, Springen): im Training feuern sie zufällig, im POLICY-Modus löst eine Taste die Aktion aus — die Tastenleiste erscheint unten. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
     </div>
-    <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). Tempo „MAX“ = PARALLEL: mehrere MuJoCo-WASM-Instanzen in Web Workern (je CPU-Kern eine), Erfahrungen werden pro Runde für das gemeinsame PPO-Update gemischt. Plugins laufen inline. PPO · 64×64 MLP · CPU only</div>
+    <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>
 
   <!-- KI-Trainer (Gemini) -->
