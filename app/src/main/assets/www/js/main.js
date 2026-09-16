@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, RT_ALG } from './retarget.js';
+import { retargetToG1, retargetToRobot, RT_ALG } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -28,7 +28,7 @@ import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 
-const VERSION = '2.14.1';
+const VERSION = '2.15.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -50,7 +50,7 @@ let wakeLock = null; // v2.13.0: Bildschirm wachhalten im Training
 
 const S = {
   robotId: null,
-  motionClip: null,   // aktive GLB-Referenz (nur G1)
+  motionClip: null,   // aktive GLB-Referenz (v2.15.0: je Roboter retargetet)
   srcScene: null,     // Original-3D-Modell des Lehrer-Ghosts (In-Memory)
   clips: [],          // gespeicherte Clips (IndexedDB)
   ghostOn: true,
@@ -74,6 +74,7 @@ const S = {
   aiBusy: false,
   pushStrength: 3.0, // Schubs-Stärke (Δv in m/s — v2.5.0, KI-tunbar, persistiert)
   animTraining: true, // GLB-Animation im Training an/aus (aus = nur Gleichgewicht)
+  refMode: 'frei',    // v2.15.0: 'frei' (Bahn ablaufen) | 'stelle' (fix) | 'folgt' (am Roboter)
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
   world: loadWorldState(), // v2.7.0: aktuelle Welt {id, seed} — prozedural generiert
@@ -193,11 +194,37 @@ async function loadRobot(id, first = false) {
     // Gang-/Flugregler
     S.gait = cfg.gait(cfg);
     if (cfg.drone && S.gait.init) { S.gait.init(sim); sim.flightCtl = S.gait; }
+    // v2.15.0: Aktive GLB-Referenz auf den NEUEN Roboter ÜBERTRAGEN —
+    // derselbe Clip wird je Roboter frisch retargetet (G1: Beine+Arme,
+    // MicroDuck: Beine, X2: nur Flugbahn) und bleibt aktiv. Passt es
+    // nicht (keine GLB-Daten), wird die Referenz deaktiviert.
+    if (S.activeRecId && S.motionClip && S.motionClip.robotId !== id) {
+      const rec = S.clips.find(r => r.id === S.activeRecId);
+      let carried = false;
+      if (rec && rec.glb) {
+        try {
+          const c2 = new GlbClip(rec.glb);
+          c2.useAnimation(rec.animIndex || 0);
+          const motion = retargetToRobot(c2, sim, (m) => log('  ' + m));
+          rec.motionByRobot = rec.motionByRobot || {};
+          rec.motionByRobot[id] = packMotion(motion);
+          if (id === 'g1') rec.motion = rec.motionByRobot[id];
+          putClip(rec).catch(() => {});
+          S.motionClip = unpackMotion(rec.motionByRobot[id]);
+          log('GLB-Referenz „' + rec.name + '\u201c auf ' + (cfg.name || id) + ' übertragen: ' + motion.n + ' Frames × ' + motion.nu + ' Kanäle', 'ok');
+          carried = true;
+        } catch (e) {
+          log('GLB-Referenz passt nicht zu ' + (cfg.name || id) + ' (' + e.message + ')', 'warn');
+        }
+      }
+      if (!carried) { S.motionClip = null; S.activeRecId = null; }
+    }
     // Trainingsaufgabe (v2.8.0): GLB-Tracking → Recovery-Szenario → Standard
     S.task = makeTaskFor(id, cfg, sim);
     if (S.task.kind === 'motion') {
       S.task = makeMotionTask(cfg, S.motionClip, sim);
       S.task.animOn = S.animTraining;
+      S.task.refMode = S.refMode;
       // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0, 'btn' v2.6.0)
       const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
       if (rec && (rec.ctrl === 'joy' || rec.ctrl === 'btn')) S.task.ctrlMode = rec.ctrl;
@@ -211,7 +238,9 @@ async function loadRobot(id, first = false) {
     pluginHost.fireReset(); // v2.9.0: Plugins (z. B. Kopfstand) dürfen die Startpose formen
     S.obsBuf = new Float32Array(S.task.obsDim);
     S.actBuf = new Float32Array(S.task.actDim);
-    ui.$('glbSection').classList.toggle('hidden', id !== 'g1');
+    // v2.15.0: GLB-Sektion gilt für ALLE Roboter (je Ziel andere Tiefe:
+    // G1/MicroDuck voll, Drohne nur Flugbahn)
+    ui.$('glbSection').classList.remove('hidden');
     // KI-Anpassungen für diese Aufgabe wieder aufschalten (Belohnungen etc.)
     applySavedAICfg(id);
 
@@ -328,12 +357,17 @@ const DEFAULT_PPO = { T: 1024, gamma: 0.99, lam: 0.95, clip: 0.2, epochs: 4, mb:
 // ── Szenarien (v2.8.0): Gehen / Aufstehen / Abwurf ──────────
 function scenarioOf(id) { return S.scenario[id] || 'gehen'; }
 
-/** Aufgabenauswahl: GLB-Tracking (G1+Clip) → Recovery-Szenario → Standard. */
+/** Aufgabenauswahl: GLB-Tracking (Roboter mit Clip) → Recovery-Szenario → Standard. */
 function makeTaskFor(id, cfg, sim) {
-  if (id === 'g1' && S.motionClip) return makeMotionTask(cfg, S.motionClip, sim);
+  // v2.15.0: GLB-Motion-Tracking für ALLE Roboter mit Gelenken — der Clip
+  // muss zum Roboter passen (nu-Vergleich; eine G1-Variante am MicroDuck
+  // wäre Müll). Die Drohne bekommt stattdessen den Lehrpfad injiziert.
+  if (S.motionClip && !cfg.drone && S.motionClip.nu === cfg.nu) return makeMotionTask(cfg, S.motionClip, sim);
   const scn = scenarioOf(id);
   if (!cfg.drone && (scn === 'getup' || scn === 'drop')) return makeRecoveryTask(cfg, scn);
-  return cfg.task(cfg);
+  const t = cfg.task(cfg);
+  if (cfg.drone && S.motionClip && S.motionClip.nu === cfg.nu && t.setPath) t.setPath(S.motionClip, S.refMode);
+  return t;
 }
 
 /** Szenario wechseln (Chips „Aufgabe" im Trainings-Panel). */
@@ -1331,7 +1365,9 @@ function startTraining() {
   ui.$('tStart').classList.add('btn-stop');
   const tInfo = S.task.kind === 'recovery'
     ? (S.task.mode === 'getup' ? 'Aufstehen — Start liegend' : 'Abwurf — Start in der Luft')
-    : S.task.kind === 'motion' ? 'GLB-Motion-Tracking' : 'Tempo-Tracking';
+    : S.task.kind === 'motion' ? 'GLB-Motion-Tracking'
+    : S.task.pathOn ? 'GLB-Lehrpfad (Drohne)'
+    : 'Tempo-Tracking';
   log('Training läuft (' + tInfo + ') — rollout + update auf der CPU', 'ok');
 }
 
@@ -1438,6 +1474,13 @@ function applyGait(dtCtrl) {
     cmd = controls.command(cfg);
   }
   const map = {};
+  // v2.15.0: GLB-Lehrpfad der Drohne — Autopilot folgt der Animationsbahn;
+  // der Stick hat Vorrang (Eingriff = manuell übernehmen).
+  const task0 = S.task;
+  if (task0 && task0.pathOn && Math.hypot(controls.stickX, controls.stickY) < 0.25) {
+    task0.updateCmd(dtCtrl, sim);
+    cmd = { vx: task0.cmd.vx, yaw: task0.cmd.yaw, alt: task0.cmd.alt, climb: 0 };
+  }
   S.gait.step(sim, dtCtrl, cmd, map);
   for (const name in map) {
     const a = sim.actByName[name];
@@ -1452,6 +1495,9 @@ function policyCtrlStep() {
   const sim = S.sim, task = S.task, trainer = S.trainer;
   if (!trainer) return;
   const substeps = Math.max(1, Math.round((S.sim.cfg.ctrlDt || CTRL_DT) / sim.timestep));
+  // v2.15.0: Drohnen-Lehrpfad — die cmd-Kanäle (vx/alt/yaw) folgen der Bahn,
+  // die Policy fliegt sie (obs enthält cmd.vx/alt)
+  if (task && task.pathOn) task.updateCmd(S.sim.cfg.ctrlDt || CTRL_DT, sim);
   // Joystick/Buttons-Steuerung (v2.5.0): bei ctrlMode 'joy'/'btn' liefert
   // der Stick die Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy
   // im Training mit Zufalls-Werten kennengelernt hat.
@@ -1559,6 +1605,12 @@ async function boot() {
     S.animTraining = localStorage.getItem('tr_animOn') !== '0';
     const animTog = document.getElementById('animTrainToggle');
     if (animTog) animTog.checked = S.animTraining;
+    // v2.15.0: Referenz-Modus persistiert (frei/stelle/folgt)
+    try {
+      const rm = localStorage.getItem('tr_refmode_v1');
+      if (rm === 'stelle' || rm === 'frei' || rm === 'folgt') S.refMode = rm;
+    } catch (e) { /* egal */ }
+    syncRefChips();
     // Werkstatt (v2.8.0): Beispiele einspeisen, API aufschalten, aktivierte
     // Plugins starten (Hooks feuern erst mit der Hauptschleife)
     pluginHost.setApiFactory(pluginApiFor);
@@ -1709,31 +1761,50 @@ function loop(now) {
   }
 
   r3d.updateFrame(S.sim, dt);
-  // Geist: Referenzpose mitlaufen lassen — Lehrer (Original) + G1-Geist
-  // folgen BEIDE der Root-Bahn (der Lehrer läuft wirklich durchs Feld,
-  // der Roboter lernt, ihm zu folgen — nicht „auf der Stelle" zu gehen)
-  if (S.ghostOn && S.task && S.task.kind === 'motion' && (r3d.ghostGroups || r3d.sourceGhost)) {
-    const clip = S.task.clip;
-    const fr = Math.floor(S.task.phase * clip.n) % clip.n;
-    // Loop-Rebase: Referenz läuft nach jedem Durchlauf WEITER (kein Teleport)
-    const rr = clip.root && clip.yaw && S.task.refRoot ? S.task.refRoot(S.task.phase, [0, 0, 0]) : null;
-    if (r3d.sourceGhost) {
-      r3d.updateSourceGhost(fr);
-      if (rr) r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
-    }
-    if (r3d.ghostGroups) {
-      const gh = S.sim.makeGhostData();
-      // baseQ: Lehrer-Nick/Roll (z. B. Zombie-Beuge) — der G1-Geist nimmt die
-      // ABSOLUTE Lehrer-Pose an statt aufrecht daneben zu stehen
-      const bq = clip.baseQ ? clip.baseQ.subarray(4 * fr, 4 * fr + 4) : null;
-      if (rr) {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2], bq);
-      } else if (clip.root && clip.yaw) {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], clip.root[2 * fr], clip.root[2 * fr + 1], clip.yaw[fr], bq);
-      } else {
-        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], 0, 0, 0, bq);
+  // Geist: Referenzpose mitlaufen lassen — Lehrer (Original) + Roboter-Geist.
+  // v2.15.0: der ANKER hängt vom Referenz-Modus ab (ghostAnchor):
+  //   frei   → Lehrer wandert auf der Clip-Bahn durchs Feld (mit Loop-Offset)
+  //   stelle → Lehrer steht FIX am Startpunkt (Bewegung auf der Stelle)
+  //   folgt  → Lehrer hängt am LEBENDEN Roboter (Bewegung relativ zu ihm)
+  // Die Drohne (pathOn) zeigt nur den Lehrer (humanoid auf der Bahn).
+  if (S.ghostOn && S.task && (S.task.kind === 'motion' || S.task.pathOn) && (r3d.ghostGroups || r3d.sourceGhost)) {
+    const clip = S.task.kind === 'motion' ? S.task.clip : S.task.pathClip;
+    if (clip) {
+      const isMotion = S.task.kind === 'motion';
+      const phase = isMotion ? S.task.phase : (clip.fps ? (S.task._animT / clip.fps) / clip.n : 0);
+      const fr = Math.floor(phase * clip.n) % clip.n;
+      // LEBENDE Roboter-Basis (Anker für 'folgt')
+      const rp = [0, 0, 0];
+      S.sim.basePos(rp);
+      const rq = [0, 0, 0, 0];
+      S.sim.baseQuat(rq);
+      const ryaw = Math.atan2(2 * (rq[0] * rq[3] + rq[1] * rq[2]), 1 - 2 * (rq[2] * rq[2] + rq[3] * rq[3]));
+      const rr = S.task.ghostAnchor ? S.task.ghostAnchor(phase, rp, ryaw, [0, 0, 0]) : (clip.root && clip.yaw && S.task.refRoot ? S.task.refRoot(S.task.phase, [0, 0, 0]) : null);
+      if (r3d.sourceGhost) {
+        r3d.updateSourceGhost(fr);
+        const mode = isMotion ? S.task.refMode : S.task.refMode;
+        if (mode === 'frei' && isMotion && rr && clip.root) {
+          r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
+          r3d.sourceGhost.visible = true;
+        } else if (rr && mode !== 'stelle') {
+          // 'folgt' (Roboter/Drohne): Geist hängt am Roboter (srcPos = relativ)
+          r3d.setSourceGhostLoop(0, 0);
+          r3d.sourceGhost.position.set(rr[0], rr[1], 0);
+          r3d.sourceGhost.visible = true;
+        } else if (mode === 'stelle') {
+          // Auf der Stelle: Original-Mesh aus — seine srcPos laufen sonst die
+          // Wegroute ab. Der Roboter-Geist (setGhostPose) zeigt die Pose korrekt.
+          r3d.sourceGhost.visible = false;
+        }
       }
-      r3d.updateGhost(gh);
+      if (r3d.ghostGroups && isMotion && rr) {
+        const gh = S.sim.makeGhostData();
+        // baseQ: Lehrer-Nick/Roll (z. B. Zombie-Beuge) — der Geist nimmt die
+        // ABSOLUTE Lehrer-Pose an statt aufrecht daneben zu stehen
+        const bq = clip.baseQ ? clip.baseQ.subarray(4 * fr, 4 * fr + 4) : null;
+        S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2], bq);
+        r3d.updateGhost(gh);
+      }
     }
   }
   r3d.render();
@@ -2000,6 +2071,38 @@ function wireUI() {
       ui.toast(mode === 'joy' ? 'Steuerung: Joystick' : mode === 'btn' ? 'Steuerung: Buttons' : 'Steuerung: keine');
     });
   }
+  // ── v2.15.0: REFERENZ-MODUS (STELLE / FREI / FOLGT) ─────
+  for (const b of document.querySelectorAll('.ref-chip')) {
+    b.addEventListener('click', () => {
+      controls.buzz();
+      const m = b.dataset.ref;
+      if (!['stelle', 'frei', 'folgt'].includes(m)) return;
+      S.refMode = m;
+      try { localStorage.setItem('tr_refmode_v1', m); } catch (e) { /* voll */ }
+      if (S.task && S.task.kind === 'motion') S.task.refMode = m;
+      if (S.task && S.task.pathOn) S.task.refMode = m;
+      syncRefChips();
+      log('Referenz-Modus: ' + ({ stelle: 'AN EINER STELLE — Referenz steht fix, Bewegung auf der Stelle', frei: 'FREI — der Lehrer wandert auf seiner Bahn durchs Feld', folgt: 'AM ROBOTER GEANKERT — der Lehrer hängt am Roboter, kein Bahn-Zwang' })[m], 'ok');
+      ui.toast('Referenz: ' + ({ stelle: 'An einer Stelle', frei: 'Frei', folgt: 'Folgt dem Roboter' })[m]);
+    });
+  }
+  // ── v2.15.0: ANIMATION LÖSEN — Policy WEITERTRAINIEREN ohne GLB ──
+  document.getElementById('glbUnbind').addEventListener('click', () => {
+    controls.buzz();
+    if (!S.task || S.task.kind !== 'motion') { ui.toast('Nur mit aktiver GLB-Referenz möglich', true); return; }
+    stopTraining(true);
+    S.animTraining = false;
+    try { localStorage.setItem('tr_animOn', '0'); } catch (e) { /* voll */ }
+    S.task.animOn = false;
+    S.refMode = 'folgt';
+    try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
+    S.task.refMode = 'folgt';
+    const at = document.getElementById('animTrainToggle');
+    if (at) at.checked = false;
+    syncRefChips();
+    log('ANIMATION GELÖST — die Policy trainiert WEITER (Gleichgewicht + Freibewegung; Joystick/Buttons führen weiter). Netz, Norm-Statistik und Policy-Slot bleiben erhalten — sie ist nicht mehr an die Animation gebunden.', 'ok');
+    ui.toast('Animation gelöst — trainiert ohne weiter', false, 3000);
+  });
   // ── Clip-Buttons hinzufügen (v2.6.0) ────────────────────
   const addClipBtn = document.getElementById('glbBtnAdd');
   const nameInp = document.getElementById('glbBtnName');
@@ -2051,19 +2154,20 @@ function wireUI() {
 // ── GLB: Import, Liste, Aktivierung, BC ────────────────────
 // Universell: GLB von beliebiger Quelle (Mixamo, Cartwheel, Unity,
 // Unreal, VRM …) — das Retargeting erkennt das Skelett automatisch
-// (Alias-Tabelle + Heuristik). Import aus JEDEM Roboter-View möglich:
-// nötigenfalls wechselt die App zum G1 (humanoides Ziel). ALLE
-// Animationen einer Datei werden importiert (Hart-Limit 8).
+// (Alias-Tabelle + Heuristik). v2.15.0: Import aus JEDEM Roboter-View —
+// das Ziel ist der AKTUELLE Roboter (G1: Beine+Arme, MicroDuck: Beine,
+// Drohne: Flugbahn); andere Roboter werden on-demand nachretargetet.
+// ALLE Animationen einer Datei werden importiert (Hart-Limit 8).
 async function onGlbFiles(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   if (!files.length) return;
-  if (S.robotId !== 'g1' || !S.sim) {
-    ui.toast('Wechsle zum G1 — humanoides Retargeting', false, 2600);
-    log('GLB-Import: automatischer Wechsel zum G1 (humanoides Ziel)', 'warn');
-    await loadRobot('g1');
-    if (S.robotId !== 'g1' || !S.sim) { ui.toast('G1 konnte nicht geladen werden', true); return; }
-  }
+  if (!S.sim) { ui.toast('Roboter lädt noch — kurz warten', true); return; }
+  // v2.15.0: Import für den AKTUELLEN Roboter (G1: Beine+Arme+Taille,
+  // MicroDuck: Beine, X2: Flugbahn). Weitere Roboter werden beim Aktivieren
+  // bzw. beim Roboterwechsel on-demand nachretargetet.
+  const target = S.robotId;
+  log('GLB-Import für ' + (S.sim.cfg.name || target) + ' — Profil: ' + (target === 'g1' ? 'humanoid komplett' : target === 'duck' ? 'Beine (Kopf bleibt STAND)' : 'nur Flugbahn'));
   for (const f of files) {
     ui.$('glbStatus').textContent = 'Importiere ' + f.name + ' …';
     try {
@@ -2072,25 +2176,27 @@ async function onGlbFiles(e) {
       const anims = clip.animations;
       log('GLB „' + f.name + '": ' + anims.length + ' Animation(en) — ' + anims.map(a => a.name + ' (' + a.duration.toFixed(1) + 's)').join(', '));
       const list = anims.slice(0, 8);
-      let last = null;
+      let last = null, lastMotion = null;
       for (const an of list) {
         if (an.index > 0) clip.useAnimation(an.index);
-        const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+        const motion = retargetToRobot(clip, S.sim, (m) => log('  ' + m));
+        const packed = packMotion(motion);
         const rec = {
           id: 'glb_' + Date.now() + '_' + an.index + '_' + Math.floor(Math.random() * 1e4),
           name: f.name.replace(/\.glb$/i, '') + (anims.length > 1 ? ' · ' + an.name : ''),
           size: buf.byteLength,
           glb: an.index === 0 ? buf : null,
           animIndex: an.index,
-          motion: packMotion(motion),
+          motion: target === 'g1' ? packed : undefined, // Legacy-Feld (G1)
+          motionByRobot: { [target]: packed }, // v2.15.0: je Roboter eine Variante
         };
         await putClip(rec);
-        log('Retargeting „' + rec.name + '": ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke, ' + motion.duration.toFixed(1) + 's — Boden angepasst', 'ok');
-        last = rec;
+        log('Retargeting „' + rec.name + '": ' + motion.n + ' Frames × ' + motion.nu + ' Kanäle, ' + motion.duration.toFixed(1) + 's — Boden angepasst', 'ok');
+        last = rec; lastMotion = motion;
         await new Promise(r => setTimeout(r, 0)); // UI-Frame
       }
       await refreshClipList();
-      ui.$('glbStatus').textContent = (list.length > 1 ? list.length + ' Animationen importiert — letzte: ' : '') + (last ? last.name + ': ' + last.motion.duration.toFixed(1) + 's @ ' + last.motion.fps + ' fps bereit' : 'bereit');
+      ui.$('glbStatus').textContent = (list.length > 1 ? list.length + ' Animationen importiert — letzte: ' : '') + (last ? last.name + ': ' + lastMotion.duration.toFixed(1) + 's @ ' + lastMotion.fps + ' fps bereit' : 'bereit');
       ui.toast('GLB importiert: ' + (last ? last.name : f.name));
     } catch (err) {
       console.error(err);
@@ -2146,6 +2252,11 @@ async function runBC() {
 function syncCtrlChips() {
   const mode = S.task && S.task.kind === 'motion' ? S.task.ctrlMode : 'none';
   for (const x of document.querySelectorAll('.ctrl-chip')) x.classList.toggle('active', x.dataset.ctrl === mode);
+}
+
+// v2.15.0: Referenz-Modus-Chips syncen
+function syncRefChips() {
+  for (const x of document.querySelectorAll('.ref-chip')) x.classList.toggle('active', x.dataset.ref === S.refMode);
 }
 
 // Eingabezeile für neue Buttons nur im 'btn'-Modus zeigen (v2.6.0)
@@ -2217,7 +2328,9 @@ async function refreshClipList() {
     name.textContent = rec.name;
     const meta = document.createElement('span');
     meta.className = 'glb-clip-meta';
-    const m = rec.motion;
+    // v2.15.0: neue Records tragen motionByRobot (je Roboter) — rec.motion
+    // kann fehlen. Für die Meta-Zeile genügt irgendeine Variante.
+    const m = rec.motion || (rec.motionByRobot ? Object.values(rec.motionByRobot)[0] : null) || { duration: 0, n: 0 };
     meta.textContent = (m.duration || 0).toFixed(1) + 's · ' + m.n + 'F';
     // v2.7.0: Policy-Badge — zeigt, dass dieser Clip ein gespeichertes
     // Training hat (bleibt auch nach Deaktivieren/Neustart erhalten)
@@ -2256,50 +2369,58 @@ async function refreshClipList() {
 }
 
 async function activateClip(rec) {
-  if (S.robotId !== 'g1' || !S.sim) { ui.toast('Nur mit dem G1 möglich', true); return; }
+  if (!S.sim) { ui.toast('Roboter lädt noch — kurz warten', true); return; }
   stopTraining(true);
   S.activeRecId = rec.id; // aktiver Clip-Datensatz (für Steuerungs-Wahl, v2.5.0)
-  S.motionClip = unpackMotion(rec.motion);
-  // v2.6.1 — AUTO-RE-RETARGET bei altem Algorithmus-Bestand: Das retargetete
-  // Ergebnis liegt PERSISTIERT im Record (IndexedDB) — ein Bein-Fix im Code
-  // erreichte bestehende Clips deshalb NIE („es ist wie davor", obwohl die
-  // v2.6.0 längst den Valgus-Fix hatte). Ist der gespeicherte Stand älter
-  // als RT_ALG UND die GLB-Datei liegt noch im Record, wird beim Aktivieren
-  // EINMAL neu retargetet und der Record aktualisiert (ctrl/buttons/glb
-  // bleiben erhalten — nur motion wird ausgetauscht).
-  if ((rec.motion.alg || 0) < RT_ALG && rec.glb) {
+  // v2.15.0: JE-ROBOTER-VARIANTE wählen — fehlt sie (Clip wurde für einen
+  // anderen Roboter importiert), wird sie JETZT aus der GLB-Datei retargetet.
+  let packed = rec.motionByRobot ? rec.motionByRobot[S.robotId] : null;
+  if (!packed && S.robotId === 'g1' && rec.motion) packed = rec.motion; // Legacy
+  if (!packed && rec.glb) {
+    try {
+      const c2 = new GlbClip(rec.glb);
+      c2.useAnimation(rec.animIndex || 0);
+      const motion = retargetToRobot(c2, S.sim, (m) => log('  ' + m));
+      packed = packMotion(motion);
+      rec.motionByRobot = rec.motionByRobot || {};
+      rec.motionByRobot[S.robotId] = packed;
+      if (S.robotId === 'g1') rec.motion = packed;
+      await putClip(rec); // gleiche id → überschreibt nur motion
+      log('Erstmalig für ' + (S.sim.cfg.name || S.robotId) + ' retargetet: ' + motion.n + ' Frames × ' + motion.nu + ' Kanäle', 'ok');
+    } catch (e) {
+      log('Retargeting fehlgeschlagen: ' + e.message, 'err');
+      ui.toast('GLB passt nicht zu diesem Roboter: ' + e.message, true, 3500);
+      S.activeRecId = null;
+      return;
+    }
+  }
+  if (!packed) { ui.toast('Keine Animationsdaten für diesen Roboter', true); S.activeRecId = null; return; }
+  S.motionClip = unpackMotion(packed);
+  // v2.6.1 — AUTO-RE-RETARGET bei altem Algorithmus-Bestand (je Roboter):
+  // Ist der gespeicherte Stand älter als RT_ALG UND die GLB-Datei liegt
+  // noch im Record, wird für DIESEN Roboter einmal neu retargetet.
+  if ((S.motionClip.alg || 0) < RT_ALG && rec.glb) {
     try {
       log('Bein-Algorithmus ist neuer als beim Import — „' + rec.name + '\u201c wird neu retargetet …');
       const c2 = new GlbClip(rec.glb);
       c2.useAnimation(rec.animIndex || 0);
-      const motion = retargetToG1(c2, S.sim, (m) => log('  ' + m));
-      rec.motion = packMotion(motion);
-      await putClip(rec); // gleiche id → überschreibt nur motion
-      S.motionClip = unpackMotion(rec.motion);
-      log('Neu retargetet: ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke — Beine im natürlichen G1-Stand (v' + VERSION + ')', 'ok');
+      const motion = retargetToRobot(c2, S.sim, (m) => log('  ' + m));
+      const packed2 = packMotion(motion);
+      rec.motionByRobot = rec.motionByRobot || {};
+      rec.motionByRobot[S.robotId] = packed2;
+      if (S.robotId === 'g1') rec.motion = packed2;
+      await putClip(rec);
+      S.motionClip = unpackMotion(packed2);
+      log('Neu retargetet: ' + motion.n + ' Frames × ' + motion.nu + ' Kanäle — Stand natürlich (v' + VERSION + ')', 'ok');
     } catch (e) {
       log('Neu-Retargeting fehlgeschlagen — alter Bestand bleibt (' + (e && e.message ? e.message : e) + ')', 'warn');
     }
   }
-  S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
-  // Steuerung + Animation-Status je Clip (v2.5.0, Buttons v2.6.0)
-  S.task.ctrlMode = rec.ctrl === 'joy' || rec.ctrl === 'btn' ? rec.ctrl : 'none';
-  S.task.buttons = Array.isArray(rec.buttons) ? rec.buttons.slice(0, 4) : [];
-  S.task.animOn = S.animTraining;
-  syncCtrlChips();
-  syncBtnRow();
-  renderClipButtons();
-  S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
-  pluginHost.fireReset(); // v2.9.0
-  S.obsBuf = new Float32Array(S.task.obsDim);
-  S.actBuf = new Float32Array(S.task.actDim);
-  S.trainer = loadPolicy(S.robotId);
-  ui.policyAvailable(!!S.trainer);
-  ui.$('stMode').textContent = 'GLB';
   // Lehrer-Ghost: Skelett-Figur sofort, Original-Mesh sobald gebaut
+  // (Drohne: nur Lehrer — der Dronen-Geist wäre statisch/irreführend)
   S.srcScene = null;
   if (S.ghostOn) {
-    r3d.buildGhost(S.sim);
+    if (!S.sim.cfg.drone) r3d.buildGhost(S.sim);
     r3d.buildSourceGhost(S.motionClip, null);
   }
   if (rec.glb) {
@@ -2314,7 +2435,42 @@ async function activateClip(rec) {
       }
     } catch (e) { log('Original-Modell nicht darstellbar — Skelett-Lehrer aktiv (' + e.message + ')'); }
   }
-  const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Roboter folgt dem wandernden Lehrer)' : '';
+  const modeInfo = ' · Referenz: ' + (({ stelle: 'AN EINER STELLE', folgt: 'AM ROBOTER GEANKERT', frei: 'FREI (Bahn ablaufen)' })[S.refMode] || 'FREI');
+  if (S.sim.cfg.drone) {
+    // ── v2.15.0: DROHNE — der Clip wird zum FLUGWEG (keine Gelenk-Pose);
+    // der Hover-Task folgt der Bahn (Autopilot) via cmd.vx/alt/yaw.
+    S.task = makeTaskFor(S.robotId, S.sim.cfg, S.sim);
+    S.task.reset(new RNG(4242), S.sim);
+    pluginHost.fireReset();
+    S.obsBuf = new Float32Array(S.task.obsDim);
+    S.actBuf = new Float32Array(S.task.actDim);
+    S.trainer = loadPolicy(S.robotId);
+    ui.policyAvailable(!!S.trainer);
+    ui.$('stMode').textContent = 'PFAD';
+    const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (Drohne fliegt die Route des Lehrers)' : '';
+    log('GLB-Lehrpfad aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + rootInfo + modeInfo + ' — Aufgabe: Pfadverfolgung', 'ok');
+    ui.toast('Lehrpfad aktiv: ' + rec.name);
+    refreshClipList().catch(() => {});
+    return;
+  }
+  S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
+  // Steuerung + Animation-Status je Clip (v2.5.0, Buttons v2.6.0)
+  S.task.ctrlMode = rec.ctrl === 'joy' || rec.ctrl === 'btn' ? rec.ctrl : 'none';
+  S.task.buttons = Array.isArray(rec.buttons) ? rec.buttons.slice(0, 4) : [];
+  S.task.animOn = S.animTraining;
+  S.task.refMode = S.refMode;
+  syncCtrlChips();
+  syncBtnRow();
+  renderClipButtons();
+  syncRefChips();
+  S.task.reset(new RNG(4242), S.sim); // platziert die Basis AUF der Bahn
+  pluginHost.fireReset(); // v2.9.0
+  S.obsBuf = new Float32Array(S.task.obsDim);
+  S.actBuf = new Float32Array(S.task.actDim);
+  S.trainer = loadPolicy(S.robotId);
+  ui.policyAvailable(!!S.trainer);
+  ui.$('stMode').textContent = 'GLB';
+  const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (' + ({ stelle: 'Referenz steht FIX am Startpunkt', folgt: 'Lehrer hängt am Roboter — kein Bahn-Zwang', frei: 'Roboter folgt dem wandernden Lehrer' })[S.refMode] + ')' : '';
   const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
   const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
     : S.task.ctrlMode === 'btn' ? ' · Steuerung: BUTTONS (Training würfelt Fahrbefehle + Trigger, POLICY-Modus: Stick + Tasten unten)'
@@ -2380,6 +2536,29 @@ Object.defineProperty(window, '__trainrobot', {
     get switching() { return S.switching; },
     doPush: (dir, strength) => doPush(dir, strength),
     setTrigger: (i) => S.task && S.task.kind === 'motion' ? S.task.setTrigger(i) : false,
+    // v2.15.0: Referenz-Modi + Animation-lösen (Tests + KI)
+    get refMode() { return S.refMode; },
+    get motionInfo() {
+      const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+      return {
+        active: !!S.activeRecId,
+        clipRobot: S.motionClip ? S.motionClip.robotId : null,
+        nu: S.motionClip ? S.motionClip.nu : null,
+        variants: rec && rec.motionByRobot ? Object.keys(rec.motionByRobot) : [],
+        taskKind: S.task ? S.task.kind : null,
+        animOn: S.task && S.task.animOn !== undefined ? S.task.animOn : null,
+      };
+    },
+    setRefMode: (m) => {
+      if (!['stelle', 'frei', 'folgt'].includes(m)) return false;
+      S.refMode = m;
+      try { localStorage.setItem('tr_refmode_v1', m); } catch (e) { /* voll */ }
+      if (S.task) { if (S.task.kind === 'motion') S.task.refMode = m; if (S.task.pathOn) S.task.refMode = m; }
+      syncRefChips();
+      return true;
+    },
+    unbindAnimation: () => { const b = document.getElementById('glbUnbind'); if (b) b.click(); return S.animTraining === false; },
+    refreshClips: () => refreshClipList().catch(() => {}),
     // v2.8.0: Szenarien, Sturz-Modus, Werkstatt
     get scenario() { return scenarioOf(S.robotId); },
     get fallMode() { return S.fallMode; },

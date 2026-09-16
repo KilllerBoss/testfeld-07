@@ -3,7 +3,7 @@
 Regelrate 50 Hz (CTRL_DT 0.02 s), Physik-Substeps je nach Modell (dt 0.002 → 10 Substeps).
 Action = tanh-begrenzte Abweichung von der Keyframe-Pose: ctrl = ref + actSpan·tanh(a·J).
 
-## Unitree G1 (Humanoid, 29 Akt.) — auch GLB-Motion-Tracking
+## Unitree G1 (Humanoid, 29 Akt.) — auch GLB-Motion-Tracking (v2.15.0: ALLE Roboter)
 - obs 70: q−ref(29) | dq(29) | up(3) | yawRate(1) | vFwd(1) | vLat(1) | cmd(2) | lastAct(29) | gyro(3) | projGrav(3) | height(1) | Füße(2) | Uhr(2) — mit GLB-Clip: Motion-Task (anderer Aufbau, cmd/Trigger-Kanäle)
 - done: upz < 0.6, zMin 0.35; cmd vx −0.3..0.5, yaw ±0.8
 

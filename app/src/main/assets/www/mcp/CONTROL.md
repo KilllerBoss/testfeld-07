@@ -32,3 +32,8 @@
 ## APP-LOOK (setUI, v2.14.0)
 - theme: standard | neon | amber | ice | wald (Akzentfarben der ganzen App).
 - suggestions: [{label ≤20 Zeichen, q ≤120}] ersetzt die Vorschlags-Chips im KI-Chat (max 6) — nimm KONKRETE Kurzbefehle.
+
+## GLB-Referenz (v2.15.0) — Modi und Animation lösen
+- Referenz-Modus (Chips im GLB-Bereich): STELLE = Referenz fix am Startpunkt (Bewegung auf der Stelle) · FREI = Lehrer wandert auf seiner Bahn (Loop) · FOLGT = Lehrer hängt am lebenden Roboter (kein Bahn-Zwang; root/yaw-Belohnung neutral). Joystick/Buttons führen in JEDEM Modus.
+- „OHNE ANIM WEITER“ = animOn AUS + Modus FOLGT: die policy trainiert WEITER (Netz + Policy-Slot bleiben) — nur Gleichgewicht/Freibewegung, keine Animationsbindung mehr.
+- Drohne: GLB-Clip = FLUGBAHN (Autopilot folgt der Route im MANUELL/POLICY-Modus; dieselben 3 Modi).

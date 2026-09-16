@@ -181,13 +181,20 @@
 
     <div id="glbSection" class="glb-section hidden">
       <div class="glb-head">
-        <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · HUMANOID (G1)</span>
+        <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · FÜR JEDEN ROBOTER</span>
         <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Lehrer &amp; Geist zeigen</label>
       </div>
       <div class="glb-row">
         <button id="glbImportBtn" class="btn small">.glb importieren</button>
         <input type="file" id="glbFile" accept=".glb,model/gltf-binary" class="hidden" multiple>
         <button id="bcBtn" class="btn small">BC vortrainieren</button>
+        <button id="glbUnbind" class="btn small">OHNE ANIM WEITER</button>
+      </div>
+      <div class="glb-row glb-ctrl-row">
+        <span class="glb-ctrl-label">Referenz</span>
+        <button class="speed-chip ref-chip active" data-ref="stelle" title="Referenz steht fix am Startpunkt — Bewegung auf der Stelle">STELLE</button>
+        <button class="speed-chip ref-chip" data-ref="frei" title="Der Lehrer wandert auf seiner Bahn durchs Feld">FREI</button>
+        <button class="speed-chip ref-chip" data-ref="folgt" title="Der Lehrer hängt am Roboter und spielt die Bewegung relativ zu ihm ab — kein Bahn-Zwang">FOLGT</button>
       </div>
       <div class="glb-row glb-ctrl-row">
         <span class="glb-ctrl-label">Steuerung</span>
@@ -202,7 +209,7 @@
         <span class="glb-ctrl-label glb-btn-hint">max. 4 · lang drücken = löschen</span>
       </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">Steuerung: „Keine“ folgt der Referenzbahn (Idle). „Joystick“ würfelt im Training zufällige Fahrbefehle (die Policy lernt, dass der Stick sie steuert) und steuert im POLICY-Modus per Stick. „Buttons“ = Joystick PLUS eigene Aktionstasten (z. B. Kicken, Springen): im Training feuern sie zufällig, im POLICY-Modus löst eine Taste die Aktion aus — die Tastenleiste erscheint unten. „Animation im Training“ aus = nur Gleichgewicht lernen.</div>
+      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus.</div>
     </div>
     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>

@@ -33,6 +33,17 @@
 //   denn die GLB-Animationen besitzen selbst kein physikalisches
 //   Gleichgewicht. Erst Animation lernen, dann abschalten und Balance
 //   nachziehen — das Netz bleibt dabei erhalten (Curriculum).
+// v2.15.0 — REFERENZ-MODI (refMode):
+//   'frei'  = Standard: die Referenz-Bahn wandert durchs Feld (Root-Motion),
+//             der Roboter folgt dem wandernden Lehrer (DeepMimic-Pfad).
+//   'stelle'= AN EINER STELLE: Referenz steht FIX am Startpunkt — der
+//             Roboter soll die Bewegung AUF DER STELLE zeigen (Wurzel-Ziel
+//             = Startpunkt, lead 0, kein Loop-Rebase).
+//   'folgt' = AM ROBOTER GEANKERT: der Lehrer-Geist hängt am LEBENDEN
+//             Roboter (spielt die Bewegung relativ zu ihm ab) — es gibt
+//             KEINEN Bahn-Zwang mehr (root/yaw-Belohnung neutral), Posen-
+//             Ähnlichkeit + Höhe + Aufrecht bleiben. Der Roboter wird nicht
+//             von der Bahn "mitgerissen"; Joystick/Buttons führen weiter.
 // ═══════════════════════════════════════════════════════════
 
 import { clamp } from './math.js';
@@ -82,6 +93,9 @@ export function makeMotionTask(cfg, clip, sim) {
     //   GLEICHGEWICHT gelernt. Der Posen-Anteil fällt auf 35 % (grobe
     //   Stand-Attraktor), damit Beine beim Joystick-Gehen frei bleiben.
     animOn: true,
+    // v2.15.0: Referenz-Modus — 'frei' (Bahn wandert), 'stelle' (fix am
+    // Startpunkt), 'folgt' (Geist hängt am Roboter, kein Bahn-Zwang)
+    refMode: 'frei',
     cmd: { vx: 0, wz: 0 },   // aktuelles Kommando (Training: gewürfelt, Policy: Stick)
     _cmdHold: 0,             // Rest-Haltezeit des Kommandos (s)
     _tx: 0, _ty: 0, _tyaw: 0, // Kommando-integriertes Wurzel-Ziel
@@ -127,7 +141,10 @@ export function makeMotionTask(cfg, clip, sim) {
       const c = clip;
       if (this.animOn === false) {
         for (let j = 0; j < nu; j++) outQ[j] = keyCtrl[j];
-        if (outH) outH[0] = 0.79;
+        // v2.15.0: Soll-Höhe = Roboter-eigene Grundhöhe (cfg.h0) statt der
+        // G1-Festwert 0,79 — sonst würde der MicroDuck (h0=0,12) ständig als
+        // „gestürzt" abgebrochen (Schwellen relativ zu dieser Höhe).
+        if (outH) outH[0] = this._h0 || (this._h0 = (cfg.h0 || 0.79));
         return;
       }
       const t = (phase * c.fps) % c.n;
@@ -161,11 +178,38 @@ export function makeMotionTask(cfg, clip, sim) {
     // Momentanes Referenz-Tempo (m/s, horizontal)
     refSpeed(phase) {
       if (!hasRoot) return 0;
+      if (this.refMode === 'stelle') return 0; // auf der Stelle: kein Zug
       const c = clip;
       const t = (phase * c.fps) % c.n;
       const i0 = Math.floor(t), i1 = (i0 + 1) % c.n;
       const dx = c.root[2 * i1] - c.root[2 * i0], dy = c.root[2 * i1 + 1] - c.root[2 * i0 + 1];
       return Math.hypot(dx, dy) * c.fps;
+    },
+
+    // v2.15.0: WO steht der Lehrer-Geist in diesem Modus?
+    // out = [x, y, yaw]. robotPos/robotYaw = LEBENDE Roboter-Basis (nur in
+    // 'folgt' relevant — der Geist hängt am Roboter und spielt die Bewegung
+    // relativ zu ihm ab, ohne Loop-Offset).
+    ghostAnchor(phase, robotPos, robotYaw, out) {
+      if (this.refMode === 'folgt' && robotPos) {
+        if (hasRoot) {
+          const c = clip;
+          const t = (phase * c.fps) % c.n;
+          const i = Math.floor(t);
+          out[0] = robotPos[0] + (c.root[2 * i] - c.root[0]);
+          out[1] = robotPos[1] + (c.root[2 * i + 1] - c.root[1]);
+          out[2] = robotYaw + wrapAngle((c.yaw[i] || 0) - (c.yaw[0] || 0));
+        } else { out[0] = robotPos[0]; out[1] = robotPos[1]; out[2] = robotYaw; }
+        return out;
+      }
+      if (this.refMode === 'stelle' || !hasRoot) {
+        out[0] = hasRoot ? clip.root[0] : 0;
+        out[1] = hasRoot ? clip.root[1] : 0;
+        out[2] = hasRoot ? (clip.yaw[0] || 0) : 0;
+        return out;
+      }
+      this.refRoot(phase, out); // 'frei' — Bahn mit Loop-Offset
+      return out;
     },
 
     // Trigger setzen (v2.6.0): POLICY-Modus (Button-Taste) + Tests
@@ -215,11 +259,15 @@ export function makeMotionTask(cfg, clip, sim) {
       // Bahn-Fehler (lokal zur Basis) + Führung — Root-Folgen lernen.
       // v2.5.0: bei ctrlMode 'joy' ist das Ziel die KOMMANDO-INTEGRATION
       // (der Joystick führt!), sonst die Referenzbahn des Clips.
+      // v2.15.0: 'stelle' → Ziel = Startpunkt (lead 0); 'folgt' → Ziel =
+      // eigene Position (Fehler ≈ 0 — kein Bahn-Zwang, nur Pose/Höhe).
       const joy = this.ctrlMode === 'joy';
       let tx, ty, tyaw, lead;
-      if (joy) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = this.cmd.vx; }
-      else { this.refRoot(this.phase, this._rr); tx = this._rr[0]; ty = this._rr[1]; tyaw = this._rr[2]; lead = this.refSpeed(this.phase); }
       sim.basePos(this._p);
+      if (joy) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = this.cmd.vx; }
+      else if (this.refMode === 'stelle' || this.animOn === false) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = 0; }
+      else if (this.refMode === 'folgt') { tx = this._p[0]; ty = this._p[1]; tyaw = yaw; lead = this.refSpeed(this.phase); }
+      else { this.refRoot(this.phase, this._rr); tx = this._rr[0]; ty = this._rr[1]; tyaw = this._rr[2]; lead = this.refSpeed(this.phase); }
       const dx = tx - this._p[0], dy = ty - this._p[1];
       out[o++] = cy * dx + s * dy;
       out[o++] = -s * dx + cy * dy;
@@ -303,9 +351,14 @@ export function makeMotionTask(cfg, clip, sim) {
       // Bahn-Folgen: Abstand zur Wurzel + Blick. v2.5.0: bei Kommando-
       // führung (joy/btn) oder animOn=false ist das Ziel die Integration
       // (_tx/_ty/_tyaw), sonst die wandernde Referenz-Bahn.
+      // v2.15.0: 'stelle' → Startpunkt (bleibt stehen); 'folgt' → KEIN
+      // Bahn-Zwang (root/yaw neutral — der Lehrer hängt am Roboter).
       let eRoot = 1, eYaw = 1, dRoot = 0;
-      const trackCmd = this.ctrlMode === 'joy' || this.ctrlMode === 'btn' || this.animOn === false;
-      if (trackCmd) {
+      const trackCmd = this.ctrlMode === 'joy' || this.ctrlMode === 'btn' || this.animOn === false || this.refMode === 'stelle';
+      const noRootPull = this.refMode === 'folgt' && this.ctrlMode !== 'joy' && this.ctrlMode !== 'btn' && this.animOn !== false;
+      if (noRootPull) {
+        // geankert: Posen-/Höhen-Treue zählt, der Ort zählt nicht
+      } else if (trackCmd) {
         const dx = this._tx - this._p[0], dy = this._ty - this._p[1];
         dRoot = Math.hypot(dx, dy);
         eRoot = Math.exp(-Math.pow(dRoot / MOTION_R.rootScale, 2));
@@ -341,7 +394,8 @@ export function makeMotionTask(cfg, clip, sim) {
         + MOTION_R.root * eRoot + MOTION_R.yaw * eYaw
         + MOTION_R.up * clamp(upz, 0, 1) + MOTION_R.base + styleB - MOTION_R.energy * e;
       // Abbruch: Sturz ODER dauerhaft verloren von der Bahn (Eingangsphase geschont)
-      const lostRoot = hasRoot && (this.tElapsed || 0) > 1.2 && dRoot > MOTION_R.rootDone;
+      // v2.15.0: im 'folgt'-Modus gibt es keine Bahn → kein Bahn-Abbruch
+      const lostRoot = !noRootPull && hasRoot && (this.tElapsed || 0) > 1.2 && dRoot > MOTION_R.rootDone;
       const done = upz < MOTION_R.upMin || h < MOTION_R.hMin * this._href[0] || h > MOTION_R.hMax || lostRoot;
       return { r, done };
     },
@@ -387,7 +441,9 @@ export function makeMotionTask(cfg, clip, sim) {
       // winzige Yaw-/Positions-Unterschied Ende↔Anfang JEDE Schleife
       // akkumulieren: der Geist drehte sich über Minuten komplett um
       // bzw. wanderte davon (v2.4.1-Fix).
-      if (this.phase < old && hasRoot && clip.n > 1 && clip.locomotion !== false) {
+      // v2.15.0: auch NUR im 'frei'-Modus — 'stelle'/'folgt' haben keine
+      // wandernde Bahn (der Loop-Offset würde den fixen Anker verschieben).
+      if (this.phase < old && hasRoot && clip.n > 1 && clip.locomotion !== false && this.refMode === 'frei' && !joy) {
         const m = clip.n - 1;
         this._loopX += clip.root[2 * m] - clip.root[0];
         this._loopY += clip.root[2 * m + 1] - clip.root[1];

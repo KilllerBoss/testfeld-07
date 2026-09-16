@@ -189,6 +189,53 @@ function jointWorldAxis(sim, jid, out) {
  * @returns MotionClip { name, fps, n, nu, q: Float32Array(n*nu), h: Float32Array(n), mapped: [Namen] }
  */
 export function retargetToG1(clip, sim, log = () => {}) {
+  return retargetToRobot(clip, sim, log);
+}
+
+/**
+ * v2.15.0 — RETARGETING FÜR JEDEN ROBOTER.
+ * PROFILE beschreiben, welche Gelenkketten ein Roboter hat und wie seine
+ * Aktuator-Namen lauten. G1 = vollständiges humanoides Ziel (Beine + Arme
+ * + Taille), MicroDuck = Beine (Hüfte/Knie/Sprunggelenk — Kopf/Hals behalten
+ * die STAND-Pose), Skydio X2 = NUR Root-Bahn (die Drohne fliegt den Weg
+ * der Animation ab, es gibt keine Gelenke zum Nachfahren).
+ * Die IK selbst bleibt roboter-agnostisch: sie löst am ECHTEN MuJoCo-FK
+ * des aktiven Modells (Richtungs-Ziele, Nullposen-Kalibrierung), deshalb
+ * funktionieren Achsenkonventionen/Valgus automatisch je Roboter.
+ */
+export const PROFILES = {
+  g1: {
+    id: 'g1', hasLegs: true, hasArms: true, hasWaist: true,
+    suffix: '_joint',
+    hip: (s) => s + '_hip_pitch_joint', knee: (s) => s + '_knee_joint', elbow: (s) => s + '_elbow_joint',
+    anklePitch: (s) => s + '_ankle_pitch_joint', ankleRoll: (s) => s + '_ankle_roll_joint',
+    waist: 'waist_yaw_joint',
+    hMin: 0.4, hMax: 1.15,
+    presetKeyCtrl: false,
+  },
+  duck: {
+    id: 'duck', hasLegs: true, hasArms: false, hasWaist: false,
+    suffix: '',
+    hip: (s) => s + '_hip_pitch', knee: (s) => s + '_knee',
+    anklePitch: (s) => s + '_ankle', ankleRoll: null,
+    waist: null,
+    hMin: 0.05, hMax: 0.32,
+    presetKeyCtrl: true, // Kopf/Hals behalten die STAND-Pose (nicht 0)
+  },
+  x2: {
+    id: 'x2', hasLegs: false, hasArms: false, hasWaist: false,
+    suffix: '',
+    hip: (s) => s + '_hip_pitch', knee: (s) => s + '_knee',
+    anklePitch: (s) => s + '_ankle', ankleRoll: null,
+    waist: null,
+    hMin: 0.25, hMax: 1.6, // Flughöhe (Hüftbahn auf Drohnenhöhe skaliert)
+    presetKeyCtrl: true,   // q = Hover-Schub (Keyframe), keine Gelenk-IK
+  },
+};
+
+export function retargetToRobot(clip, sim, log = () => {}) {
+  const prof = (sim.cfg && PROFILES[sim.cfg.id]) || PROFILES.g1;
+  const SUFF = prof.suffix;
   const bones = resolveBones(clip);
   const need = ['hips', 'leftUpLeg', 'leftLeg', 'rightUpLeg', 'rightLeg'];
   const missing = need.filter(k => bones[k] === undefined);
@@ -206,17 +253,6 @@ export function retargetToG1(clip, sim, log = () => {}) {
 
   const nu = sim.nu;
   const A = sim.actByName;
-  // Gelenk-Weltachsen im Keyframe sammeln
-  const axisOf = {};
-  for (const name of sim.actName) {
-    const aid = A[name];
-    const jid = sim.actJoint[aid];
-    axisOf[name] = jointWorldAxis(sim, jid, [0, 0, 0]);
-  }
-  const clampA = (name, v) => {
-    const a = A[name];
-    return Math.min(sim.actRange[2 * a + 1], Math.max(sim.actRange[2 * a], v));
-  };
 
   // Achsen-Mapping GLB (Y-hoch, +Z-Blick) → MuJoCo (Z-hoch, +X-Blick):
   // X_glb→Y_mjc (lateral), Y_glb→Z_mjc (hoch), Z_glb→X_mjc (vorwärts)
@@ -250,8 +286,38 @@ export function retargetToG1(clip, sim, log = () => {}) {
 
   const fps = Math.min(30, Math.max(15, clip.fpsHint));
   const n = Math.max(2, Math.round(clip.duration * fps));
+
+  // v2.15.0: q-Zeilen optional mit dem Keyframe-Steuerstand vorbesetzen —
+  // Roboter mit NICHT-IK-getriebenen Aktuatoren (MicroDuck: Kopf/Hals)
+  // behalten so ihre natürliche Pose, statt auf 0 zu fallen.
   const q = new Float32Array(n * nu);
   const h = new Float32Array(n);
+  if (prof.presetKeyCtrl && sim.keyCtrl) {
+    for (let f = 0; f < n; f++) q.set(sim.keyCtrl, f * nu);
+  }
+
+  // Gelenk-Weltachsen im Keyframe sammeln (nach q/n — Reihenfolge egal)
+  const axisOf = {};
+  for (const name of sim.actName) {
+    const aid = A[name];
+    const jid = sim.actJoint[aid];
+    axisOf[name] = jointWorldAxis(sim, jid, [0, 0, 0]);
+  }
+  const clampA = (name, v) => {
+    const a = A[name];
+    let lo = sim.actRange[2 * a], hi = sim.actRange[2 * a + 1];
+    // v2.15.0: echte Gelenk-Limits respektieren (MicroDuck-Positionsatüe
+    // haben ctrlrange ±10 — ohne Limit-Klemme liefe die IK gegen die
+    // physischen Anschläge und die Pose wäre Unsinn).
+    // HINWEIS: jnt_limited ist im WASM-Binding defekt (BindingError) —
+    // Heuristik: nicht-triviales jnt_range (hi > lo) = limitiert.
+    const jid = sim.actJoint[a];
+    if (sim.model.jnt_range) {
+      const jlo = sim.model.jnt_range[2 * jid], jhi = sim.model.jnt_range[2 * jid + 1];
+      if (jhi > jlo) { lo = Math.max(lo, jlo); hi = Math.min(hi, jhi); }
+    }
+    return Math.min(hi, Math.max(lo, v));
+  };
 
   const worldMap = new Map();
   const conjTmp = [0, 0, 0, 1];
@@ -294,20 +360,23 @@ export function retargetToG1(clip, sim, log = () => {}) {
   sim._mjApi.mj_forward(sim.model, ghost0);
   // MuJoCo xquat ist (w,x,y,z) → in [x,y,z,w] drehen (Projekt-Konvention)
   const zeroQuat = (b) => [ghost0.xquat[4 * b + 1], ghost0.xquat[4 * b + 2], ghost0.xquat[4 * b + 3], ghost0.xquat[4 * b]];
-  const makeCal = (srcIdx, g1Body) => {
+  const makeCal = (srcIdx, robotBody) => {
     const ar = quatMul2(ALIGN, computeRest(srcIdx), [0, 0, 0, 1]);
     const aligned = quatMul2(ar, ALIGN_INV, [0, 0, 0, 1]);
-    return quatMul2(quatConj(aligned, [0, 0, 0, 1]), zeroQuat(g1Body), [0, 0, 0, 1]);
+    return quatMul2(quatConj(aligned, [0, 0, 0, 1]), zeroQuat(robotBody), [0, 0, 0, 1]);
   };
   const CAL = {};
   for (const side of ['left', 'right']) {
-    CAL[side] = {
-      thigh: makeCal(bones[side + 'UpLeg'], bodyOfAct(side + '_hip_pitch_joint')),
-      shin: makeCal(bones[side + 'Leg'], bodyOfAct(side + '_knee_joint')),
-      foot: bones[side + 'Foot'] !== undefined ? makeCal(bones[side + 'Foot'], bodyOfAct(side + '_ankle_pitch_joint')) : qId,
-      arm: bones[side + 'Arm'] !== undefined ? makeCal(bones[side + 'Arm'], sim.model.body_parentid[bodyOfAct(side + '_elbow_joint')]) : qId,
-      fore: bones[side + 'ForeArm'] !== undefined ? makeCal(bones[side + 'ForeArm'], bodyOfAct(side + '_elbow_joint')) : qId,
-    };
+    CAL[side] = prof.hasLegs ? {
+      thigh: makeCal(bones[side + 'UpLeg'], bodyOfAct(prof.hip(side))),
+      shin: makeCal(bones[side + 'Leg'], bodyOfAct(prof.knee(side))),
+      foot: bones[side + 'Foot'] !== undefined ? makeCal(bones[side + 'Foot'], bodyOfAct(prof.anklePitch(side))) : qId,
+      arm: qId, fore: qId,
+    } : { thigh: qId, shin: qId, foot: qId, arm: qId, fore: qId };
+    if (prof.hasArms && bones[side + 'Arm'] !== undefined) {
+      CAL[side].arm = makeCal(bones[side + 'Arm'], sim.model.body_parentid[bodyOfAct(prof.elbow(side))]);
+      CAL[side].fore = bones[side + 'ForeArm'] !== undefined ? makeCal(bones[side + 'ForeArm'], bodyOfAct(prof.elbow(side))) : qId;
+    }
   }
 
   // Alignierte Ziel-Weltrotation eines Quell-Knochens (animiert): A·W·A⁻¹
@@ -346,19 +415,20 @@ export function retargetToG1(clip, sim, log = () => {}) {
   const G1X0 = {}; // Nullposen-Körperquats je Seite [x,y,z,w]
   const VALGUS = {}; // Frontalwinkel OS→SB der Nullpose (rad, signed) je Seite
   for (const side of ['left', 'right']) {
-    const elbow = bidOfAct(side + '_elbow_joint');
-    const ankle = bidOfAct(side + '_ankle_pitch_joint');
-    const hip = bidOfAct(side + '_hip_pitch_joint');
-    const knee = bidOfAct(side + '_knee_joint');
-    const upperArm = sim.model.body_parentid[elbow];
-    G1B[side] = { hip, knee, ankle, elbow, upperArm, wrist: childBodyOf(elbow) };
+    if (!prof.hasLegs) { G1D0[side] = { thigh: null, shin: null, arm: null, fore: null }; G1B[side] = { hip: -1, knee: -1, ankle: -1, elbow: -1, upperArm: -1, wrist: -1 }; continue; }
+    const elbow = prof.hasArms ? bidOfAct(prof.elbow(side)) : -1;
+    const ankle = bidOfAct(prof.anklePitch(side));
+    const hip = bidOfAct(prof.hip(side));
+    const knee = bidOfAct(prof.knee(side));
+    const upperArm = prof.hasArms ? sim.model.body_parentid[elbow] : -1;
+    G1B[side] = { hip, knee, ankle, elbow, upperArm, wrist: prof.hasArms ? childBodyOf(elbow) : -1 };
     G1D0[side] = {
       thigh: dirBetween0(hip, knee),
       shin: dirBetween0(knee, ankle),
-      arm: dirBetween0(upperArm, elbow),
-      fore: G1B[side].wrist > 0 ? dirBetween0(elbow, G1B[side].wrist) : null,
+      arm: prof.hasArms ? dirBetween0(upperArm, elbow) : null,
+      fore: (prof.hasArms && G1B[side].wrist > 0) ? dirBetween0(elbow, G1B[side].wrist) : null,
     };
-    G1X0[side] = { thigh: zeroQuat(hip), arm: zeroQuat(upperArm), foot: zeroQuat(ankle) };
+    G1X0[side] = { thigh: zeroQuat(hip), arm: prof.hasArms ? zeroQuat(upperArm) : null, foot: zeroQuat(ankle) };
     // Eingebauter VALGUS (Frontalwinkel OS→SB in der G1-Nullpose, um die
     // Vorwärtsachse): das Modell-Bein ist nicht gerade — der OS steht ±9°
     // außen, die SB ~vertikal. Ein STRAIGHTER Lehrer-Bein ist am G1 daher
@@ -366,7 +436,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     // rotiert das Hüftziel bei geradem Bein um −valgus/2 → symmetrischer
     // A-Stand (je ~4,5° außen/innen) statt X-Bein (0°/10° innen).
     const latAng = (v) => Math.atan2(v[1], -v[2]);
-    VALGUS[side] = latAng(G1D0[side].shin) - latAng(G1D0[side].thigh);
+    VALGUS[side] = prof.hasLegs ? (latAng(G1D0[side].shin) - latAng(G1D0[side].thigh)) : 0;
   }
 
   // Distale Partner für Lehrer-Richtungen: Hand (Unterarm) bzw. Fuß-Ende
@@ -425,7 +495,19 @@ export function retargetToG1(clip, sim, log = () => {}) {
   })();
   hipsRestH = Math.max(0.1, hipsP0[1]);
   const scale = hipsRestH > 3 ? 0.01 : 1.0; // Mixamo cm → m
-  const g1StandH = sim._xpos[3 * sim.baseBody + 2];
+  // Referenz-Höhe = KEYFRAME-Höhe des Roboters (nicht die Nullpose!):
+  // die Drohne steht in qpos0 am Boden (z≈0,05) — ihr Hover-Flugniveau
+  // (Keyframe) ist die richtige Skalierungsbasis für die Flugbahn.
+  const g1StandH = (() => {
+    try {
+      const kd = sim.makeGhostData();
+      sim._mjApi.mj_resetDataKeyframe(sim.model, kd, sim.cfg.keyIndex || 0);
+      sim._mjApi.mj_forward(sim.model, kd);
+      return kd.xpos[3 * sim.baseBody + 2];
+    } catch (e) {
+      return sim._xpos[3 * sim.baseBody + 2];
+    }
+  })();
   const hScale = g1StandH / Math.max(0.2, hipsRestH * scale);
 
   const rawH = new Float32Array(n);
@@ -479,11 +561,13 @@ export function retargetToG1(clip, sim, log = () => {}) {
     }
     // Taille: Verdrehung Becken↔Brust (Yaw-Anteil) — die BEUGUNG selbst
     // trägt die Basis-Orientierung, nicht die Taille (G1 hat nur waist_yaw)
-    quatConj(worldMap.get(bones.hips) || qId, conjTmp);
-    quatMul2(conjTmp, worldMap.get(chestIdx) || qId, alignedQ);
-    quatMul2(ALIGN, alignedQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
-    const waistName = 'waist_yaw_joint';
-    q[off + A[waistName]] = project1(waistName, alignedQ);
+    // v2.15.0: nur wenn der Roboter ein Taille ngelenk hat (MicroDuck/X2: nein)
+    if (prof.hasWaist && prof.waist && A[prof.waist] !== undefined) {
+      quatConj(worldMap.get(bones.hips) || qId, conjTmp);
+      quatMul2(conjTmp, worldMap.get(chestIdx) || qId, alignedQ);
+      quatMul2(ALIGN, alignedQ, qTmp); quatMul2(qTmp, ALIGN_INV, alignedQ);
+      q[off + A[prof.waist]] = project1(prof.waist, alignedQ);
+    }
     // ── IK-Ziele sammeln: Lehrer-Richtungen (Positions-Differenzen sind
     // konventionsfrei!) + Fuß-Quats; die Gelenke selbst löst Pass 2 ──
     const storeDir = (aIdx, bIdx, slot) => {
@@ -527,7 +611,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     }
     // Basis-Höhe, Root-Bahn + Yaw aus der Hüft-WELTposition (volle FK)
     const hp = worldPos.get(bones.hips) || hipsP0;
-    rawH[f] = Math.min(1.15, Math.max(0.4, hp[1] * scale * hScale));
+    rawH[f] = Math.min(prof.hMax, Math.max(prof.hMin, hp[1] * scale * hScale));
     const wx = hp[2] * scale, wy = hp[0] * scale; // GLB(Z,X) → MuJoCo(X,Y)
     if (f === 0) { sx0 = wx; sy0 = wy; }
     root[2 * f] = wx - sx0;
@@ -619,6 +703,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
   }
 
   // ── PASS 2: Gelenk-IK am Geist-FK (Hüfte/Knie/Knöchel/Schulter/Ellbogen) ──
+  // v2.15.0: nur wenn das Ziel-Profil Gelenkketten hat (X2 = nur Root-Bahn).
   // Ziele pro Kette: Oberschenkel/Oberarm = ORIENTIERUNG
   //   y0⁻¹ ⊗ minMap(Nullpose-Richtung → Lehrer-Richtung) ⊗ Nullpose-Quat,
   // Unterschenkel/Unterarm = RICHTUNG, Knöchel = Fuß-Orientierung (y0⁻¹⊗W'⊗CAL).
@@ -816,6 +901,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
     // Gelenke erben die Vorgängerlösung und verfeinern sie nur noch.
     for (let f = 0; f < n; f++) {
       const off2 = f * nu;
+      if (!prof.hasLegs) continue; // v2.15.0: X2 — q bleibt Hover-Schub
       // Frame 0 ZWEIMAL lösen: der zweite Durchlauf startet aus der eigenen
       // Lösung (= stationärer Zustand, den auch f=1 sieht) → keine f=0→1-Nadel
       const reps = f === 0 ? 2 : 1;
@@ -833,18 +919,18 @@ export function retargetToG1(clip, sim, log = () => {}) {
         // 5) Ellbogen: Unterarm-Richtung
         // Hüfte/Schulter erhalten je einen Minimal-Twist-Seed (s. o.).
         {
-          const hipNames = [side + '_hip_yaw_joint', side + '_hip_roll_joint', side + '_hip_pitch_joint'];
+          const hipNames = [side + '_hip_yaw' + SUFF, side + '_hip_roll' + SUFF, prof.hip(side)];
           // ALTERNIEREND: Hüfte (nur Oberschenkel-Ziel) ↔ Knie (nur Schien-Ziel),
           // 2 Runden. Ein kombinierter Fehler funktioniert NICHT: Mit festem
           // Knie dreht eine Hüftbewegung Oberschenkel UND Schiene gleichmäßig →
           // 1,0·Δ − 0,8·Δ > 0 → die Hüfte friert ein. Getrennte Teilprobleme
           // sind je wohlkonditioniert und konvergieren im Wechsel zum Optimum.
           const hipEntries = [
-            { name: side + '_hip_yaw_joint', aid: A[side + '_hip_yaw_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
-            { name: side + '_hip_roll_joint', aid: A[side + '_hip_roll_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
-            { name: side + '_hip_pitch_joint', aid: A[side + '_hip_pitch_joint'], anti: A[side + '_knee_joint'], antiName: side + '_knee_joint' },
+            { name: side + '_hip_yaw' + SUFF, aid: A[side + '_hip_yaw' + SUFF], anti: A[prof.knee(side)], antiName: prof.knee(side) },
+            { name: side + '_hip_roll' + SUFF, aid: A[side + '_hip_roll' + SUFF], anti: A[prof.knee(side)], antiName: prof.knee(side) },
+            { name: prof.hip(side), aid: A[prof.hip(side)], anti: A[prof.knee(side)], antiName: prof.knee(side) },
           ];
-          const kneeEntries = [side + '_knee_joint'].map(nm => ({ name: nm, aid: A[nm] }));
+          const kneeEntries = [prof.knee(side)].map(nm => ({ name: nm, aid: A[nm] }));
           // REINER Hüft-Fehler (v2.6.0: Ziel = dHip — OS bzw. dessen
           // Bissector bei geradem Bein, s. mkGoals): Die Anti-Züge (mit
           // Clamp-Rejekt) halten die Schiene raumfix, sodass die Hüfte die
@@ -894,7 +980,8 @@ export function retargetToG1(clip, sim, log = () => {}) {
           descend(off2, shinErr, kneeEntries, 6);
         }
         if (G.hasFoot) {
-          const entries = [side + '_ankle_pitch_joint', side + '_ankle_roll_joint']
+          const ankleNm = prof.anklePitch(side);
+          const entries = (prof.ankleRoll ? [ankleNm, prof.ankleRoll(side)] : [ankleNm])
             .map(nm => ({ name: nm, aid: A[nm] }));
           const errFn = () => {
             sim.setGhostPose(ghost, q, off2, rawH[f], 0, 0, 0, bq4);
@@ -902,18 +989,18 @@ export function retargetToG1(clip, sim, log = () => {}) {
           };
           descend(off2, errFn, entries, 8);
         }
-        if (bones[side + 'Arm'] !== undefined) {
+        if (prof.hasArms && bones[side + 'Arm'] !== undefined) {
           {
-            const shNames = [side + '_shoulder_pitch_joint', side + '_shoulder_roll_joint', side + '_shoulder_yaw_joint'];
+            const shNames = [side + '_shoulder_pitch' + SUFF, side + '_shoulder_roll' + SUFF, side + '_shoulder_yaw' + SUFF];
             // Arm ALTERNIEREND: Schulter (nur Oberarm-Ziel) ↔ Ellbogen
             // (nur Unterarm-Ziel), 2 Runden — gleiche Begründung wie beim Bein
             // (kombinierter Fehler = Barriere für die proximale Kette).
             const shEntries = [
-              { name: side + '_shoulder_pitch_joint', aid: A[side + '_shoulder_pitch_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
-              { name: side + '_shoulder_roll_joint', aid: A[side + '_shoulder_roll_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
-              { name: side + '_shoulder_yaw_joint', aid: A[side + '_shoulder_yaw_joint'], anti: A[side + '_elbow_joint'], antiName: side + '_elbow_joint' },
+              { name: shNames[0], aid: A[shNames[0]], anti: A[prof.elbow(side)], antiName: prof.elbow(side) },
+              { name: shNames[1], aid: A[shNames[1]], anti: A[prof.elbow(side)], antiName: prof.elbow(side) },
+              { name: shNames[2], aid: A[shNames[2]], anti: A[prof.elbow(side)], antiName: prof.elbow(side) },
             ];
-            const elEntries = [side + '_elbow_joint'].map(nm => ({ name: nm, aid: A[nm] }));
+            const elEntries = [prof.elbow(side)].map(nm => ({ name: nm, aid: A[nm] }));
             // Reiner Oberarm-Fehler für die Schulter-Züge (Anti + Clamp-Rejekt
             // schützen den Unterarm — gleiche Logik wie beim Bein)
             const armDirErr = G.hasArm ? () => {
@@ -1038,7 +1125,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
       const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
       if (z < lowest) lowest = z;
     }
-    h[f] = Math.min(1.15, Math.max(0.4, rawH[f] - lowest));
+    h[f] = Math.min(prof.hMax, Math.max(prof.hMin, rawH[f] - lowest));
   }
   // Höhe glätten (Burgen vermeiden)…
   smooth(h, 5);
@@ -1055,7 +1142,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
       if (z < lowest) lowest = z;
     }
     if (!Number.isFinite(lowest)) lowest = 0;
-    h[f] = Math.min(1.15, Math.max(0.4, h[f] - lowest));
+    h[f] = Math.min(prof.hMax, Math.max(prof.hMin, h[f] - lowest));
   }
 
   // ── Locomotion-Bewertung: wandert die Bahn wirklich? ──
@@ -1072,6 +1159,7 @@ export function retargetToG1(clip, sim, log = () => {}) {
 
   return {
     name: clip.name || 'clip',
+    robotId: (sim.cfg && sim.cfg.id) || 'g1', // v2.15.0: Ziel-Roboter
     fps, n, nu,
     q, h,
     root, yaw, srcPos, srcJoints,

@@ -13,7 +13,7 @@ Sie sind die EINZIGE verlässliche Quelle für Schnittstellen — rate nicht.
 | TRAINING | PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen (Handy) |
 
 ## App-Version v2.14.0 (Kurzstand)
-- 3 Roboter: **MicroDuck** (Soft-MoE, 74 obs / 14 act, 2–8 Experten per setMoE), G1 (29 act, GLB-Tracking), X2 (Drohne)
+- 3 Roboter: **MicroDuck** (Soft-MoE, 74 obs / 14 act, 2–8 Experten per setMoE), G1 (29 act, GLB-Tracking), X2 (Drohne). v2.15.0: GLB für alle (Duck: Beine, X2: Flugbahn-Autopilot) + Referenz-Modi STELLE/FREI/FOLGT + „OHNE ANIM WEITER“ (Policy ohne Animation weitertrainieren)
 - **Neu v2.14.0**: setAppearance (Farben + Glanz/Metallik je Teil, nur Rendering) · setWorld (KI-WELT: Objekte
   bauen/löschen, replace/add) · setUI (App-Designs + eigene Vorschlags-Chips) · setMoE (Expertenanzahl 2–8) ·
   rWx-Komplexterme (goTo/stayNear/heightBand/faceYaw/paceMax/paceMin/uprightMin, optional hard) ·

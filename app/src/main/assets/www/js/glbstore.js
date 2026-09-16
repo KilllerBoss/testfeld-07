@@ -72,6 +72,7 @@ export function packMotion(motion) {
   if (motion.srcJoints) out.srcJoints = motion.srcJoints.slice();
   if (motion.baseQ) out.baseQ = Array.from(motion.baseQ);
   if (motion.locomotion !== undefined) out.locomotion = !!motion.locomotion;
+  if (motion.robotId) out.robotId = motion.robotId; // v2.15.0: für welchen Roboter retargetet
   return out;
 }
 
@@ -83,6 +84,7 @@ export function unpackMotion(rec) {
     q, h, duration: rec.duration, mapped: rec.mapped || [],
     mergedFrom: rec.mergedFrom || 0,
     alg: rec.alg || 0, // alte Datensätze: 0 (< RT_ALG) → activateClip re-retargetet
+    robotId: rec.robotId || null, // v2.15.0: Ziel-Roboter der Retargeting-Variante
     locomotion: rec.locomotion !== false, // alte Datensätze: Rebase wie bisher an
   };
   // Alte Datensätze (vor Root-Motion) bleiben lauffähig — Felder optional

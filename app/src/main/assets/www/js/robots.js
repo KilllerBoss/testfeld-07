@@ -358,13 +358,87 @@ export function makeTrackTask(cfg) {
   };
 }
 
-// Trainingsaufgabe Drohne: Schweben + Höhe + Vorwärts
-function makeHoverTask(cfg) {
+// Trainingsaufgabe Drohne: Schweben + Höhe + Vorwärts (exportiert für Tests)
+export function makeHoverTask(cfg) {
   return {
+    kind: 'hover',
     obsDim: 15, actDim: 4,
+    // v2.15.0 — GLB-LEHRPFAD: Eine importierte GLB-Animation liefert die
+    // BAHN (x, y, Höhe, Yaw), die die Drohne abfliegt (Autopilot im
+    // MANUELL-Modus + POLICY-Modus via cmd-Kanäle). refMode wie beim
+    // Motion-Task: 'stelle' = Hover am Startpunkt, 'frei' = Bahn abfliegen,
+    // 'folgt' = Drohne hält Position, der Lehrer-Geist hängt an ihr.
+    pathOn: false, pathClip: null, refMode: 'frei',
+    _pathT: 0, // Fortschritt auf der Bahn (Frames)
+    _animT: 0, // freilaufender Animations-Zähler (Geist spielt immer)
+    setPath(clip, mode = 'frei') {
+      this.pathClip = clip && clip.root ? clip : null;
+      this.pathOn = !!this.pathClip;
+      this.refMode = ['stelle', 'frei', 'folgt'].includes(mode) ? mode : 'frei';
+      this._pathT = 0;
+    },
+    // Fortschritt je Regeltakt (vor applyGait/applyFlight aufrufen)
+    updateCmd(dt, sim) {
+      if (!this.pathOn || !sim) return;
+      const c = this.pathClip;
+      // Animation läuft IMMER weiter (Geist zeigt sie — auch bei 'stelle')
+      this._animT += dt * c.fps;
+      sim.basePos(this._p || (this._p = new Float64Array(3)));
+      let tx, ty, talt;
+      if (this.refMode === 'stelle') {
+        tx = c.root[0]; ty = c.root[1]; talt = c.h[0];
+      } else if (this.refMode === 'folgt') {
+        // kein Bahn-Zwang: Position halten, Geist hängt an der Drohne
+        tx = this._holdX !== undefined ? this._holdX : (this._holdX = this._p[0]);
+        ty = this._holdY !== undefined ? this._holdY : (this._holdY = this._p[1]);
+        talt = this._holdZ !== undefined ? this._holdZ : (this._holdZ = this._p[2]);
+      } else {
+        // 'frei': parametrischer Fortschritt mit Loop — Tempo skaliert mit
+        // der Pfadlänge (Mixamo-cm→m ist im Clip schon skaliert)
+        this._pathT += dt * c.fps;
+        if (this._pathT >= c.n - 1) this._pathT -= (c.n - 1); // Loop
+        const i = Math.floor(this._pathT), u = this._pathT - i;
+        const j = (i + 1) % c.n;
+        tx = c.root[2 * i] * (1 - u) + c.root[2 * j] * u;
+        ty = c.root[2 * i + 1] * (1 - u) + c.root[2 * j + 1] * u;
+        talt = c.h[i] * (1 - u) + c.h[j] * u;
+      }
+      const dx = tx - this._p[0], dy = ty - this._p[1];
+      const dist = Math.hypot(dx, dy);
+      // Blick zum Wegpunkt → Gier-Rate; Vorwärtsfahrt per P-Regler
+      sim.baseQuat(this._q || (this._q = new Float64Array(4)));
+      const q = this._q, w = q[0], x = q[1], y = q[2], z = q[3];
+      const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+      const bear = Math.atan2(dy, dx) - yaw;
+      const bearW = Math.atan2(Math.sin(bear), Math.cos(bear));
+      this.cmd.yaw = Math.max(-2, Math.min(2, bearW * 1.6));
+      this.cmd.vx = Math.max(cfg.cmd.vx[0], Math.min(cfg.cmd.vx[1], dist * 1.2));
+      this.cmd.alt = talt;
+    },
+    // v2.15.0: Lehrer-Geist-Anker (gleiche Semantik wie Motion-Task)
+    ghostAnchor(_phase, robotPos, robotYaw, out) {
+      const c = this.pathClip;
+      if (!c) { out[0] = 0; out[1] = 0; out[2] = 0; return out; }
+      if (this.refMode === 'folgt' && robotPos) {
+        out[0] = robotPos[0]; out[1] = robotPos[1]; out[2] = robotYaw;
+        return out;
+      }
+      if (this.refMode === 'stelle') {
+        out[0] = c.root[0]; out[1] = c.root[1]; out[2] = c.yaw[0] || 0;
+        return out;
+      }
+      // 'frei': Bahnpunkt am aktuellen Fortschritt
+      const t = Math.max(0, Math.min(c.n - 1.001, this._pathT));
+      const i = Math.floor(t), u = t - i, j = Math.min(c.n - 1, i + 1);
+      out[0] = c.root[2 * i] * (1 - u) + c.root[2 * j] * u;
+      out[1] = c.root[2 * i + 1] * (1 - u) + c.root[2 * j + 1] * u;
+      out[2] = c.yaw[i] * (1 - u) + c.yaw[j] * u;
+      return out;
+    },
     reset(rng) {
-      this.cmd = { vx: 0, alt: 0.6, climb: 0 };
+      this.cmd = { vx: 0, alt: 0.6, climb: 0, yaw: 0 };
       this.stepsLeft = 0;
+      this._pathT = 0; this._animT = 0; this._holdX = undefined; this._holdY = undefined; this._holdZ = undefined;
       this.lastAct = new Float64Array(4);
       this._q = new Float64Array(4); this._p = new Float64Array(3); this._v = new Float64Array(3); this._w = new Float64Array(3);
     },

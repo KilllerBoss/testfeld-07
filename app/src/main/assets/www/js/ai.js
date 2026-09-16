@@ -158,7 +158,7 @@ export const AI_DOCS = [
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, optional GLB-Motion-Tracking), Skydio X2 (Drohne).
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT; „OHNE ANIM WEITER“ trainiert eine GLB-Policy ohne Animation weiter.
 
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
@@ -174,7 +174,7 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
    {type:"push", dir:"auto"|"fwd"|"back"|"left"|"right", strength:0.5…10} — Roboter schubsen (Störungs-Test)
    {type:"cmd", vx:-2…3, yaw:-3…3, ms:300…60000} — autonom fahren (m/s, rad/s, Dauer ms); endet bei Stick-Bewegung
    {type:"mode", mode:"manuell"|"policy"} — Modus wechseln
-   {type:"clip", index:0…7} — importierte GLB-Animation wählen (nur G1 mit Import)
+   {type:"clip", index:0…7} — importierte GLB-Animation wählen (jeder Roboter; wird je Ziel neu retargetet)
    {type:"macro", steps:[Aktion oder {waitMs:50…5000}, max 6]} — Abfolge
 3. tool="removeButton" — args = {id:"…"} (IDs stehen im observe-Ergebnis).
 4. tool="mapJoystick" — Joystick-Belegung ändern. args = {maxV:0.1…3, maxW:0.1…4, invertX:<bool>, invertY:<bool>, deadzone:0…0.5, expo:0…1} (maxV/maxW = Tempofaktor, expo = Kurvenform: 0=linear, 1=feines Zentrum).
