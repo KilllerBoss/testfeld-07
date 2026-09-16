@@ -460,3 +460,4 @@ Stage Summary:
 - Handy-Freeze behoben: Tempo-Slider 1–16 statt MAX; Live-Kurven zeigen Tempo+Loss
 - Policy-Export/Import mit Metadaten; APK 107 MB kleiner
 - Release via Tag v2.14.0 (CI auto-release)
+- ADDENDUM Task 35: Release v2.14.0 live — erster Tag-Run failed am CI-Hart-Check (erwartete noch 6 Modelle); Workflow auf 3 Modelle umgestellt, Tag neu gesetzt, zweiter Run SUCCESS. Asset Trainrobot.apk 27.994.885 bytes (~28 MB, vorher 41,7 MB — Modell-Kürzung wirkt im APK), anonym HTTP 200; versionCode 25 / versionName 2.14.0; Signatur 1c0422b9… identisch (Update-Installation garantiert); rewardx.js + appearance.js + mcp/WORLD.md im APK, Alt-Modelle raus
