@@ -501,3 +501,22 @@ Work Log:
 Stage Summary:
 - v2.15.0: GLB-Animationen für alle drei Roboter (G1 humanoid, MicroDuck Beine+Root, X2 Flugbahn-Autopilot); Referenz-Modi STELLE/FREI/FOLGT für Geist UND Training; „OHNE ANIM WEITER" entkoppelt die Policy von der Animation (Netz bleibt, trainiert Balance/Freibewegung weiter)
 - Release v2.15.0: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.15.0
+
+---
+Task ID: 38
+Agent: Super Z (Hauptagent)
+Task: v2.16.0 — Nutzerfrage „Ist GLB-Animation als Input in der Policy? Warum verlernt der Roboter beim Weitertrainieren ohne GLB alles?“ → Root-Cause + Entkoppeln der Policy von der Animation
+
+Work Log:
+- ROOT CAUSE (3 Knoten, alle behoben): (1) actionToCtrl verankerte Aktionen um die ANIMIERTE Referenzpose — animOn=false warf den Anker auf die Stand-Pose → gelernte Aktionen bedeuteten plötzlich etwas anderes → Kollaps („wie von neu“). (2) Parallel-Worker bekamen animOn/refMode/ctrlMode NIE (workerTaskSpec schickte nur den Clip, parallelEnvCfg nur MOTION_R) → Training lief MIT, Policy-Modus OHNE Animation → Semantik-Bruch. (3) animOn=false belohnte STAND-Attraktor (pose 0.35× + Ziel = Startposition) → aktives Verlernen des Gehens.
+- motiontask.js: actionToCtrl Anker = IMMER keyCtrl (identische Aktions-Semantik mit/ohne Animation, wie Speed-Task); animOff()/cmdDriven()-Helfer; animOn=false = KOMMANDOGANG (Ziel = integrierte Kommandos, sampleCmd würfelt jetzt auch bei ctrlMode 'none', Policy-Modus: Stick via _manualCmd-Schutz gegen Hineinwürfeln); poseW ohne Animation = MOTION_R.pose·freePose (0.1) statt 0.35; ANIM-DROPOUT dropAnimP/dropAnim (je Episode Math.random()<dropP, nur scharf wenn startTraining/Worker setzen dropAnimP — Regressionstests bleiben deterministisch); BC-Etiketten auf neuen Anker geeicht (q[f+1] − keyCtrl); 'folgt' ohne Animation hat jetzt Ziel-Abbruch (Kommandogang braucht Ziel)
+- simworker.js: buildTask übernimmt spec.animOn/refMode/ctrlMode/buttons + dropAnimP=MOTION_R.dropP; applyEnv wendet env.motionFlags LIVE an (je kick()-Runde)
+- main.js: workerTaskSpec + parallelEnvCfg (+motionFlags); startTraining schärft dropAnimP; Unbind behält Referenz-Modus (kein forced 'folgt'), aktiviert Joystick falls 'none', löst jetzt auch den DROHNEN-Lehrpfad, refreshed S.parallel.envCfg sofort; Referenz-Chips/Steuer-Chips/Anim-Toggle refreshen envCfg ebenfalls; policyCtrlStep: Stick führt auch ohne Animation + _manualCmd; VERSION 2.16.0
+- Doku: CONTROL.md (Entkopplung + Kommandogang + Dropout), ai.js-Systemprompt, motiontask-Header (v2.16.0-Block)
+- FIX unterwegs: ai.js-Edit hatte Template-Literal früh geschlossen (SyntaxError) → repariert
+- TESTS: scripts/motion_v2160_test.mjs NEU 33/33 (Anker-Identität mit/ohne Animation, Anker-Formel, Kommandogang-Integration, OBS=q−keyCtrl, Reward manuell nachgerechnet, 'folgt'-Abbruch, Dropout p-Statistik 21,1 %, BC-Etiketten, Worker-Propagierung statisch, Unbound-Regression); Regressionen ALLE grün: motion_v2150 41/41, test_v2140 53/53, test_v2141 32/32, dr 41/41, duck_sync 24/24, ui_v2150 17/17, ui_v2140 17/17, ui_v2141_render 10/10, parallel 21/21
+- Build: versionCode 28 / versionName 2.16.0 (lokal verifiziert: aapt + apksigner, Signatur 1c0422b9…); CI (main + Tag v2.16.0) beide SUCCESS; Release-Asset → download/Trainrobot.apk (anonym 302→200), Worklog gepusht
+
+Stage Summary:
+- v2.16.0: Die Policy ist NICHT mehr an die GLB-Animation gebunden — Aktions-Anker immer Keyframe-Pose, „OHNE ANIM WEITER" = Kommandogang (Gehen bleibt, Netz/Norm/Slot bleiben), ANIM-DROPOUT 20 % macht Training animation-unabhängig, Parallel-Worker bekommen Animations-/Modus-Flags jetzt live. HINWEIS für Nutzer: Motion-Policies von ≤ v2.15.x haben noch den alten Referenz-Anker → kurz nachtrainieren (mit ODER ohne Animation), danach ist Umschalten verlustfrei.
+- Release v2.16.0: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.16.0
