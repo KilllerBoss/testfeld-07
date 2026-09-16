@@ -148,6 +148,33 @@ export class Renderer3D {
   }
 
   // ── Aus dem MuJoCo-Modell bauen ───────────────────────────
+  // v2.13.1: Kollisions-Geoms (Menagerie-Konvention: group 3) NICHT rendern.
+  // Sie existieren bei allen Robotern IMMER zusätzlich zu den Visual-Geoms
+  // und würden sonst als graue Primitiven sichtbar werden — z. B. der
+  // graue Würfel im MicroDuck-Kopf (head_collision-Box aus v2.9.0).
+  // Physik bleibt unangetastet (nur Rendering); Bonus: weniger Dreiecke.
+  // Fallback: Hat ein Body AUSSCHLIESSLICH group-3-Geoms, wird eines
+  // trotzdem gerendert, damit der Body nicht unsichtbar ist.
+  _visualCounts(sim) {
+    const mod = sim.model;
+    const nB = Math.max(mod.nbody || 1, 1);
+    const visCnt = new Uint16Array(nB);
+    for (let gI = 0; gI < sim.ngeom; gI++) {
+      const t = mod.geom_type[gI];
+      if (t === G_PLANE || t === G_HFIELD) continue;
+      const b = mod.geom_bodyid[gI];
+      if (b > 0 && b < nB && mod.geom_group[gI] !== 3) visCnt[b]++;
+    }
+    return visCnt;
+  }
+
+  _skipCollision(sim, gI, visCnt) {
+    const mod = sim.model;
+    if (mod.geom_group[gI] !== 3) return false;
+    const b = mod.geom_bodyid[gI];
+    return b > 0 && b < visCnt.length && visCnt[b] > 0;
+  }
+
   buildFromModel(sim) {
     // Alte Gruppen entsorgen (Sparse-Array: Löcher überspringen)
     if (this.bodyGroups) {
@@ -160,11 +187,13 @@ export class Renderer3D {
     this.bodyGroups = [];
     const mod = sim.model;
     const rgba = new Float32Array(4);
+    const visCnt = this._visualCounts(sim);
 
     for (let gI = 0; gI < sim.ngeom; gI++) {
       const type = mod.geom_type[gI];
       const body = mod.geom_bodyid[gI];
       if (type === G_PLANE || type === G_HFIELD) continue; // Boden kommt aus dem Shader
+      if (this._skipCollision(sim, gI, visCnt)) continue;   // Kollisions-Geoms unsichtbar (v2.13.1)
       const geo = this._geometryFor(sim, gI, type);
       if (!geo) continue;
       const c4 = 4 * gI; rgba[0]=mod.geom_rgba[c4]; rgba[1]=mod.geom_rgba[c4+1]; rgba[2]=mod.geom_rgba[c4+2]; rgba[3]=mod.geom_rgba[c4+3];
@@ -222,10 +251,12 @@ export class Renderer3D {
     this.ghostSim = null;
     const mod = sim.model;
     const rgba = new Float32Array(4);
+    const visCnt = this._visualCounts(sim); // v2.13.1: auch im Geist keine Kollisions-Geoms
     for (let gI = 0; gI < sim.ngeom; gI++) {
       const type = mod.geom_type[gI];
       const body = mod.geom_bodyid[gI];
       if (type === G_PLANE || type === G_HFIELD || body === 0) continue;
+      if (this._skipCollision(sim, gI, visCnt)) continue;
       const geo = this._geometryFor(sim, gI, type);
       if (!geo) continue;
       const mat = new THREE.MeshStandardMaterial({

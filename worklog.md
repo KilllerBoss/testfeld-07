@@ -413,3 +413,22 @@ Stage Summary:
 - Die v2.7.0-Versprechen sind jetzt in der AKTUELLEN Linie: Art-MCP (.md + readDoc), expertR (Router-/Experten-Belohnungen), FPV-Kamera-Rechteck (setCamera/btnCam), Auto-Save + Wake Lock
 - Ehrlich dokumentiert: setArchitecture (freie Netztiefe/Breite) ist in dieser Linie NICHT vorhanden — Soft-MoE-Struktur fix nach MASTER-PROMPT §34; ARCHITECTURE.md erklärt es
 - Test: scripts/duck_sync_test.mjs 24/24, alle Regressionen grün; Release via Tag v2.13.0 (CI auto-release)
+
+---
+Task ID: 34
+Agent: Super Z (Hauptagent)
+Task: v2.13.1 — Nutzer-Frage „Warum hat MicroDuck im Kopf einen Würfel/Quader?" — Ursache + Rendering-Fix
+
+Work Log:
+- URSACHE identifiziert: <geom name="head_collision" type="box" class="collision" pos="-0.0045 0 -0.03" size="0.045 0.032 0.03"/> in microduck.xml (v2.9.0 eingeführt) — die Kopf-Kette (neck…jaw_soft) hatte NUR Visual-Geoms, der Kopf hing beim Liegen visuell durch den Boden; die Box löst das (ohne Masseanteil, <inertial> bleibt maßgeblich)
+- SICHTBARKEITS-BUG: render3d.js buildFromModel()/buildGhost() rendern ALLE Geoms inkl. Kollisions-Geoms (group 3, Menagerie-Konvention) → graue 9×6,4×6-cm-Box mit Default-RGBA wird als „Würfel" im Kopf sichtbar; duck_camera ist bei z=-0.0733 VOR der Box (Box spannt z=-0.06…0) → FPV unbeeinträchtigt
+- SICHERHEITSANALYSE: scripts/check_collision_geoms.py (Parst alle 6 Roboter-XMLs inkl. Class-Vererbung; Bug im ersten Versuch: <default> nutzt class- statt name-Attribut) — Ergebnis: G1=36/51, Spot=13, A1=37, X2=8, MicroDuck=3 Kollisions-Geoms; KEIN Body besteht nur aus Kollisions-Geoms → Hiding sicher für alle
+- FIX in render3d.js: _visualCounts(sim) zählt Non-group-3-Geoms pro Body; _skipCollision() skipped group-3-Geoms, wenn der Body Visual-Geoms hat (Fallback rendert bei „nur Kollision" trotzdem); angewandt in buildFromModel UND buildGhost; Physik unangetastet (rein Rendering), Bonus: G1 rendert 51 Dreiecks-Meshes weniger
+- wasm-Verifikation: MjModel::geom_group() Getter existiert in mujoco.wasm (gleiches Muster wie geom_contype)
+- TESTS: node --check OK; scripts/renderskip_test.js NEU (9 Checks: MicroDuck-Kopf-Szenario, Nur-Kollisions-Fallback, Boden nie geskippt, G1-artig, XML-Konsistenz) ALLE GRÜN
+- Version: 2.13.1 / versionCode 24
+
+Stage Summary:
+- Antwort auf die Nutzer-Frage: Der Würfel = head_collision-Box (v2.9.0, für Aufsteh-Szenario nötig) — er war NUR ein Rendering-Bug, die Box gehört physikalisch dorthin
+- v2.13.1: Kollisions-Geoms (group 3) werden nicht mehr gerendert — Würfel weg bei MicroDuck UND alle anderen Roboter (Plus: Performance), Aufsteh-Physik unverändert
+- Release via Tag v2.13.1 (CI auto-release)
