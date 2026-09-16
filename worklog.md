@@ -432,3 +432,4 @@ Stage Summary:
 - Antwort auf die Nutzer-Frage: Der Würfel = head_collision-Box (v2.9.0, für Aufsteh-Szenario nötig) — er war NUR ein Rendering-Bug, die Box gehört physikalisch dorthin
 - v2.13.1: Kollisions-Geoms (group 3) werden nicht mehr gerendert — Würfel weg bei MicroDuck UND alle anderen Roboter (Plus: Performance), Aufsteh-Physik unverändert
 - Release via Tag v2.13.1 (CI auto-release)
+- ADDENDUM Task 34: Release v2.13.1 live — CI run 35102996559 SUCCESS; Asset Trainrobot.apk 41.660.678 bytes, anonym HTTP 200 ladbar; versionCode 24 / versionName 2.13.1 (scripts/apk_version.py, AXML-Parser); Signatur via apksigner (build-tools r34, nach SDK-Reset neu geladen): Signer #1 SHA-256 1c0422b9251e47ce… IDENTISCH mit v2.13.0 und allen v2.x → Update-Installation garantiert; render3d.js mit _skipCollision im APK verifiziert. Hinweis: scripts/apk_cert_sha.py (Hand-Parser) war fehlerhaft und wurde entfernt — apksigner ist maßgeblich
