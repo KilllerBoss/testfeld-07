@@ -44,6 +44,24 @@
 //             KEINEN Bahn-Zwang mehr (root/yaw-Belohnung neutral), Posen-
 //             Ähnlichkeit + Höhe + Aufrecht bleiben. Der Roboter wird nicht
 //             von der Bahn "mitgerissen"; Joystick/Buttons führen weiter.
+// v2.16.0 — ENTKOPLUNG (Policy nicht an die Animation binden):
+//   Bisher war die GLB-Animation an DREI Stellen mit der Policy verknotet:
+//   (a) OBS: Posen-Fehler-Kanäle q − Referenz, (b) AKTION: actionToCtrl
+//   verankerte die Aktionen um die ANIMIERTE Referenzpose (animOn=false
+//   umwarf den Anker auf die Stand-Pose → gelernte Aktionen bedeuteten
+//   plötzlich etwas anderes → die Policy „vergaß“ beim Lösen der
+//   Animation alles), (c) REWARD: Posen-Tracking. Seit v2.16.0 gilt:
+//   1) Aktions-Anker = IMMER die Keyframe-Pose (keyCtrl) — identische
+//      Aktions-Semantik MIT und OHNE Animation (wie beim Speed-Task).
+//   2) animOn=false = KOMMANDOGANG: das Wurzel-Ziel ist die integrierte
+//      Kommando-Strecke (Training: Zufalls-Kommandos, POLICY-Modus: Stick)
+//      — der Roboter BEHALT sein Gehen und verbessert es, statt auf einen
+//      Stand-Attraktor zurückgezogen zu werden. Posen-Gewicht sinkt auf
+//      freePose (schwacher Haltungs-Regulierer).
+//   3) ANIM-DROPOUT (dropP): im GLB-Training läuft jeder Episode mit
+//      Wahrscheinlichkeit dropP in OHNE-Animation-Semantik (Anker-OBS,
+//      Kommandogang, keine Posen-Belohnung) — die Policy lernt BEIDE
+//      Welten und das spätere „OHNE ANIM WEITER“ ist kein Bruch mehr.
 // ═══════════════════════════════════════════════════════════
 
 import { clamp } from './math.js';
@@ -57,6 +75,12 @@ export const MOTION_R = {
   pose: 0.72, height: 0.2, root: 0.22, yaw: 0.06, up: 0.08, base: 0.03, energy: 0.00005,
   poseScale: 0.35, hScale: 0.09, rootScale: 0.35, yawScale: 0.8,
   upMin: 0.5, hMin: 0.55, hMax: 1.4, rootDone: 1.6,
+  // v2.16.0: freePose = Posen-Gewichts-Faktor OHNE Animation (schwacher
+  //   Haltungs-Regulierer um die Keyframe-Pose — hält die Beine sanft,
+  //   bestraft Gehen nicht mehr nennenswert). dropP = Wahrscheinlichkeit,
+  //   mit der eine Trainings-Episode OHNE Animation läuft (Anim-Dropout:
+  //   die Policy wird von Anfang an animation-unabhängig).
+  freePose: 0.1, dropP: 0.2,
 };
 
 function wrapAngle(a) {
@@ -93,6 +117,11 @@ export function makeMotionTask(cfg, clip, sim) {
     //   GLEICHGEWICHT gelernt. Der Posen-Anteil fällt auf 35 % (grobe
     //   Stand-Attraktor), damit Beine beim Joystick-Gehen frei bleiben.
     animOn: true,
+    // v2.16.0 ANIM-DROPOUT: dropAnimP > 0 schaltet das Dropout SCHARF
+    // (nur im Training gesetzt: main.js startTraining + simworker).
+    // dropAnim = diese Episode läuft ohne Animation (je Episode neu gewürfelt).
+    dropAnimP: 0,
+    dropAnim: false,
     // v2.15.0: Referenz-Modus — 'frei' (Bahn wandert), 'stelle' (fix am
     // Startpunkt), 'folgt' (Geist hängt am Roboter, kein Bahn-Zwang)
     refMode: 'frei',
@@ -113,6 +142,13 @@ export function makeMotionTask(cfg, clip, sim) {
     _p: new Float64Array(3),
     _loopX: 0, _loopY: 0, _loopYaw: 0,
 
+    // v2.16.0: läuft diese Episode OHNE Animation? (animOn=false ODER
+    // Anim-Dropout einer Trainings-Episode)
+    animOff() { return this.animOn === false || this.dropAnim === true; },
+    // v2.16.0: wird die Wurzel von KOMMANDOS geführt (statt von der
+    // Clip-Bahn)? — joy/btn sowieso, und OHNE Animation immer.
+    cmdDriven() { return this.ctrlMode === 'joy' || this.ctrlMode === 'btn' || this.animOff(); },
+
     reset(rng, sim2) {
       this.phase = 0;
       this.tElapsed = 0;
@@ -120,14 +156,26 @@ export function makeMotionTask(cfg, clip, sim) {
       this.trg.fill(0);
       this._trgHold.fill(0);
       this._loopX = 0; this._loopY = 0; this._loopYaw = 0;
-      // Kommando-Ziel auf den Bahn-Anfang setzen (v2.5.0)
-      this._tx = hasRoot ? clip.root[0] : 0;
-      this._ty = hasRoot ? clip.root[1] : 0;
-      this._tyaw = hasRoot ? (clip.yaw[0] || 0) : 0;
+      // v2.16.0 Anim-Dropout: nur im Training scharf (dropAnimP), nur wenn
+      // die Animation AN ist (bei animOn=false ist alles schon ohne).
+      this.dropAnim = this.dropAnimP > 0 && this.animOn !== false && Math.random() < this.dropAnimP;
+      const off = this.animOff();
+      // Kommando-Ziel setzen: OHNE Animation auf die ROBOTER-Startposition
+      // (Kommandogang ab da), MIT Animation auf den Bahn-Anfang (v2.5.0)
+      if (off && sim2) {
+        try { sim2.basePos(this._p); this._tx = this._p[0]; this._ty = this._p[1]; this._tyaw = 0; }
+        catch (e) { this._tx = 0; this._ty = 0; this._tyaw = 0; }
+      } else {
+        this._tx = hasRoot ? clip.root[0] : 0;
+        this._ty = hasRoot ? clip.root[1] : 0;
+        this._tyaw = hasRoot ? (clip.yaw[0] || 0) : 0;
+      }
       this._cmdHold = 0; // erzwingt sampleCmd beim ersten Trainingsschritt
       this.cmd.vx = 0; this.cmd.wz = 0;
-      // Roboter AUF die Referenz-Bahn setzen (nicht in den Ursprung)
-      if (sim2 && hasRoot) {
+      this._manualCmd = false;
+      // Roboter AUF die Referenz-Bahn setzen (nicht in den Ursprung) —
+      // OHNE Animation bleibt die Roboter-eigene Startpose (Keyframe)
+      if (sim2 && hasRoot && !off) {
         try { sim2.placeBase(clip.root[0], clip.root[1], clip.yaw[0] || 0); } catch (e) { /* Basis ohne freies Gelenk */ }
       }
     },
@@ -139,7 +187,7 @@ export function makeMotionTask(cfg, clip, sim) {
     // Gleichgewicht gelernt, die GLB-Animation fließt nicht ein.
     sampleRef(phase, outQ, outH) {
       const c = clip;
-      if (this.animOn === false) {
+      if (this.animOn === false || this.dropAnim === true) {
         for (let j = 0; j < nu; j++) outQ[j] = keyCtrl[j];
         // v2.15.0: Soll-Höhe = Roboter-eigene Grundhöhe (cfg.h0) statt der
         // G1-Festwert 0,79 — sonst würde der MicroDuck (h0=0,12) ständig als
@@ -225,7 +273,10 @@ export function makeMotionTask(cfg, clip, sim) {
     // v2.6.0 ('btn'): zusätzlich zufällige TRIGGER (25 % je Kanal,
     // Haltezeit 0,8–2,0 s) — die Policy lernt, Buttons ernst zu nehmen.
     sampleCmd() {
-      if (this.ctrlMode === 'none') { this.cmd.vx = 0; this.cmd.wz = 0; this._cmdHold = Infinity; return; }
+      // v2.16.0: OHNE Animation wird auch bei ctrlMode 'none' gewürfelt —
+      // der Kommandogang (frei weitertrainieren ohne GLB) braucht im
+      // Training Fahrbefehle, sonst würde nur Stehen belohnt.
+      if (this.ctrlMode === 'none' && !this.animOff()) { this.cmd.vx = 0; this.cmd.wz = 0; this._cmdHold = Infinity; return; }
       const vxMax = Math.max(0.5, Math.min(1.0, (clip.meanSpeed || 0.4) * 1.6));
       if (Math.random() < 0.25) { this.cmd.vx = 0; this.cmd.wz = 0; }
       else {
@@ -261,11 +312,13 @@ export function makeMotionTask(cfg, clip, sim) {
       // (der Joystick führt!), sonst die Referenzbahn des Clips.
       // v2.15.0: 'stelle' → Ziel = Startpunkt (lead 0); 'folgt' → Ziel =
       // eigene Position (Fehler ≈ 0 — kein Bahn-Zwang, nur Pose/Höhe).
-      const joy = this.ctrlMode === 'joy';
+      // v2.16.0: Kommandos führen die Wurzel bei joy/btn UND immer ohne
+      // Animation (Kommandogang) — sonst gelten die Referenz-Modi.
+      const driven = this.cmdDriven();
       let tx, ty, tyaw, lead;
       sim.basePos(this._p);
-      if (joy) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = this.cmd.vx; }
-      else if (this.refMode === 'stelle' || this.animOn === false) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = 0; }
+      if (driven) { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = this.cmd.vx; }
+      else if (this.refMode === 'stelle') { tx = this._tx; ty = this._ty; tyaw = this._tyaw; lead = 0; }
       else if (this.refMode === 'folgt') { tx = this._p[0]; ty = this._p[1]; tyaw = yaw; lead = this.refSpeed(this.phase); }
       else { this.refRoot(this.phase, this._rr); tx = this._rr[0]; ty = this._rr[1]; tyaw = this._rr[2]; lead = this.refSpeed(this.phase); }
       const dx = tx - this._p[0], dy = ty - this._p[1];
@@ -354,8 +407,10 @@ export function makeMotionTask(cfg, clip, sim) {
       // v2.15.0: 'stelle' → Startpunkt (bleibt stehen); 'folgt' → KEIN
       // Bahn-Zwang (root/yaw neutral — der Lehrer hängt am Roboter).
       let eRoot = 1, eYaw = 1, dRoot = 0;
-      const trackCmd = this.ctrlMode === 'joy' || this.ctrlMode === 'btn' || this.animOn === false || this.refMode === 'stelle';
-      const noRootPull = this.refMode === 'folgt' && this.ctrlMode !== 'joy' && this.ctrlMode !== 'btn' && this.animOn !== false;
+      // v2.16.0: Kommando-Verfolgung = joy/btn ODER ohne Animation
+      // (Dropout inklusive) — dann zählt die integrierte Kommando-Strecke.
+      const trackCmd = this.cmdDriven() || this.refMode === 'stelle';
+      const noRootPull = this.refMode === 'folgt' && !this.cmdDriven();
       if (noRootPull) {
         // geankert: Posen-/Höhen-Treue zählt, der Ort zählt nicht
       } else if (trackCmd) {
@@ -380,7 +435,10 @@ export function makeMotionTask(cfg, clip, sim) {
       // und zahlt einen kleinen Bewegungs-Bonus — der Button „befreit" den
       // Roboter für eine eigene dynamische Aktion (Kicken/Springen-artig);
       // Höhe/Aufrecht/Bahn halten ihn dabei sicher.
-      let poseW = this.animOn === false ? MOTION_R.pose * 0.35 : MOTION_R.pose;
+      // v2.16.0: OHNE Animation (auch Dropout-Episode) sinkt das Posen-
+      // Gewicht auf freePose — schwacher Haltungs-Regulierer um die
+      // Keyframe-Pose, der Gehen auf Kommando nicht mehr bestraft.
+      let poseW = this.animOff() ? MOTION_R.pose * (MOTION_R.freePose || 0.1) : MOTION_R.pose;
       let styleB = 0;
       let trgSum = 0;
       for (let i = 0; i < 4; i++) trgSum += this.trg[i];
@@ -404,19 +462,18 @@ export function makeMotionTask(cfg, clip, sim) {
       const old = this.phase;
       const c = clip;
       // Kommando-Führung (v2.5.0/2.6.0): das Wurzel-Ziel integriert (vx, wz).
-      // joy/btn + animOn: Kommandos führen (Training: gewürfelt, Policy: Stick).
-      // animOn=false: Ziel bleibt an der Startposition stehen (Gleichgewicht
-      //   lernen ohne Weglauf-Drang) — außer bei joy/btn (dort führt der Stick).
+      // v2.16.0: OHNE Animation wird das Ziel IMMER von Kommandos geführt
+      //   (Training: Zufalls-Kommandos = Kommandogang lernen; POLICY-Modus:
+      //   der Stick schreibt _manualCmd — dann wird NICHT hineingewürfelt).
       const joy = this.ctrlMode === 'joy' || this.ctrlMode === 'btn';
-      if (joy) {
+      if (this.cmdDriven()) {
         this._cmdHold -= dt;
-        if (this._cmdHold <= 0) this.sampleCmd();
+        if (this._cmdHold <= 0 && !this._manualCmd) this.sampleCmd();
         this._tyaw = wrapAngle(this._tyaw + this.cmd.wz * dt);
         this._tx += Math.cos(this._tyaw) * this.cmd.vx * dt;
         this._ty += Math.sin(this._tyaw) * this.cmd.vx * dt;
-      } else if (this.animOn === false) {
-        // _tx/_ty/_tyaw bleiben fix — Ziel = Startposition (Stehen lernen)
       }
+      this._manualCmd = false;
       // Trigger (v2.6.0): Haltezeit runterzählen + rechteckförmig glätten
       // (Anstieg ~0,12 s, Abfall ~0,25 s — die Policy sieht saubere Kanäle)
       for (let i = 0; i < 4; i++) {
@@ -453,10 +510,13 @@ export function makeMotionTask(cfg, clip, sim) {
     },
 
     actionToCtrl(sim, act) {
-      // Rest-Aktion um die REFERENZ-Pose (nicht um das Keyframe)
-      this.sampleRef(this.phase, this._ref, null);
+      // v2.16.0 ENTKOPLUNG: Rest-Aktion IMMER um die Keyframe-Pose
+      // (keyCtrl) — dieselbe Aktions-Semantik mit und ohne Animation
+      // (wie beim Speed-Task). Vorher war der Anker die animierte
+      // Referenzpose: animOn=false warf den Anker um → die gelernte
+      // Policy bedeutete plötzlich etwas anderes („alles vergessen“).
       for (let a = 0; a < nu; a++) {
-        sim.ctrl[a] = this._ref[a] + span * Math.tanh(act[a]);
+        sim.ctrl[a] = keyCtrl[a] + span * Math.tanh(act[a]);
       }
     },
 
@@ -485,7 +545,11 @@ export function makeMotionTask(cfg, clip, sim) {
         }
         const f1 = (f + 1) % nFrames;
         for (let j = 0; j < actDim; j++) {
-          const diff = clip.q[f1 * actDim + j] - clip.q[f * actDim + j];
+          // v2.16.0: Etikett auf den NEUEN Aktions-Anker (Keyframe-Pose)
+          // geeicht — actionToCtrl verankert die Aktion um keyCtrl, also
+          // muss BC die Aktion liefern, die q_ref(f+1) aus der Keyframe-
+          // Pose trifft (vorher: Delta f → f+1 um die Referenz selbst).
+          const diff = clip.q[f1 * actDim + j] - keyCtrl[j];
           Y[f * actDim + j] = Math.atanh(clamp(diff / span, -0.95, 0.95));
         }
       }

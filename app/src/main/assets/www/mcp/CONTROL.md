@@ -33,7 +33,8 @@
 - theme: standard | neon | amber | ice | wald (Akzentfarben der ganzen App).
 - suggestions: [{label ≤20 Zeichen, q ≤120}] ersetzt die Vorschlags-Chips im KI-Chat (max 6) — nimm KONKRETE Kurzbefehle.
 
-## GLB-Referenz (v2.15.0) — Modi und Animation lösen
+## GLB-Referenz (v2.15.0/v2.16.0) — Modi und Animation lösen
 - Referenz-Modus (Chips im GLB-Bereich): STELLE = Referenz fix am Startpunkt (Bewegung auf der Stelle) · FREI = Lehrer wandert auf seiner Bahn (Loop) · FOLGT = Lehrer hängt am lebenden Roboter (kein Bahn-Zwang; root/yaw-Belohnung neutral). Joystick/Buttons führen in JEDEM Modus.
-- „OHNE ANIM WEITER“ = animOn AUS + Modus FOLGT: die policy trainiert WEITER (Netz + Policy-Slot bleiben) — nur Gleichgewicht/Freibewegung, keine Animationsbindung mehr.
-- Drohne: GLB-Clip = FLUGBAHN (Autopilot folgt der Route im MANUELL/POLICY-Modus; dieselben 3 Modi).
+- „OHNE ANIM WEITER“ (v2.16.0) = animOn AUS: die Policy trainiert WEITER als KOMMANDOGANG (Netz, Norm-Statistik und Policy-Slot bleiben — NICHTS wird neu angefangen). Das Wurzel-Ziel ist die integrierte Kommando-Strecke (Training: Zufalls-Fahrbefehle, POLICY-Modus: Stick). Der Referenz-Modus bleibt wie gewählt; ohne gewählte Steuerung wird automatisch Joystick aktiviert.
+- ENTKOPLUNG (v2.16.0): Der Aktions-Anker ist IMMER die Keyframe-Pose (keyCtrl) — identische Aktions-Semantik mit und ohne Animation. Die Policy ist NICHT mehr an die Animation gebunden. ANIM-DROPOUT: im GLB-Training laufen standardmäßig 20 % der Episoden (MOTION_R.dropP) komplett OHNE Animation — die Policy lernt beide Welten von Anfang an; das spätere Lösen der Animation ist kein Bruch mehr.
+- Drohne: GLB-Clip = FLUGBAHN (Autopilot folgt der Route im MANUELL/POLICY-Modus; dieselben 3 Modi). „OHNE ANIM WEITER“ löst den Lehrpfad — die Drohne fliegt auf Stick/Gait.

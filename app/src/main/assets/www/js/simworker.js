@@ -46,10 +46,22 @@ let envState = { fallMode: 'reset' };
 function post(msg, transfer) { self.postMessage(msg, transfer || []); }
 
 function buildTask(spec, cfg, simRef) {
-  if (spec.kind === 'motion') return makeMotionTask(cfg, spec.clip, simRef);
-  if (spec.kind === 'recovery') return makeRecoveryTask(cfg, spec.mode || 'getup');
-  if (cfg.moe) return makeDuckMoeTask(cfg); // v2.12.0: Soft-MoE (MicroDuck)
-  return makeTrackTask(cfg); // 'speed' (Tempo-Tracking / Laufen lernen)
+  const t = spec.kind === 'motion' ? makeMotionTask(cfg, spec.clip, simRef)
+    : spec.kind === 'recovery' ? makeRecoveryTask(cfg, spec.mode || 'getup')
+    : cfg.moe ? makeDuckMoeTask(cfg) // v2.12.0: Soft-MoE (MicroDuck)
+    : makeTrackTask(cfg); // 'speed' (Tempo-Tracking / Laufen lernen)
+  // v2.16.0: Animations-/Modus-Flags des Haupt-Threads übernehmen — vorher
+  // trainierten die Worker IMMER mit animOn=true/'frei' (Default), selbst
+  // nachdem der Nutzer „OHNE ANIM WEITER“ gedrückt hatte → Training und
+  // Policy-Modus liefen auseinander („der Roboter vergisst alles“).
+  if (spec.kind === 'motion') {
+    if (spec.animOn !== undefined) t.animOn = spec.animOn !== false;
+    if (spec.refMode) t.refMode = spec.refMode;
+    if (spec.ctrlMode) t.ctrlMode = spec.ctrlMode;
+    if (Array.isArray(spec.buttons)) t.buttons = spec.buttons.slice(0, 4);
+    t.dropAnimP = MOTION_R.dropP || 0.2; // v2.16.0: Anim-Dropout nur im Training scharf
+  }
+  return t;
 }
 
 self.onmessage = async (e) => {
@@ -124,6 +136,16 @@ function applyEnv(env) {
   if (env.actSpan !== undefined) sim.cfg.actSpan = env.actSpan;
   if (env.rWx) sim.cfg.rWx = sanitizeRwx(env.rWx); // v2.14.0: Zielterme
   if (env.motionR) Object.assign(MOTION_R, env.motionR);
+  // v2.16.0: Animations-/Modus-Flags LIVE an die Task der Worker — so
+  // greift „OHNE ANIM WEITER“/Referenz-Modus/Steuerung SOFORT im Parallel-
+  // Training (env wird je Runde neu über kick() ausgesendet).
+  if (env.motionFlags && task && task.kind === 'motion') {
+    const f = env.motionFlags;
+    if (f.animOn !== undefined) task.animOn = f.animOn !== false;
+    if (f.refMode) task.refMode = f.refMode;
+    if (f.ctrlMode) task.ctrlMode = f.ctrlMode;
+    if (env.motionR && env.motionR.dropP !== undefined) task.dropAnimP = env.motionR.dropP;
+  }
   if (env.recoveryR) Object.assign(RECOVERY_R, env.recoveryR);
   if (env.fallMode) envState.fallMode = env.fallMode;
   // v2.11.0 DOMAIN RANDOMIZATION: Spec je Worker setzen — task.reset

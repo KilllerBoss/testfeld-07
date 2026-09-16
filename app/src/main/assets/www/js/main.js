@@ -28,7 +28,7 @@ import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 
-const VERSION = '2.15.0';
+const VERSION = '2.16.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -1252,7 +1252,16 @@ function pluginsActive() {
 /** Aufgaben-Beschreibung für die Sim-Worker (v2.10.0). */
 function workerTaskSpec() {
   const kind = S.task && S.task.kind;
-  if (kind === 'motion') return { kind: 'motion', clip: S.motionClip };
+  if (kind === 'motion') return {
+    kind: 'motion', clip: S.motionClip,
+    // v2.16.0: Animations-/Modus-Flags mitgeben — vorher trainierten die
+    // Worker mit Default (animOn=true/'frei') weiter, selbst nach „OHNE
+    // ANIM WEITER“ → Policy „vergaß“ beim Umschalten alles.
+    animOn: S.task.animOn !== false,
+    refMode: S.task.refMode,
+    ctrlMode: S.task.ctrlMode,
+    buttons: Array.isArray(S.task.buttons) ? S.task.buttons.slice(0, 4) : null,
+  };
   if (kind === 'recovery') return { kind: 'recovery', mode: S.task.mode || scenarioOf(S.robotId) };
   return { kind: 'speed' };
 }
@@ -1267,7 +1276,12 @@ function parallelEnvCfg() {
   if (cfg.cmd) env.cmd = JSON.parse(JSON.stringify(cfg.cmd));
   if (cfg.actSpan !== undefined) env.actSpan = cfg.actSpan;
   if (cfg.rWx) env.rWx = sanitizeRwx(cfg.rWx); // v2.14.0: Zielterme an Worker
-  if (S.task && S.task.kind === 'motion') env.motionR = { ...MOTION_R };
+  if (S.task && S.task.kind === 'motion') {
+    env.motionR = { ...MOTION_R };
+    // v2.16.0: Live-Flags je Runde (kick()) — „OHNE ANIM WEITER“,
+    // Referenz-Modus und Steuerung greifen SOFORT im Paralleltraining.
+    env.motionFlags = { animOn: S.task.animOn !== false, refMode: S.task.refMode, ctrlMode: S.task.ctrlMode };
+  }
   if (S.task && S.task.kind === 'recovery') env.recoveryR = { ...RECOVERY_R };
   env.fallMode = S.fallMode;
   env.dr = drCfg(); // v2.11.0: Störungen an ALLE Worker durchreichen (je Worker anders gewürfelt)
@@ -1349,6 +1363,7 @@ function startTraining() {
     log('Tempo MAX mit aktivem Plugin: Training läuft inline (Plugins wirken nur im Haupt-Thread-Rollout)', 'warn');
   }
   S.task.reset(S.trainer.rng, S.sim);
+  if (S.task && S.task.kind === 'motion') S.task.dropAnimP = MOTION_R.dropP || 0; // v2.16.0: Anim-Dropout im Training scharf
   if (S.task.setUserCmd) S.task.recoverOnFall = (S.fallMode === 'stay'); // v2.12.1: Sturz → Aufsteh-Fenster im „Liegen lassen“-Modus
   pluginHost.fireReset();
   S.training = true;
@@ -1501,9 +1516,10 @@ function policyCtrlStep() {
   // Joystick/Buttons-Steuerung (v2.5.0): bei ctrlMode 'joy'/'btn' liefert
   // der Stick die Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy
   // im Training mit Zufalls-Werten kennengelernt hat.
-  if (task.kind === 'motion' && (task.ctrlMode === 'joy' || task.ctrlMode === 'btn')) {
+  if (task.kind === 'motion' && (task.ctrlMode === 'joy' || task.ctrlMode === 'btn' || task.animOn === false)) {
     const c = controls.command(S.sim.cfg);
     task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
+    task._manualCmd = true; // v2.16.0: advance darf NICHT hineinwürfeln (Stick führt)
   }
   // v2.12.1: Der ECHTE Stick steuert ALLE Speed-Aufgaben im POLICY-Modus.
   // Vorher kam der Stick hier NIE an (nur bei GLB-Motion): Speed-Policies
@@ -2061,6 +2077,7 @@ function wireUI() {
       S.task.ctrlMode = mode;
       S.task.cmd.vx = 0; S.task.cmd.wz = 0; S.task._cmdHold = 0;
       S.task._trgHold.fill(0);
+      if (S.parallel) S.parallel.envCfg = parallelEnvCfg(); // v2.16.0: Steuerung sofort an Worker
       syncBtnRow();
       renderClipButtons();
       log(mode === 'joy'
@@ -2081,26 +2098,41 @@ function wireUI() {
       try { localStorage.setItem('tr_refmode_v1', m); } catch (e) { /* voll */ }
       if (S.task && S.task.kind === 'motion') S.task.refMode = m;
       if (S.task && S.task.pathOn) S.task.refMode = m;
+      if (S.parallel) S.parallel.envCfg = parallelEnvCfg(); // v2.16.0: Modus sofort an Worker
       syncRefChips();
       log('Referenz-Modus: ' + ({ stelle: 'AN EINER STELLE — Referenz steht fix, Bewegung auf der Stelle', frei: 'FREI — der Lehrer wandert auf seiner Bahn durchs Feld', folgt: 'AM ROBOTER GEANKERT — der Lehrer hängt am Roboter, kein Bahn-Zwang' })[m], 'ok');
       ui.toast('Referenz: ' + ({ stelle: 'An einer Stelle', frei: 'Frei', folgt: 'Folgt dem Roboter' })[m]);
     });
   }
-  // ── v2.15.0: ANIMATION LÖSEN — Policy WEITERTRAINIEREN ohne GLB ──
+  // ── v2.15.0/v2.16.0: ANIMATION LÖSEN — Policy WEITERTRAINIEREN ohne GLB ──
   document.getElementById('glbUnbind').addEventListener('click', () => {
     controls.buzz();
-    if (!S.task || S.task.kind !== 'motion') { ui.toast('Nur mit aktiver GLB-Referenz möglich', true); return; }
+    const t = S.task;
+    if (!t || (t.kind !== 'motion' && !t.pathOn)) { ui.toast('Nur mit aktiver GLB-Referenz möglich', true); return; }
     stopTraining(true);
-    S.animTraining = false;
-    try { localStorage.setItem('tr_animOn', '0'); } catch (e) { /* voll */ }
-    S.task.animOn = false;
-    S.refMode = 'folgt';
-    try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
-    S.task.refMode = 'folgt';
+    if (t.kind === 'motion') {
+      S.animTraining = false;
+      try { localStorage.setItem('tr_animOn', '0'); } catch (e) { /* voll */ }
+      t.animOn = false;
+      // v2.16.0: Referenz-MODUS bleibt wie gewählt (stelle/frei/folgt) —
+      // ohne Animation läuft der KOMMANDOGANG (Trainings-Fahrbefehle bzw.
+      // Stick). Ist keine Steuerung gewählt, schalten wir auf Joystick um,
+      // damit der Stick im POLICY-Modus wirklich führen kann.
+      if (t.ctrlMode === 'none') {
+        t.ctrlMode = 'joy';
+        const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
+        if (rec) { rec.ctrl = 'joy'; putClip(rec).catch(() => {}); }
+        syncCtrlChips();
+      }
+    } else {
+      // v2.16.0: Drohnen-Lehrpfad lösen — die Drohne fliegt auf Stick/Gait
+      t.pathOn = false; t.pathClip = null;
+    }
     const at = document.getElementById('animTrainToggle');
     if (at) at.checked = false;
     syncRefChips();
-    log('ANIMATION GELÖST — die Policy trainiert WEITER (Gleichgewicht + Freibewegung; Joystick/Buttons führen weiter). Netz, Norm-Statistik und Policy-Slot bleiben erhalten — sie ist nicht mehr an die Animation gebunden.', 'ok');
+    if (S.parallel) S.parallel.envCfg = parallelEnvCfg(); // Worker sofort umstellen (v2.16.0)
+    log('ANIMATION GELÖST — die Policy trainiert WEITER (Kommandogang: das Gehen bleibt erhalten, Fahrbefehle/Stick führen; nur Balance & Freibewegung werden nachtrainiert). Netz, Norm-Statistik und Policy-Slot bleiben erhalten — der Aktions-Anker ist seit v2.16.0 animations-unabhängig, die Policy ist NICHT mehr an die Animation gebunden.', 'ok');
     ui.toast('Animation gelöst — trainiert ohne weiter', false, 3000);
   });
   // ── Clip-Buttons hinzufügen (v2.6.0) ────────────────────
@@ -2134,9 +2166,10 @@ function wireUI() {
     S.animTraining = animT.checked;
     try { localStorage.setItem('tr_animOn', animT.checked ? '1' : '0'); } catch (e) { /* voll */ }
     if (S.task && S.task.kind === 'motion') S.task.animOn = animT.checked;
+    if (S.parallel) S.parallel.envCfg = parallelEnvCfg(); // v2.16.0: sofort an Worker
     log(animT.checked
-      ? 'Animation im Training: AN — Posen-Tracking aktiv'
-      : 'Animation im Training: AUS — es wird nur GLEICHGEWICHT gelernt (Referenz = Stand; die Animationen haben ja kein Gleichgewicht)', 'warn');
+      ? 'Animation im Training: AN — Posen-Tracking aktiv (20 % der Episoden laufen trotzdem ohne — die Policy bleibt unabhängig)'
+      : 'Animation im Training: AUS — Kommandogang ohne GLB (Fahrbefehle führen; Gehen/Balance bleiben erhalten, nichts wird neu angefangen)', 'warn');
     ui.toast(animT.checked ? 'Animation im Training an' : 'Nur Gleichgewicht lernen');
   });
   document.getElementById('ghostToggle').addEventListener('change', (e) => {

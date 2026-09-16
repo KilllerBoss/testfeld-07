@@ -158,8 +158,7 @@ export const AI_DOCS = [
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT; „OHNE ANIM WEITER“ trainiert eine GLB-Policy ohne Animation weiter.
-
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist.
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
 ${cfgJson}
