@@ -10,6 +10,7 @@
 
 import { clamp } from './math.js';
 import { sanitizeDr, applyDrModel, applyDrStart, drSensor, drPushDue, drDelayedAct } from './dr.js';
+import { leggedSkillState, expertRouterReward } from './skill.js'; // v2.13.0: Experten-/Router-Belohnungen
 
 // Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
 export const HOVER_R = {
@@ -453,6 +454,8 @@ export function makeDuckMoeTask(cfg) {
     softCmd: { vx: 0, vy: 0, wz: 0 }, // Soft-Block
     skillW: new Float64Array([1, 0, 0, 0]),
     styleW: new Float64Array([1, 0, 0, 0, 0, 0]),
+    expertNames: ['balance', 'walk', 'turn', 'recover'], // v2.13.0: Reihenfolge = Router-Outputs
+    _erPrevUp: 1,
     stepsLeft: 0,
     level: 1,
     epMax: 1000, // 20 s @ 50 Hz
@@ -462,6 +465,10 @@ export function makeDuckMoeTask(cfg) {
     _recoverMode: false, _recSteps: 0,
     _footIds: null, _prevFoot: null, _prevContacts: null,
     _routeW: new Float64Array(4), _routePen: 0,
+    // v2.12.1: Aufsteh-Fenster + Stick-Modus („falsch synchronisiert"-Fix)
+    _userCmd: false, _prevUp: 1, _recThisEp: false,
+    recoverOnFall: false, // main.js setzt je „Sturz-Verhalten" (stay=true)
+    recStepsMax: 300,     // 6 s Aufsteh-Versuch nach Sturz (50 Hz)
     _rng: null, _tick: 0,
     _epLen: 0, _emaLen: 0, _epSinceUp: 0,
     lastAct: new Float64Array(nu), // Legacy-Alias (simworker/train_smoke schreiben hier)
@@ -486,7 +493,36 @@ export function makeDuckMoeTask(cfg) {
       if (!silent && this.onLevelUp) this.onLevelUp(this.level);
     },
 
-    reset(rng, sim) {
+    // ── v2.12.1: Aufsteh-Fenster (RECOVER) ──
+    // Sturz/liegender Start beendet die Episode NICHT mehr sofort — die
+    // Ente bekommt ein Zeitfenster, um selbst aufzustehen (Master-Prompt:
+    // Recovery ist ein Skill, keine Reset-Anweisung).
+    _enterRecover(steps) {
+      this._recoverMode = true;
+      this._recSteps = Math.max(50, steps | 0);
+      this._recThisEp = true;
+      this._prevUp = -1; // Fortschritt ab ganz unten zählen
+    },
+
+    // ── v2.12.1: POLICY-Modus — der ECHTE Stick steuert ──
+    // Dieselben 13 Kommando-Kanäle wie im Training, aber vom Stick; der
+    // Zufalls-Scheduler pausiert, solange der Nutzer steuert. Wird auf das
+    // Level-Kommandoband geklemmt (in-Verteilung zur trainierten Policy).
+    setUserCmd(vx, vy, wz) {
+      this._userCmd = true;
+      const vmax = this.vxMax || 0.1, wmax = this.wzMax || 0.3;
+      const cvx = Math.max(0, Math.min(vmax, vx || 0)); // Rückwärts kennt das Training nicht
+      const cwz = Math.max(-wmax, Math.min(wmax, wz || 0));
+      let w;
+      if (Math.abs(cwz) > 0.2 && cvx < 0.05) w = [0.30, 0.06, 0.64, 0]; // drehen
+      else if (cvx >= 0.05) w = [0.08, 0.88, 0.04, 0];                  // gehen
+      else w = [1, 0, 0, 0];                                             // balance
+      this._tgt.vx = cvx; this._tgt.vy = vy || 0; this._tgt.wz = cwz; this._tgt.w = w;
+    },
+
+    reset(rng, sim, keepPose = false) {
+      // v2.12.1: keepPose=true = Episode startet aus der AKTUELLEN Lage
+      // („Liegen lassen" — kein Teleport); main.js teleports sonst selbst.
       this._rng = rng;
       // Fuß-Körper-IDs einmalig auflösen (Geschwindigkeit + Kontaktwechsel)
       if (!this._footIds && sim._mjApi) {
@@ -511,10 +547,27 @@ export function makeDuckMoeTask(cfg) {
         applyDrModel(sim, this.drSpec, rng);
       }
       // Basis-Zustand
-      sim.resetToKeyframe();
-      if (this.drSpec.pose > 0) applyDrStart(sim, this.drSpec, rng);
+      if (!keepPose) {
+        sim.resetToKeyframe();
+        if (this.drSpec.pose > 0) applyDrStart(sim, this.drSpec, rng);
+      }
       this._epLen = 0;
-      this._recoverMode = false; this._recSteps = 0;
+      // ── v2.12.1 Liegend-Start erkennen („Liegen lassen"): Episode beginnt
+      // am Boden → Aufsteh-Fenster statt Sofort-Abbruch (vorher done=true im
+      // ersten Schritt = Extrem kurze Episoden, die Ente „kann nicht mal
+      // hinfallen") ──
+      this._userCmd = false;
+      sim.baseQuat(this._bq || (this._bq = new Float64Array(4)));
+      sim.basePos(this._hp || (this._hp = new Float64Array(3)));
+      const _w0 = this._bq[0], _x0 = this._bq[1], _y0 = this._bq[2];
+      const _upz0 = 1 - 2 * (_x0 * _x0 + _y0 * _y0);
+      if (_upz0 < cfg.done.upMin || this._hp[2] < cfg.done.zMin) {
+        this._enterRecover(400); // 8 s Aufsteh-Versuch ab der Lage
+      } else {
+        this._recoverMode = false; this._recSteps = 0;
+        this._prevUp = _upz0;
+      }
+      this._recThisEp = this._recoverMode;
       this.lastAct.fill(0);
       if (!this._prevFoot) this._prevFoot = new Float64Array(3 * Math.max(1, this._footIds ? this._footIds.length : 0));
       if (!this._prevContacts) this._prevContacts = new Uint8Array(Math.max(1, this._footIds ? this._footIds.length : 0));
@@ -575,6 +628,7 @@ export function makeDuckMoeTask(cfg) {
       // trainCtrlStep: observe → act → actionToCtrl → stepN → reward → afterAct)
       if (act) for (let i = 0; i < nu; i++) this.lastAct[i] = act[i];
       this._advanceCmd();
+      if (this._userCmd) return; // v2.12.1: Stick-Modus — KEINE Zufalls-Segmente
       if (this.stepsLeft > 0) this.stepsLeft--;
       if (this.stepsLeft <= 0 && !this._recoverMode && this._rng) this._nextSeg(this._rng);
     },
@@ -703,14 +757,38 @@ export function makeDuckMoeTask(cfg) {
       }
       // ── §5 ROUTING-GLÄTTUNG: ||Δw||² der Expertengewichte ──
       if (rW.route > 0) r += -rW.route * this._routePen;
-      // ── Recovery-Formung (EXPERIMENTELL) ──
+      // ── RECOVER (v2.12.1, jetzt wirklich aktiv): Aufsteh-Fortschritt —
+      // Aufrecht sein + echter Aufwärts-Fortschritt zählen ──
       if (this._recoverMode) {
-        r += rW.recover * upz * upz;
+        const rise = Math.max(0, upz - this._prevUp);
+        r += rW.recover * (upz * upz + 4 * rise);
+        this._prevUp = upz;
         this._recSteps--;
-        if (upz > 0.85 && gz > cfg.h0 * 0.7) {
+        if (upz > 0.85 && gz > 0.065) {
+          // Wieder steht → normal weiterlaufen (Kommandos neu)
           this._recoverMode = false;
-          this._nextSeg(this._rng, false);
+          this._pushContacts(sim);
+          if (this._rng && !this._userCmd) this._nextSeg(this._rng, false);
         }
+      } else {
+        this._prevUp = upz;
+      }
+      // ── v2.13.0 EXPERTEN-/ROUTER-Belohnungen (skill.js): Der Router wird
+      // belohnt, wenn er im passenden Zustand den passenden Experten wählt
+      // (z. B. liegend → „recover"), und der dominante Experte bekommt sein
+      // EIGENES Ergebnis (stehen = ruhig+aufrecht, walk = echte Fahrt,
+      // turn = echte Drehung, recover = echter Aufwärts-Fortschritt).
+      // KI-tunbar über expertR (KI-Trainer, applyConfig).
+      if (cfg.expertR && cfg.expertR.on > 0) {
+        const st = leggedSkillState(upz, vFwd, yawRate);
+        const er = expertRouterReward({
+          state: st, route: this._routeW, names: this.expertNames,
+          prevUp: this._erPrevUp, upz, vFwd, yawRate,
+          speed: Math.hypot(this._bv[0], this._bv[1]),
+          cmdVx: this.softCmd.vx, cmdYaw: this.softCmd.wz,
+        });
+        r += er.r;
+        this._erPrevUp = upz;
       }
       // DR-Schübe (v2.11.0)
       if (this.drSpec && this.drSpec.pushEvery[1] > 0) {
@@ -723,24 +801,39 @@ export function makeDuckMoeTask(cfg) {
           sim.pushImpulse(Math.cos(ang) * Jv, Math.sin(ang) * Jv, 0);
         }
       }
-      // Abbruch
+      // ── Abbruch (v2.12.1): Sturz → Aufsteh-Fenster statt Sofort-Abbruch ──
       let done = false;
       if (this._recoverMode) {
-        done = (upz < 0.05 && gz < 0.04) || this._recSteps <= 0;
-      } else {
-        done = upz < cfg.done.upMin || gz < cfg.done.zMin || gz > cfg.done.zMax;
+        // Nur das Zeitfenster beendet die Episode (nicht die Lage selbst)
+        done = this._recSteps <= 0;
+      } else if (upz < cfg.done.upMin || gz < cfg.done.zMin || gz > cfg.done.zMax) {
+        if (this.recoverOnFall && rW.recover > 0) {
+          this._enterRecover(this.recStepsMax);
+          if (rW.fall > 0) r -= rW.fall; // Sturz-Malus EINMAL beim Übergang
+        } else {
+          done = true;
+          if (rW.fall > 0) r -= rW.fall;
+        }
       }
-      if (done && !this._recoverMode && rW.fall > 0) r -= rW.fall;
-      // Timeout + Curriculum-Gate (§18)
+      // Timeout + Curriculum-Gate (§18) — Aufsteh-Episoden zählen NICHT zum
+      // Level-Aufstieg (sonst steigt das Level durch Boden-Kriechen)
       this._epLen++;
       if (!done && this._epLen >= this.epMax) done = true;
       if (done) {
-        this._emaLen = this._emaLen ? this._emaLen * 0.85 + this._epLen * 0.15 : this._epLen;
-        this._epSinceUp++;
-        if (this._epSinceUp >= 10) {
+        if (this._recThisEp) {
           this._epSinceUp = 0;
-          const gate = this.epMax * (0.5 + 0.07 * this.level);
-          if (this.level < 5 && this._emaLen >= gate) this.setLevel(this.level + 1);
+        } else {
+          this._emaLen = this._emaLen ? this._emaLen * 0.85 + this._epLen * 0.15 : this._epLen;
+          this._epSinceUp++;
+          if (this._epSinceUp >= 10) {
+            this._epSinceUp = 0;
+            const gate = this.epMax * (0.5 + 0.07 * this.level);
+            // Selbstkorrektur: Level steigt nur bei stabilen Episoden, sinkt
+            // wieder, wenn die Ente das Level-Niveau nicht mehr schafft
+            // (sonst bleibt sie in Instant-Kollaps-Leveln hängen).
+            if (this.level < 5 && this._emaLen >= gate) this.setLevel(this.level + 1);
+            else if (this.level > 1 && this._emaLen < gate * 0.5) this.setLevel(this.level - 1, true);
+          }
         }
       }
       return { r, done };
@@ -895,6 +988,7 @@ const ROBOTS = {
     h0: 0.12, // Soll-Basishöhe (STAND-Keyframe)
     cmd: { vx: [-0.15, 0.3], yaw: [-0.8, 0.8] },
     rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0.5, height: 0.5, foot: 0.02, route: 0.15, recover: 0.1 },
+    expertR: { on: 1 }, // v2.13.0: Experten-/Router-Belohnungen aktiv (Gewichte: skill.js EXPERT_R, KI-tunbar)
     dr: null, // v2.12.0: Curriculum des MoE-Tasks steckt die DR-Stufen (§18) — Störungs-Chips gelten hier nicht
     done: { upMin: 0.45, zMin: 0.045, zMax: 0.45 },
   },

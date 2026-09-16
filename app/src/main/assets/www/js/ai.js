@@ -139,6 +139,19 @@ export async function ensureModels(force = false) {
 
 export function currentModels() { return _models; }
 
+// ── Art-MCP (v2.13.0): Dokumente, die Gemini auf Abruf lesen kann ──
+// Die .md-Dateien liegen in assets/www/mcp/ und werden von main.js
+// (execTool 'readDoc') per fetch geladen — offline im APK verfügbar.
+// Hier steht nur der Katalog + Kurztitel.
+export const AI_DOCS = [
+  { doc: 'README', title: 'Index + Nutzung der Dokumente' },
+  { doc: 'ROBOTS', title: 'Alle 6 Roboter: Aktuatoren, Eingaben (obs), Ausgaben (actions), Sensoren, Kamera' },
+  { doc: 'ARCHITECTURE', title: 'Policy-Architektur: MLP + Soft-MoE (MicroDuck), Parameter, Grenzen' },
+  { doc: 'REWARDS', title: 'Belohnungen: rW-Felder + Experten-/Router-Belohnungen (expertR) + DR' },
+  { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera' },
+  { doc: 'TRAINING', title: 'PPO-Ablauf, Parallel-Worker, Domain Randomization, Curriculum, Grenzen' },
+];
+
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
@@ -168,6 +181,8 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 7. tool="setFallMode" — Verhalten bei Sturz außerhalb des Trainings. args = {mode:"reset"|"stay"}: "reset" = Auto-Teleport zum Start (bisheriges Verhalten, schnell beim Üben), "stay" = Roboter BLEIBT LIEGEN (kein Teleport mehr — gut zum Aufstehen-Üben; der Reset-Button setzt trotzdem zurück).
 8. tool="runCode" — ROHER ZUGRIFF: eigenen JS-Code SOFORT ausführen. args = {code}. Der Code läuft als Funktion(api) und kann alles aus der PLUGIN-API unten nutzen. Rückgabewert (return) wird dir als TOOL-ERGEBNIS gemeldet — ideal für schnelle Experimente, Abfragen, Einmal-Aktionen.
 9. tool="writePlugin" — eigenen MOD/PLUGIN SCHREIBEN und dauerhaft installieren. args = {name:"≤32 Zeichen", desc:"≤200 Zeichen", code:"…"}. Der Code wird geprüft (Syntax) und sofort aktiviert; bleibt gespeichert und startet künftig mit der App. Bei Syntax-/Laufzeit-Fehlern bekommst du die Meldung als TOOL-ERGEBNIS und kannst writePlugin mit korrigiertem Code erneut aufrufen.
+10. tool="readDoc" — ART-MCP: Wissensdatei lesen. args = {doc:"README"|"ROBOTS"|"ARCHITECTURE"|"REWARDS"|"CONTROL"|"TRAINING"}. LIES das passende Dokument, BEVOR du bei obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung rätst.
+11. tool="setCamera" — FPV-Kamerabild an/aus/einstellen (nur ANZEIGE — die Policy sieht das Bild NICHT). args = {on:<bool>, fov:40…110, pitch:-20…35 (Grad nach unten)}.
 
 PLUGIN-API (das Objekt „api" in runCode/writePlugin):
 - api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
@@ -194,6 +209,7 @@ BEDEUTUNG DER KONFIG-FELDER
 - rW (MicroDuck Soft-MoE zusätzlich): height = Höhen-Treue, foot = UNNÖTIGE Schritte (Fuß-Geschwindigkeit + Kontaktwechsel), route = Routing-Sprünge der 4 Soft-MoE-Experten, recover = Aufrichte-Formung (experimentell). duckLevel 1–5 = Curriculum des MicroDuck (flach → kombinierte Störungen), ersetzt die globalen Störungs-Chips für den Duck.
 - rW.yaw: Bestrafung des Drehfehlers. rW.up: Belohnung für Aufrechtsein. rW.alive: Grundbelohnung pro Schritt. rW.energy: Bestrafung des Aktionsaufwands (höher = sparsamere, ruhigere Bewegung).
 - rW.smooth: Bestrafung des Aktions-Ruckelns (Änderung zwischen zwei Zyklen — ruhigere Gaits). rW.jlimit: Bestrafung nahe der Gelenk-Anschläge. rW.fall: einmaliger Malus beim Sturz (0 = aus).
+- expertR (MicroDuck, Soft-MoE): Experten-/Router-Belohnungen. expertR.on = 1 (an). expertR.routerBonus: Bonus, wenn der Router im passenden Zustand den passenden Experten wählt — z. B. liegender Roboter wählt „recover" (aufstehen). expertR.wrongPenalty: sanfte Strafe für klar falsche Router-Wahl. expertR.recover.rise: Belohnung für echten Aufricht-Fortschritt, expertR.recover.uprightOnce: Einmal-Bonus nach Sturz. expertR.stand.up/quiet: aufrecht + ruhig stehen. expertR.walk.speed: tatsächliche Fahrt. expertR.turn.rate: tatsächliche Drehung. expertR.domMin: Router-Gewicht ab dem ein Experte „dominiert".
 - Störungen (Domain Randomization) stellt der NUTZER im Trainings-Panel ein (Chips „Störungen"): Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose, Sensorrauschen, Schübe, Aktions-Verzögerung. Du kannst sie nicht direkt setzen — aber rW-Anteile auf die Störungen abstimmen.
 - cmd.vx: geforderte Zielgeschwindigkeiten [min,max] in m/s (schneller laufen = max erhöhen). cmd.yaw: geforderte Drehraten [min,max] in rad/s. Bei der Drohne: cmd.alt = geforderte Höhen [min,max] in m.
 - actSpan: Aktionsamplitude um die Ruhepose (Bewegungsumfang der Policy).
@@ -205,7 +221,7 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|runCode|writePlugin   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|runCode|writePlugin   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
@@ -213,6 +229,9 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 
 WANN WAS?
 - Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
+- Fragen zu obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung → erst readDoc (ART-MCP), dann antworten/handeln.
+- „Zeig, was der Roboter sieht" → setCamera on:true (nur Anzeige).
+- Router-/Experten-Belohnungen anpassen („Router soll belohnt werden, wenn der liegende Roboter aufstehen wählt") → applyConfig mit expertR.routerBonus / expertR.recover.rise.
 - Neue dauerhafte Fähigkeiten, eigene Belohnungslogik, neue Buttons mit Speziallogik, Welt-Interaktion → writePlugin (MOD).
 - GANZ NEUE AUFGABEN mit eigener Startpose (Kopfstand lernen, Handstand, Sitzen, rückwärts aufstehen …) → writePlugin mit dem FREESTYLE-MUSTER: onReset setzt die Startpose (api.teleport), onReward zahlt für das Ziel und hebt den Aufgaben-Abbruch mit {done:false} auf, eigener Erfolg/eigenes Zeitlimit per {done:true}. Beispiel dafür ist das mitgelieferte ★-Plugin „Kopfstand-Training".
 - Kurze Fragen an die Simulation, Tests, Einmal-Aktionen (z. B. „wirf ihn einmal hoch") → runCode.
@@ -278,13 +297,28 @@ export function validatePatch(raw) {
     if (out.ppo.mb !== undefined) out.ppo.mb = Math.round(out.ppo.mb);
     if (out.ppo.T !== undefined) out.ppo.T = Math.round(out.ppo.T);
   }
+  // Experten-/Router-Belohnungen (v2.13.0) — skill.js EXPERT_R (MicroDuck/Soft-MoE)
+  if (raw.expertR && typeof raw.expertR === 'object') {
+    const er = raw.expertR, o = {};
+    _clampObj(er, { on: [0, 1], routerBonus: [0, 2], wrongPenalty: [0, 1], domMin: [0.05, 0.95], fallenUp: [0.1, 0.7], upOk: [0.5, 0.99], moveVx: [0.02, 1], moveWz: [0.1, 2] }, o);
+    for (const g of ['stand', 'walk', 'turn', 'recover']) {
+      if (er[g] && typeof er[g] === 'object') {
+        o[g] = {};
+        if (g === 'stand') _clampObj(er[g], { up: [0, 1], quiet: [0, 1] }, o[g]);
+        if (g === 'walk') _clampObj(er[g], { speed: [0, 2] }, o[g]);
+        if (g === 'turn') _clampObj(er[g], { rate: [0, 2] }, o[g]);
+        if (g === 'recover') _clampObj(er[g], { rise: [0, 4], uprightOnce: [0, 4] }, o[g]);
+      }
+    }
+    if (Object.keys(o).length) out.expertR = o;
+  }
   // Leere Unterobjekte entfernen
   for (const k of Object.keys(out)) if (!Object.keys(out[k]).length) delete out[k];
   return out;
 }
 
 // ── Tool-Aufruf validieren (Agent-Vollzugriff, hart geklemmt) ─
-const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin'];
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera'];
 export function validateToolCall(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const tool = typeof parsed.tool === 'string' ? parsed.tool.trim() : '';
@@ -317,6 +351,17 @@ export function validateToolCall(parsed) {
       name: typeof args.name === 'string' ? args.name.trim().slice(0, 32) : '',
       desc: typeof args.desc === 'string' ? args.desc.trim().slice(0, 200) : '',
       code: typeof args.code === 'string' ? args.code : '',
+    } };
+  }
+  if (tool === 'readDoc') {
+    const doc = AI_DOCS.some(d => d.doc === args.doc) ? args.doc : 'README';
+    return { tool, args: { doc } };
+  }
+  if (tool === 'setCamera') {
+    return { tool, args: {
+      on: typeof args.on === 'boolean' ? args.on : undefined,
+      fov: Number.isFinite(parseFloat(args.fov)) ? parseFloat(args.fov) : undefined,
+      pitch: Number.isFinite(parseFloat(args.pitch)) ? parseFloat(args.pitch) : undefined,
     } };
   }
   return { tool, args: {} }; // observe

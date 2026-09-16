@@ -21,10 +21,12 @@ import { ParallelTrainer, suggestWorkerCount } from './parallel.js';
 import { DR_LEVELS, drFromLevel, restoreDrModel } from './dr.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { buildGlbScene } from './glbscene.js';
-import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey } from './ai.js';
+import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey, AI_DOCS } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
+import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnungen (KI-tunbar)
+import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 
-const VERSION = '2.12.0';
+const VERSION = '2.13.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -41,6 +43,8 @@ const ui = new UI();
 ui.init();
 const controls = new Controls();
 let r3d = null;
+let fpv = null;      // v2.13.0: FPV-Renderer (Kamera-Rechteck, nur Anzeige)
+let wakeLock = null; // v2.13.0: Bildschirm wachhalten im Training
 
 const S = {
   robotId: null,
@@ -336,6 +340,7 @@ function setFallMode(mode) {
   if (mode !== 'reset' && mode !== 'stay') return;
   S.fallMode = mode;
   try { localStorage.setItem('tr_fallMode', mode); } catch (e) { /* voll */ }
+  if (S.task && S.task.setUserCmd) S.task.recoverOnFall = (mode === 'stay'); // v2.12.1: läuft sofort ins Training ein
   syncScenarioChips();
   log(mode === 'stay'
     ? 'Sturz-Verhalten: LIEGEN LASSEN — kein Auto-Teleport mehr; der Roboter bleibt liegen (Aufstehen üben; Reset-Button setzt trotzdem zurück)'
@@ -422,6 +427,14 @@ function applyAIPatch(patch, opts = {}) {
   }
   if (patch.motionR) for (const [k, v] of Object.entries(patch.motionR)) { MOTION_R[k] = v; touched.push('motionR.' + k); }
   if (patch.hoverR && kind !== 'hover') for (const [k, v] of Object.entries(patch.hoverR)) { HOVER_R[k] = v; touched.push('hoverR.' + k); }
+  // v2.13.0: Experten-/Router-Belohnungen (skill.js GLOBAL-Objekt, deep-merge)
+  if (patch.expertR) {
+    for (const [k, v] of Object.entries(patch.expertR)) {
+      if (typeof v === 'object' && v !== null && typeof EXPERT_R[k] === 'object') Object.assign(EXPERT_R[k], v);
+      else EXPERT_R[k] = v;
+    }
+    touched.push('expertR');
+  }
   if (patch.ppo) _aiPPOApply(patch.ppo, touched);
   saveAICfg();
   log('KI-Anpassung übernommen: ' + touched.join(', '), 'ok');
@@ -451,6 +464,7 @@ function saveAICfg() {
     localStorage.setItem('tr_ai_motion', JSON.stringify(MOTION_R));
     localStorage.setItem('tr_ai_hover', JSON.stringify(HOVER_R));
     localStorage.setItem('tr_ai_ppo', JSON.stringify(PPO_OVERRIDES));
+    localStorage.setItem('tr_ai_expertR', JSON.stringify(EXPERT_R)); // v2.13.0
   } catch (e) { /* Speicher voll — Anpassung bleibt für diese Session */ }
 }
 
@@ -462,6 +476,8 @@ function loadGlobalAICfg() {
     if (h) { const v = validatePatch({ hoverR: h }); Object.assign(HOVER_R, v.hoverR || {}); }
     const p = JSON.parse(localStorage.getItem('tr_ai_ppo') || 'null');
     if (p) { const v = validatePatch({ ppo: p }); Object.assign(PPO_OVERRIDES, v.ppo || {}); }
+    const er = JSON.parse(localStorage.getItem('tr_ai_expertR') || 'null'); // v2.13.0
+    if (er) { const v = validatePatch({ expertR: er }); if (v.expertR) for (const [k, val] of Object.entries(v.expertR)) { if (typeof val === 'object' && typeof EXPERT_R[k] === 'object') Object.assign(EXPERT_R[k], val); else EXPERT_R[k] = val; } }
   } catch (e) { /* defekt → Standardwerte */ }
 }
 
@@ -760,7 +776,7 @@ function executeAction(action, depth = 0) {
 }
 
 /** Führt einen validierten Agent-Tool-Aufruf aus → Ergebnis-Text. */
-function execTool(tool, args) {
+async function execTool(tool, args) {
   try {
     if (tool === 'observe') return observeState();
     if (tool === 'applyConfig') {
@@ -796,6 +812,26 @@ function execTool(tool, args) {
       if (!args.mode) return 'Ungültiger Modus — erlaubt: "reset", "stay"';
       setFallMode(args.mode);
       return 'Sturz-Verhalten: ' + args.mode + (args.mode === 'stay' ? ' (Roboter bleibt liegen, kein Teleport)' : ' (Auto-Reset zum Start)');
+    }
+    // ── v2.13.0: ART-MCP — Wissensdokumente (offline im APK) ──
+    if (tool === 'readDoc') {
+      const doc = AI_DOCS.some(d => d.doc === args.doc) ? args.doc : 'README';
+      if (!execTool._docCache) execTool._docCache = {};
+      if (execTool._docCache[doc]) return 'DOKUMENT ' + doc + '.md:\n\n' + execTool._docCache[doc];
+      const resp = await fetch('mcp/' + doc + '.md', { cache: 'force-cache' });
+      if (!resp.ok) return 'Fehler: Dokument ' + doc + '.md nicht gefunden (' + resp.status + ')';
+      const txt = await resp.text();
+      execTool._docCache[doc] = txt;
+      return 'DOKUMENT ' + doc + '.md:\n\n' + txt;
+    }
+    // ── v2.13.0: FPV-Kamera (nur ANZEIGE — die Policy sieht das Bild NICHT) ──
+    if (tool === 'setCamera') {
+      if (!fpv) return 'Fehler: Kamera-Renderer nicht initialisiert';
+      fpv.applySettings(args);
+      try { localStorage.setItem('tr_fpv_v1', JSON.stringify({ on: fpv.on, fov: fpv.fov, pitch: fpv.pitch })); } catch (e) { /* egal */ }
+      const fpvWrap = document.getElementById('fpvWrap');
+      if (fpvWrap) fpvWrap.classList.toggle('hidden', !fpv.on);
+      return 'FPV-Kamera: ' + (fpv.on ? 'AN' : 'AUS') + ' (FOV ' + fpv.fov + '°, Pitch ' + fpv.pitch + '°) — reine Anzeige, kein Policy-Eingang';
     }
     if (tool === 'runCode') {
       if (!args.code || !args.code.trim()) return 'Fehler: code ist leer';
@@ -956,7 +992,7 @@ async function sendAIMessage(text) {
       }
       // ── Werkzeug ausführen und als Ergebnis zurück an die KI ──
       aiPush('tool', '⚙ ' + res.tool + ' ' + JSON.stringify(res.args).slice(0, 160));
-      const result = execTool(res.tool, res.args);
+      const result = await execTool(res.tool, res.args); // v2.13.0: async (readDoc fetch)
       aiPush('toolres', String(result).slice(0, 400));
       log('KI-Agent: ' + res.tool + ' → ' + String(result).slice(0, 80), 'ok');
       S.aiHistory.push({ role: 'user', text: toolMsg }, { role: 'model', text: res.antwort || ('[' + res.tool + ']') });
@@ -1123,9 +1159,17 @@ function startTraining() {
     log('Tempo MAX mit aktivem Plugin: Training läuft inline (Plugins wirken nur im Haupt-Thread-Rollout)', 'warn');
   }
   S.task.reset(S.trainer.rng, S.sim);
+  if (S.task.setUserCmd) S.task.recoverOnFall = (S.fallMode === 'stay'); // v2.12.1: Sturz → Aufsteh-Fenster im „Liegen lassen“-Modus
   pluginHost.fireReset();
   S.training = true;
   S.epReward = 0;
+  // v2.13.0: Bildschirm wachhalten (Über-Nacht-Training: Android killt
+  // Hintergrund-WebViews — die „Policy vergessen"-Bugs hatten diese Ursache)
+  try {
+    if (navigator.wakeLock && !wakeLock) {
+      navigator.wakeLock.request('screen').then((wl) => { wakeLock = wl; log('Wake Lock aktiv — Bildschirm bleibt im Training an', 'ok'); }).catch(() => { /* verweigert — egal */ });
+    }
+  } catch (e) { /* egal */ }
   log('Störungen (DR): ' + S.drLevel.toUpperCase() + ' — jede Episode andere Physik' + (S.speedMode === 'max' && !S.parallel ? '' : ''), 'ok');
   ui.$('tStart').textContent = 'Training pausieren';
   ui.$('tStart').classList.add('btn-stop');
@@ -1139,6 +1183,8 @@ function stopTraining(silent = false) {
   if (!S.training) return;
   S.training = false;
   if (S.parallel) { S.parallel.stop(); S.parallel = null; }
+  // v2.13.0: Wake Lock freigeben
+  try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) { /* egal */ }
   const b = ui.$('tStart');
   b.textContent = 'Training starten';
   b.classList.remove('btn-stop');
@@ -1195,7 +1241,7 @@ function trainCtrlStep() {
     // Geh-Aufgabe bleibt liegen; Motion-Tracking/Recovery resetten normal.
     const stayDown = (task.kind === 'speed' || task.kind === undefined) && S.fallMode === 'stay' && fallen && Number.isFinite(fx + fy);
     if (stayDown) {
-      task.reset(trainer.rng, sim); // neue Kommandos — POSE bleibt (liegt weiter)
+      task.reset(trainer.rng, sim, true); // neue Kommandos — POSE bleibt (liegt weiter; Duck: Aufsteh-Fenster)
       pluginHost.fireReset();
       const now = performance.now();
       if (now - lastFallLog > 6000) {
@@ -1256,6 +1302,20 @@ function policyCtrlStep() {
   if (task.kind === 'motion' && (task.ctrlMode === 'joy' || task.ctrlMode === 'btn')) {
     const c = controls.command(S.sim.cfg);
     task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
+  }
+  // v2.12.1: Der ECHTE Stick steuert ALLE Speed-Aufgaben im POLICY-Modus.
+  // Vorher kam der Stick hier NIE an (nur bei GLB-Motion): Speed-Policies
+  // fuhren mit dem LETZTEN Trainingskommando weiter bzw. der Duck lief der
+  // Zufalls-Scheduler weiter → „falsch synchronisiert“ (Sturz, zähes
+  // Schieben statt Antwort auf den Stick).
+  if (task.setUserCmd) {
+    const c = controls.command(S.sim.cfg);
+    task.setUserCmd(c.vx, 0, c.yaw); // Soft-MoE: vx/wz + Skill-Form, Scheduler aus
+  } else if (task.kind === 'speed' && task.cmd) {
+    const c = controls.command(S.sim.cfg);
+    const R = S.sim.cfg.cmd || { vx: [-1, 1], yaw: [-1, 1] };
+    task.cmd.vx = Math.max(R.vx[0], Math.min(R.vx[1], c.vx));
+    task.cmd.yaw = Math.max(R.yaw[0], Math.min(R.yaw[1], c.yaw));
   }
   task.observe(sim, S.obsBuf);
   // v2.9.0: NaN-Wache resetzt jetzt auf die AUFGABEN-Startpose (statt still
@@ -1380,6 +1440,36 @@ async function boot() {
     log(`WebGL: ${glInfo}`, 'ok');
 
     controls.attach(ui, document.getElementById('gl'), r3d);
+    // ── v2.13.0: FPV-KAMERA (Rechteck oben rechts, NUR Anzeige — die Policy
+    // bekommt das Bild NIEMALS; Vision-Modell-Kanal bleibt bewusst frei) ──
+    try {
+      const fpvCanvas = document.getElementById('fpvCanvas');
+      if (fpvCanvas) {
+        fpv = new Fpv(r3d, fpvCanvas);
+        try {
+          const s = JSON.parse(localStorage.getItem('tr_fpv_v1') || 'null');
+          if (s) { fpv.applySettings(s); fpvCanvas.classList.toggle('hidden', !fpv.on); }
+        } catch (e) { /* egal */ }
+        const camBtn = document.getElementById('btnCam');
+        const fpvWrap = document.getElementById('fpvWrap');
+        const showFpv = (on) => { if (fpvWrap) fpvWrap.classList.toggle('hidden', !on); };
+        showFpv(fpv.on);
+        if (camBtn) camBtn.addEventListener('click', () => {
+          controls.buzz();
+          fpv.applySettings({ on: !fpv.on });
+          showFpv(fpv.on);
+          try { localStorage.setItem('tr_fpv_v1', JSON.stringify({ on: fpv.on, fov: fpv.fov, pitch: fpv.pitch })); } catch (e) { /* egal */ }
+          ui.toast(fpv.on ? 'Kamera: Robotersicht AN (nur Anzeige)' : 'Kamera aus');
+        });
+      }
+    } catch (e) { log('FPV nicht verfügbar: ' + e.message, 'warn'); }
+    // ── v2.13.0: ÜBER-NACHT-SCHUTZ — Auto-Save bei Hintergrundwechsel
+    // (Android killt Hintergrund-WebViews und die Policy lebte nur im RAM)
+    // + Bildschirm-Wachhalten im Training.
+    const autoSave = () => { if (S.trainer && S.trainer.stepCount > 0) { try { savePolicy(S.robotId, { silent: true }); log('Auto-Save: Policy gesichert', 'ok'); } catch (e) { /* egal */ } } };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autoSave(); });
+    window.addEventListener('pagehide', autoSave);
+    window.addEventListener('beforeunload', autoSave);
     setModelProgress((done, total, rel) => {
       const sp = document.getElementById('splash');
       if (sp) ui.splash(`Lade Modelldateien (${done}/${total}) …`, 0.45 + 0.5 * (done / total));
@@ -1489,6 +1579,8 @@ function loop(now) {
     }
   }
   r3d.render();
+  // v2.13.0: FPV-Rechteck (jeder 2. Frame gedrosselt, reine Anzeige)
+  if (fpv && fpv.on && S.sim) { S._fpvSkip = !S._fpvSkip; if (!S._fpvSkip) fpv.render(S.sim); }
 
   // Statuszeile (5 Hz)
   statusT += dt;

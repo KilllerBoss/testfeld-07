@@ -97,10 +97,19 @@
       <button id="btnPush" class="padbtn pushbtn" aria-label="Schubsen">
         <svg viewBox="0 0 24 24"><path d="M3 12h11M11 7l5 5-5 5M18 5v14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <button id="btnCam" class="padbtn" aria-label="Kamera (Robotersicht)">
+        <svg viewBox="0 0 24 24"><path d="M4 8h9l3-2 4 2v8l-4 2-3-2H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="10.5" cy="12" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      </button>
       <button id="btnReset" class="padbtn" aria-label="Zurücksetzen">
         <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.34 5.66M4 12V7m0 5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
+  </div>
+
+  <!-- v2.13.0: FPV-Kamerabild (nur ANZEIGE — kein Policy-Eingang) -->
+  <div id="fpvWrap" class="hidden">
+    <canvas id="fpvCanvas" width="240" height="160"></canvas>
+    <span id="fpvLabel">ROBOTER-SICHT</span>
   </div>
 
   <!-- Trainings-Panel -->

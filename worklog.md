@@ -388,3 +388,28 @@ Stage Summary:
 - ALLE Nutzer-Anfragen sind implementiert UND released: Art-MCP/.md-Wissen + konfigurierbare Architektur + Experten-/Router-Belohnungen + Steuerung (alle Roboter) + FPV-Kamera + Über-Nacht-Auto-Save = v2.7.0; echte MicroDuck + Worker-Parallelisierung = v2.8–v2.10; Domain Randomization = v2.11; Soft-MoE-Motion-Intelligence (MASTER-PROMPT §34) = v2.12.0
 - Neueste Version: v2.12.0 (versionCode 22), LIVE + anonym downloadbar; lokal = Remote synchron (98ddc8a)
 - MicroDuck: Kamera JA (head_camera, wird für FPV-Anzeige genutzt), Infrarot NEIN (IMU-Sensorik)
+
+---
+Task ID: 33
+Agent: Super Z (Hauptagent)
+Task: v2.13.0 — Nutzer-Bug „Policy fällt/zieht zäh, Trainings-Episoden extrem kurz" + Port der fehlenden v2.7.0-Features in die v2.12-Linie
+
+Work Log:
+- ROOT-CAUSES (Code-Lektüre + Stub-Tests):
+  1) POLICY-Modus: Der Stick erreichte NUR GLB-Motion-Tasks (main.js policyCtrlStep). Speed-Policies fuhren mit dem LETZTEN Trainingskommando weiter; der MicroDuck lief zusätzlich dem Zufalls-Segment-Scheduler weiter (afterAct lief in Policy) → „falsch synchronisiert": Sturz, zähes Schieben, keine Stick-Antwort
+  2) „Liegen lassen" + Duck: task.reset() rief sim.resetToKeyframe() — der liegende Start wurde still wegteleportiert; Episode begann stehend ODER (Lage erhalten) instant-done (upz<0.45 im 1. Schritt) = „kann nicht mal hinfallen, extrem kurz"
+  3) Curriculum-Überhitzung: Level stieg durch reines Stehen (EMA-Gate), ohne Rückweg → Instant-Kollaps-Level auf L4/L5
+- FIXES (robots.js Duck-Task + main.js):
+  1) policyCtrlStep: setUserCmd (Stick → Soft-Kommandos, Skill-Form aus Befehl, auf Level-Band geklemmt, Scheduler PAUSE) + Klassiker: Stick → cmd.vx/yaw geklemmt auf Trainings-Bänder
+  2) Aufsteh-Fenster: Sturz/Liegend-Start → 6–8 s RECOVER-Fenster (upz²+rise-Formung, rW.recover) statt Sofort-done; keepPose-Reset (kein Teleport mehr); Fenster-Timeout beendet Episode sauber; Aufsteh-Episoden zählen NICHT zum Level
+  3) Curriculum-Selbstkorrektur: Level sinkt bei EMA < Gate/2 wieder (kein Festhängen mehr)
+- PORT aus der verworfenen v2.7.0-Linie ( histories-divergiert: Remote-v2.7.0 = andere Linie! ): skill.js (EXPERT_R, leggedSkillState, expertRouterReward — Router-Bonus „liegend→aufstehen gewählt", Expertenergebnis stand/walk/turn/recover), expertR-KI-Patch (ai.js validatePatch + applyAIPatch deep-merge + Persistenz), ART-MCP www/mcp/ (6 Dokumente, v2.13-real: ROBOTS obs-Layouts byte-genau inkl. Duck-74 + head_camera), readDoc-Tool (fetch+Cache, execTool async), FPV (fpv.js + btnCam + fpvWrap-Rechteck + setCamera-Tool + Loop-Hook je 2. Frame; NUR Anzeige — obsDim unverändert), ÜBER-NACHT-Schutz (Auto-Save bei visibilitychange/pagehide/beforeunload + Wake Lock im Training)
+- Version: 2.13.0 / versionCode 23; Environment-Reset zwischendurch (SDK+Gradle neu, korrumpierter Gradle-Download via ZIP-Integritätscheck erkannt)
+- TESTS: scripts/duck_sync_test.mjs NEU (24 Checks: keepPose-Reset ohne Teleport, Liegend-Start → 8-s-Fenster, Aufstiegs-Reward steigt, stay/reset-Verzweigung, Stick-Klemme + Skill-Formen + Scheduler-Pause, obsDim 74 + Stick-Kanäle, Trainings-Scheduler-Regression, Level-Abstieg, expertR an/aus exakt Δ0.285) GRÜN; Regressionen: moe_test GRÜN, dr_test 41 GRÜN, duck_test (echtes Pollen-Modell, WASM) ALLE GRÜN
+- BUILD: assembleRelease OK (1m07s), 41.660.194 bytes, aapt versionCode 23/2.13.0, Signatur CN=Trainrobot OU=Testfeld07 (1c0422b9… stabil), fpv.js+skill.js+6×mcp im APK
+
+Stage Summary:
+- v2.13.0 behebt: Stick steuert JETZT alle Speed-Policies im Policy-Modus; „Liegen lassen" = echtes Aufsteh-Lernen (keine 1-Schritt-Episoden mehr); Curriculum korrigiert sich selbst
+- Die v2.7.0-Versprechen sind jetzt in der AKTUELLEN Linie: Art-MCP (.md + readDoc), expertR (Router-/Experten-Belohnungen), FPV-Kamera-Rechteck (setCamera/btnCam), Auto-Save + Wake Lock
+- Ehrlich dokumentiert: setArchitecture (freie Netztiefe/Breite) ist in dieser Linie NICHT vorhanden — Soft-MoE-Struktur fix nach MASTER-PROMPT §34; ARCHITECTURE.md erklärt es
+- Test: scripts/duck_sync_test.mjs 24/24, alle Regressionen grün; Release via Tag v2.13.0 (CI auto-release)
