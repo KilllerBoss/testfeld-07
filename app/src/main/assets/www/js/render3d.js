@@ -45,9 +45,54 @@ export class Renderer3D {
     this._anchorSm = new THREE.Vector3(0, 0, 0.3);
 
     this.bodyGroups = null;   // THREE.Group je Körper
+    this._texCache = null;    // v2.14.1: Modell-Texturen (texId → THREE.DataTexture)
+    this._lookMap = null;     // v2.14.0: Aussehen-Overrides
     this._tmpQ = new THREE.Quaternion();
     this._marker = this._buildMarker();
     this.scene.add(this._marker);
+  }
+
+  // ── v2.14.1: Modus-Textur aus MuJoCo → THREE.DataTexture ──
+  // Menagerie-Modelle (z. B. Skydio X2) tragen ihre echte Optik in
+  // Material-Texturen (tex_data). Ohne diese Stütze bliebe die Drohne
+  // einfarbig grau/weiß. Die Daten liegen im WASM-Heap als Bytes.
+  _textureFor(mod, texId) {
+    if (!mod || !mod.tex_data || texId < 0) return null;
+    if (!this._texCache) this._texCache = new Map();
+    const hit = this._texCache.get(texId);
+    if (hit !== undefined) return hit;
+    let tex = null;
+    try {
+      const w = mod.tex_width[texId] | 0, h = mod.tex_height[texId] | 0;
+      const nc = mod.tex_nchannel ? (mod.tex_nchannel[texId] | 0) : 3;
+      const adr = Number(mod.tex_adr[texId]); // BigInt64 → Number (Einheit: Texel)
+      const nTex = w * h;
+      const src = mod.tex_data;
+      if (w > 0 && h > 0 && (adr * nc + nTex * nc) <= src.length) {
+        const data = new Uint8Array(nTex * 4); // immer RGBA (THREE: kein RGBFormat mehr)
+        for (let p = 0; p < nTex; p++) {
+          const s = adr * nc + p * nc, d = 4 * p;
+          data[d] = src[s];
+          data[d + 1] = nc > 1 ? src[s + 1] : src[s];
+          data[d + 2] = nc > 2 ? src[s + 2] : src[s];
+          data[d + 3] = nc > 3 ? src[s + 3] : 255;
+        }
+        tex = new THREE.DataTexture(data, w, h);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.magFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearFilter;
+        tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+        tex.needsUpdate = true;
+      }
+    } catch (e) { tex = null; }
+    this._texCache.set(texId, tex);
+    return tex;
+  }
+
+  _disposeTexCache() {
+    if (!this._texCache) return;
+    for (const t of this._texCache.values()) { if (t) t.dispose(); }
+    this._texCache = null;
   }
 
   // ── Himmel (Verlaufskuppel) ───────────────────────────────
@@ -185,6 +230,7 @@ export class Renderer3D {
         this.world.remove(g);
       }
     }
+    this._disposeTexCache(); // v2.14.1: Modell-Texturen sind je Modell anders
     this.bodyGroups = [];
     const mod = sim.model;
     const rgba = new Float32Array(4);
@@ -198,18 +244,31 @@ export class Renderer3D {
       const geo = this._geometryFor(sim, gI, type);
       if (!geo) continue;
       const c4 = 4 * gI; rgba[0]=mod.geom_rgba[c4]; rgba[1]=mod.geom_rgba[c4+1]; rgba[2]=mod.geom_rgba[c4+2]; rgba[3]=mod.geom_rgba[c4+3];
-      // v2.14.0: Aussehen-Overrides (Gemini setAppearance) — NUR Rendering
-      const look = this._lookMap ? this._lookMap.get(gI) : null;
+      // v2.14.1 GRAU-FIX: Menagerie-Modelle färben über MATERIALIEN
+      // (geom_matid → mat_rgba), nicht über geom_rgba — das steht auf dem
+      // MuJoCo-Default 0,5-Grau, wenn keine Farbe direkt am Geom steht.
+      // G1: schwarz/metal · MicroDuck: beige/dunkle Schalen · X2: Textur.
+      let cr = rgba[0], cg = rgba[1], cb = rgba[2], ca = rgba[3];
+      let met = 0.22, rgh = 0.62, tex = null;
+      const mId = mod.geom_matid ? mod.geom_matid[gI] : -1;
+      if (mId >= 0 && mod.mat_rgba) {
+        const m4 = 4 * mId;
+        cr = mod.mat_rgba[m4]; cg = mod.mat_rgba[m4 + 1]; cb = mod.mat_rgba[m4 + 2]; ca = mod.mat_rgba[m4 + 3];
+        if (mod.mat_metallic) met = Math.min(1, Math.max(0, mod.mat_metallic[mId]));
+        if (mod.mat_roughness) rgh = Math.min(1, Math.max(0.25, mod.mat_roughness[mId])); // Floor: kein Spiegel-Schwarz ohne Env-Map
+        const tId = mod.mat_texid ? Number(mod.mat_texid[10 * mId + 1]) : -1; // mjTEXROLE_RGB = 1
+        if (tId >= 0) tex = this._textureFor(mod, tId);
+      }
       const mat = new THREE.MeshStandardMaterial({
-        color: look && look.color
-          ? new THREE.Color(look.color[0], look.color[1], look.color[2])
-          : new THREE.Color(rgba[0], rgba[1], rgba[2]),
-        metalness: look && look.metal !== undefined ? look.metal : 0.22,
-        roughness: look && look.rough !== undefined ? look.rough : 0.62,
-        transparent: rgba[3] < 0.99, opacity: rgba[3],
+        color: new THREE.Color(cr, cg, cb),
+        metalness: met,
+        roughness: rgh,
+        map: tex || null,
+        transparent: ca < 0.99, opacity: ca,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.userData.geomIndex = gI; // v2.14.0: Look-Live-Updates je Geom
+      mesh.userData.base = { color: [cr, cg, cb], rough: rgh, metal: met, map: tex || null }; // v2.14.1: Basis für Look-Restore
       mesh.castShadow = true; mesh.receiveShadow = true;
       // Lokale Geom-Lage im Körper
       const gp = new Float64Array(3), gq = new Float64Array(4);
@@ -222,28 +281,43 @@ export class Renderer3D {
       grp.add(mesh);
     }
     this.sim = sim;
+    if (this._lookMap) this._applyLook(); // v2.14.1: Overrides nach dem Build auftragen
   }
 
   // v2.14.0: Aussehen-Overrides live anwenden (nach setAppearance-Änderung)
+  // v2.14.1: Meshes OHNE Override kehren zur Modell-Basis zurück (auch Textur),
+  // damit „Reset" und Roboterwechsel sauber sind. Explizite Farbe ersetzt die
+  // Textur (pure Farbe), Rough/Metal-Overrides lassen die Textur an.
   setAppearance(sim, spec) {
     this._lookMap = spec ? resolveAppearance(sim, spec) : null;
-    if (this._lookMap) this._applyLook();
+    this._applyLook();
     return this._lookMap;
   }
 
   _applyLook() {
-    if (!this._lookMap || !this.bodyGroups) return;
+    if (!this.bodyGroups) return;
     for (const grp of this.bodyGroups) {
       if (!grp) continue;
       for (const mesh of grp.children) {
         const gi = mesh.userData.geomIndex;
         if (gi === undefined) continue;
-        const st = this._lookMap.get(gi);
-        if (!st) continue;
-        if (st.color) mesh.material.color.setRGB(st.color[0], st.color[1], st.color[2]);
-        if (st.rough !== undefined) mesh.material.roughness = st.rough;
-        if (st.metal !== undefined) mesh.material.metalness = st.metal;
-        mesh.material.needsUpdate = true;
+        const base = mesh.userData.base;
+        if (!base) continue;
+        const st = this._lookMap ? this._lookMap.get(gi) : null;
+        const m = mesh.material;
+        if (!st) {
+          m.color.setRGB(base.color[0], base.color[1], base.color[2]);
+          m.roughness = base.rough;
+          m.metalness = base.metal;
+          if (m.map !== base.map) { m.map = base.map; m.needsUpdate = true; }
+          continue;
+        }
+        if (st.color) {
+          m.color.setRGB(st.color[0], st.color[1], st.color[2]);
+          if (m.map) { m.map = null; m.needsUpdate = true; } // Farbe statt Textur
+        }
+        if (st.rough !== undefined) m.roughness = st.rough;
+        if (st.metal !== undefined) m.metalness = st.metal;
       }
     }
   }
@@ -268,6 +342,33 @@ export class Renderer3D {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setIndex(new THREE.BufferAttribute(idx, 1));
+        // v2.14.1: UVs — Voraussetzung für Material-Texturen (Skydio X2).
+        // MuJoCo hält Texcoords SEPARAT von Vertices (Seams): pro Face-Ecke
+        // zeigt mesh_facetexcoord auf den Texcoord-Index.
+        const tcNum = mod.mesh_texcoordnum ? mod.mesh_texcoordnum[dataId] : 0;
+        if (tcNum > 0 && mod.mesh_texcoord) {
+          const tcAdr = mod.mesh_texcoordadr[dataId];
+          const uv = new Float32Array(vNum * 2);
+          const ftcAdr = mod.mesh_facetexcoordadr ? mod.mesh_facetexcoordadr[dataId] : -1;
+          if (ftcAdr >= 0 && mod.mesh_facetexcoord) {
+            for (let f = 0; f < fNum; f++) {
+              for (let c = 0; c < 3; c++) {
+                const vi = idx[3 * f + c];
+                const ti = mod.mesh_facetexcoord[ftcAdr + 3 * f + c];
+                if (vi * 2 + 1 < vNum * 2 && ti >= 0) {
+                  uv[2 * vi] = mod.mesh_texcoord[2 * tcAdr + 2 * ti];
+                  uv[2 * vi + 1] = mod.mesh_texcoord[2 * tcAdr + 2 * ti + 1];
+                }
+              }
+            }
+          } else {
+            for (let i = 0; i < vNum; i++) {
+              uv[2 * i] = mod.mesh_texcoord[2 * tcAdr + 2 * i];
+              uv[2 * i + 1] = mod.mesh_texcoord[2 * tcAdr + 2 * i + 1];
+            }
+          }
+          geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        }
         geo.computeVertexNormals();
         return geo;
       }

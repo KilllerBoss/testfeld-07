@@ -461,3 +461,23 @@ Stage Summary:
 - Policy-Export/Import mit Metadaten; APK 107 MB kleiner
 - Release via Tag v2.14.0 (CI auto-release)
 - ADDENDUM Task 35: Release v2.14.0 live — erster Tag-Run failed am CI-Hart-Check (erwartete noch 6 Modelle); Workflow auf 3 Modelle umgestellt, Tag neu gesetzt, zweiter Run SUCCESS. Asset Trainrobot.apk 27.994.885 bytes (~28 MB, vorher 41,7 MB — Modell-Kürzung wirkt im APK), anonym HTTP 200; versionCode 25 / versionName 2.14.0; Signatur 1c0422b9… identisch (Update-Installation garantiert); rewardx.js + appearance.js + mcp/WORLD.md im APK, Alt-Modelle raus
+
+---
+Task ID: 36
+Agent: Super Z (Hauptagent)
+Task: v2.14.1 — „Roboter sind immer noch grau" (Renderer ignorierte Materialfarben/Texturen) + Vollbild-Button funktionslos + Konsole-Button entfernen
+
+Work Log:
+- GRAU-URSACHE: render3d.js baute Mesh-Materialien nur aus geom_rgba — Menagerie-Modelle färben aber über MATERIALIEN (geom_matid → mat_rgba). Ohne Farbe am Geom steht geom_rgba auf dem MuJoCo-Default 0,5-Grau → alles grau. Feld-Probe am echten WASM (scripts/probe_matfields.mjs): geom_materialid EXISTIERT NICHT im Binding, korrekt heißt es geom_matid; mat_rgba/mat_metallic/mat_roughness/mat_texid (10 Rollen je Material, RGB=Rolle 1)/tex_data/tex_adr(BigInt64!)/tex_nchannel vorhanden
+- FIX render3d.js buildFromModel: Basisfarbe/Alpha aus mat_rgba, metallic/roughness aus Material (roughness-Floor 0,25 gegen Spiegel-Schwarz ohne Env-Map), Textur-Support: _textureFor() wandelt tex_data → THREE.DataTexture (RGBA-Konvertierung, SRGB, Linear, Repeat), Cache je Modell (_texCache, disposed beim Rebuild); G_MESH setzt jetzt UVs (mesh_texcoord via mesh_facetexcoord — MuJoCo hält Texcoords SEPARAT pro Face-Ecke wegen Seams, Fallback per-Vertex)
+- setAppearance/_applyLook v2.14.1: Meshes speichern Basis-Stil (userData.base {color,rough,metal,map}) — Meshes ohne Override kehren zur Modell-Optik zurück (Reset sauber); explizite Farbe ersetzt die X2-Textur (pure Farbe), rough/metal-Overrides lassen Textur an; setAppearance(null) restauriert jetzt wirklich (vorher wurde _applyLook nur bei gesetzter Map aufgerufen)
+- UI-Entfernung (Nutzerwunsch): btnFull raus — Android-WebView hat KEINE requestFullscreen-API, App ist nativ IMMERSIVE_STICKY (MainActivity) → Button konnte nie etwas tun; btnConsole + Konsole-Panel raus — ui.log() schreibt weiter ins jetzt unsichtbare #consoleLog (Boot-Zeilen, Playwright-Tests, Logcat-Fehlersuche bleiben funktionsfähig); style.css .console-Block entfernt
+- ROBOTS.md: Basis-Optik = Modelleigene Materialien dokumentiert (Gemini-Kontext)
+- TESTS: scripts/test_v2141.mjs NEU (32 Checks: Feld-Proben am echten WASM, Materialfarben-Formel, tex_adr·nchannel-Grenzen, Checker-Farben in tex_data, Look-Restore-Semantik, Quell-/UI-Checks) GRÜN; scripts/ui_v2141_render_test.mjs NEU (Playwright, echtes Rendering): G1 55 Meshes 0×0,5-Grau + 7× schwarz, X2 Textur+UVs aktiv nach Chip-Wechsel, UI-Buttons weg, verstecktes Log schreibt, 0 Seitenfehler — 10/10 GRÜN; Regression: v2140 53/53, ui_v2140 17/17, dr_test 41/41, duck_sync 24/24
+- Build: SDK/Gradle waren reset → neu installiert (cmdline-tools 11076708, platforms;android-34, build-tools;34.0.0, Gradle 8.7); assembleRelease OK; versionCode 26 / versionName 2.14.1; Signatur CN=Trainrobot OU=Testfeld07 SHA-256 1c0422b9… identisch mit allen v2.x
+- Release: Commit + Tag v2.14.1 gepusht → CI auto-Release; download/Trainrobot.apk ersetzt und verifiziert
+
+Stage Summary:
+- v2.14.1 LIVE: Roboter zeigen ihre echten Farben (G1 schwarz/metal, MicroDuck beige-Schalen/dunkler Rumpf, X2 ECHTE TEXTUR mit UVs); Gemini-setAppearance sitzt auf echter Basis auf, Reset restauriert inkl. Textur
+- Vollbild- und Konsole-Button entfernt (Topbar: Training + KI-Trainer)
+- Release v2.14.1: https://github.com/KilllerBoss/testfeld-07/releases/tag/v2.14.1

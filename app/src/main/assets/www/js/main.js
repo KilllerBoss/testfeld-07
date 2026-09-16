@@ -28,7 +28,7 @@ import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 
-const VERSION = '2.14.0';
+const VERSION = '2.14.1';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -1801,8 +1801,7 @@ function lastEma() {
 
 // ── UI-Verdrahtung ──────────────────────────────────────────
 function wireUI() {
-  document.getElementById('btnConsole').addEventListener('click', () => { ui.toggleConsole(); controls.buzz(); });
-  document.getElementById('consoleClose').addEventListener('click', () => ui.toggleConsole());
+  // v2.14.1: btnConsole/consoleClose ENTFERNT (Nutzerwunsch) — Log läuft unsichtbar.
   // ── KI-Trainer ─────────────────────────────────────────
   document.getElementById('btnAI').addEventListener('click', async () => {
     controls.buzz();
@@ -1829,15 +1828,10 @@ function wireUI() {
   for (const b of document.querySelectorAll('.ai-sug')) {
     b.addEventListener('click', () => { controls.buzz(); sendAIMessage(b.dataset.q); });
   }
-  document.getElementById('btnFull').addEventListener('click', async () => {
-    controls.buzz();
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
-    } catch (e) { /* WebView ohne Vollbild */ }
-  });
   document.getElementById('btnTrainTop').addEventListener('click', () => { ui.toggleTrain(); controls.buzz(); });
   document.getElementById('trainClose').addEventListener('click', () => ui.toggleTrain(false));
+  // v2.14.1: btnFull ENTFERNT — die App ist nativ Immersive (MainActivity),
+  // der WebView hat keine Fullscreen-API: der Button konnte nichts tun.
 
   for (const chip of document.querySelectorAll('.robot-chip')) {
     chip.addEventListener('click', () => {

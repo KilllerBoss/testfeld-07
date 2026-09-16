@@ -381,30 +381,7 @@ html, body {
   text-align: center; letter-spacing: 0.06em; opacity: 0.8;
 }
 
-.console {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 45;
-  max-height: 62vh;
-  background: rgba(8, 11, 16, 0.97);
-  border-bottom: 1px solid var(--line);
-  border-radius: 0 0 18px 18px;
-  padding: calc(var(--sa-t) + 10px) 16px 14px;
-  display: flex; flex-direction: column;
-  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
-}
-.console-head {
-  display: flex; justify-content: space-between; align-items: center;
-  font-family: var(--mono); font-size: 12px; letter-spacing: 0.3em;
-  color: var(--amber); padding-bottom: 8px; border-bottom: 1px solid var(--line-soft);
-}
-#consoleLog {
-  overflow-y: auto; padding-top: 8px;
-  font-family: var(--mono); font-size: 11px; line-height: 1.75; color: var(--text-dim);
-}
-#consoleLog .ok { color: #7ee08a; }
-#consoleLog .warn { color: var(--amber); }
-#consoleLog .err { color: #ff6a55; }
-#consoleLog .t { color: rgba(147, 164, 184, 0.45); margin-right: 8px; }
+/* v2.14.1: Konsole-Panel entfernt (Nutzerwunsch) — Log läuft unsichtbar. */
 
 /* ── Toast ──────────────────────────────────────────────── */
 #toast {

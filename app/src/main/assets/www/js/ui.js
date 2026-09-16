@@ -16,29 +16,22 @@ export class UI {
   }
 
   init() {
-    this.consolePanel = this.$('consolePanel');
-    this.consoleLogEl = this.$('consoleLog');
+    this.consoleLogEl = this.$('consoleLog'); // v2.14.1: unsichtbares Log-Element (kein Panel mehr)
     this.toastEl = this.$('toast');
   }
 
-  // ── Konsole ──────────────────────────────────────────────
+  // ── Log (unsichtbar — war bis v2.14.0 die Konsole) ──────
+  // v2.14.1: Panel + Button entfernt (Nutzerwunsch). Meldungen landen
+  // weiter im versteckten #consoleLog — Playwright-Tests und Logcat-
+  // Fehlersuche lesen ihn mit, im UI stört nichts mehr.
   log(msg, cls = '') {
-    const t = (performance.now() / 1000).toFixed(2).padStart(7, ' ');
+    this.bootLines.push(msg);
+    if (!this.consoleLogEl) return;
     const div = document.createElement('div');
     div.className = cls;
-    const ts = document.createElement('span');
-    ts.className = 't'; ts.textContent = t + 's';
-    div.appendChild(ts);
     div.appendChild(document.createTextNode(msg));
     this.consoleLogEl.appendChild(div);
     while (this.consoleLogEl.childElementCount > 220) this.consoleLogEl.firstChild.remove();
-    this.consoleLogEl.scrollTop = this.consoleLogEl.scrollHeight;
-    this.bootLines.push(msg);
-  }
-
-  toggleConsole() {
-    this.consolePanel.classList.toggle('hidden');
-    this.$('btnConsole').classList.toggle('lit', !this.consolePanel.classList.contains('hidden'));
   }
 
   // ── Toast ────────────────────────────────────────────────

@@ -42,12 +42,10 @@
       <button id="btnAI" class="iconbtn" aria-label="KI-Trainer" title="KI-Trainer (Gemini)">
         <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7zM18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9zM5.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" fill="currentColor"/></svg>
       </button>
-      <button id="btnFull" class="iconbtn" aria-label="Vollbild" title="Vollbild">
-        <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button id="btnConsole" class="iconbtn" aria-label="Konsole" title="Konsole">
-        <svg viewBox="0 0 24 24"><path d="M5 7l5 5-5 5M12 17h7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+      <!-- v2.14.1: Vollbild-Button ENTFERNT — die App ist nativ Immersive
+           (MainActivity SYSTEM_UI_FLAG_IMMERSIVE_STICKY), ein WebView hat
+           keine requestFullscreen-API — der Button konnte nichts tun.
+           v2.14.1: Konsole-Button ENTFERNT (Nutzerwunsch; Log läuft unsichtbar). -->
     </div>
   </header>
 
@@ -256,16 +254,10 @@
     </div>
   </section>
 
-  <!-- Konsole -->
-  <section id="consolePanel" class="console hidden">
-    <div class="console-head">
-      <span>KONSOLE</span>
-      <button id="consoleClose" class="iconbtn" aria-label="Konsole schließen">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-    <div id="consoleLog"></div>
-  </section>
+  <!-- v2.14.1: KONSOLE-PANEL ENTFERNT (Nutzerwunsch). Das Log-Element
+       bleibt unsichtbar im DOM — Boot-/Diagnose-Meldungen landen hier
+       weiter (Tests + Fehlerdiagnose via ADB lesen es mit). -->
+  <div id="consoleLog" hidden></div>
 
   <div id="toast" role="status"></div>
 

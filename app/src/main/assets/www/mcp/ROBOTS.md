@@ -18,9 +18,10 @@ Action = tanh-begrenzte Abweichung von der Keyframe-Pose: ctrl = ref + actSpan·
 - obs 15, act 4 (Rotor-Sollwerte); cmd.alt = Höhe; done: zMin/upMin/xyMax
 
 ## AUSSEHEN (setAppearance, v2.14.0) — nur Rendering
+- Seit v2.14.1 zeigt der Renderer die MODELL-EIGENEN Farben/Texturen (Materialien) — Basis ist NICHT mehr grau. Overrides setzen darauf auf.
 - Teile = Material-, Body- oder Geom-Namen des aktiven Modells ({list:true} liefert den Katalog).
 - G1: Material-Namen der Menagerie-Geoms; MicroDuck: z. B. jaw_material, top_head_shell_material, noenoeil_material (Schnabel orange!), foot_left/right_material; X2: Basis-Material.
-- color "#rrggbb", shine (Glanz 0–1 → Roughness), metal (Metallik 0–1). Physik/Masse bleibt unberührt.
+- color "#rrggbb", shine (Glanz 0–1 → Roughness), metal (Metallik 0–1). Physik/Masse bleibt unberührt. Farbe-Override ersetzt bei der X2 die Textur; Reset ({reset:true}) bringt Modell-Optik zurück.
 
 ## Kamera/Sensoren (alle)
 - Kein Roboter hat einen realen Kamera-Eingang in die Policy. FPV = virtuelle Kamera am Kopf/Torso/Basis, render-only (fpv.js), Vision-Modell-Kanal absichtlich LEER (Canvas → ONNX wäre der künftige Hook).
