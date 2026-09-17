@@ -631,3 +631,31 @@ Work Log:
 
 Stage Summary:
 - v2.21.0: MOTION-KI lebt — die fertig trainierte Motion-Policy ANIMIERT den Roboter (GLB-Stil/Phase, FOLGT-Semantik), Joystick und Buttons steuern BEI BEDARF über den STEUER-MIX (0 % = nur Clip, 100 % = nur Stick), ⏸ GEIST friert die Pose ein (Roboter „stoppt" im Stil), ⏭ CLIP springt weiter. Gemini steuert alles über das neue Werkzeug motionKi. Kein Trainingsbruch: reutzt die v2.16-Aktionsanker-Entkopplung — Policy bleibt, was sie ist; die Wiedergabe ist nur eine neue Deutung derselben Befehl-Kanäle.
+
+---
+Task ID: 44
+Agent: Super Z (Hauptagent)
+Task: v2.22.0 — ARDY-BRÜCKE: NVIDIA ARDY (Text→Motion) als Motion-Lehrer OHNE eigenes CUDA + Recherche ARDY/MotionBricks
+
+Work Log:
+- NUTZERWUNSCH: „Suche im Internet nach Nvidia adry und Motionbrick. Sowas wollte ich. Hab aber kein cuda. Wollte als Lehrer in der App benutzen"
+- RECHERCHE (Web-Suche + GitHub-Quellcode): Beide projekte sind ECHTE NVIDIA-Research-Arbeiten aus 2026:
+  * ARDY — „Autoregressive Diffusion with Hybrid Representation for Interactive Human Motion Generation" (SIGGRAPH 2026, TOG 45(4), arXiv Juli 2026, github.com/nv-tlabs/ardy, Apache-2.0): autoregressives Diffusionsmodell, Text→Motion in Echtzeit mit Online-Promptwechsel, kinematische Constraints, Checkpoints für CORE- UND UNITREE-G1-Skelett (nvidia/ARDY-G1-RP-25FPS-Horizon52/8, NVIDIA Open Model License). Braucht PyTorch+CUDA (getestet RTX 4090), Text-Encoder = LLM2Vec auf Meta-Llama-3-8B (gated, ~14 GB VRAM auf cuda/bf16, CPU-Modus via TEXT_ENCODER_DEVICE=cpu möglich). Export: MuJoCo-QPOS-CSV für G1 via scripts/generate.py.
+  * MotionBricks — „Scalable Real-Time Motions with Modular Latent Generative Model and Smart Primitives" (arXiv 2604.24833, nvlabs.github.io/motionbricks, Code in NVlabs/GR00T-WholeBodyControl/tree/main/motionbricks, Apache-2.0/Open-Model-License): modulare „Bricks" + ein latent Backbone, 350 000+ Motion-Skills, 2 ms Latenz / 15 000 FPS auf RTX 5090, Training 32×H100. Requirements: „Python 3.10+, a CUDA-capable GPU" — kein CPU-Pfad dokumentiert.
+  * Fazit CUDA: Beide brauchen zwingend CUDA — ABER die App braucht es nicht: ARDY läuft auf KOSTENLOSER Cloud-GPU (Colab T4), MotionBricks-Prinzip (modulare Skills + Wiedergabe mit Nutzereingriff) steckt seit v2.21.0 schon in MOTION-KI.
+- ROOT-INSIGHT (Grundlage des Imports): ARDYs G1-MuJoCo-XML (g1skel34/xml/g1.xml) hat EXAKT die Gelenkliste der App (Menagerie unitree_g1/g1.xml): 29 Scharniere, NAME-für-NAME und Reihenfolge-für-Reihenfolge identisch (links Bein 6, rechts Bein 6, Taille 3, links Arm 7, rechts Arm 7). ARDY-CSV = 36 Spalten (root xyz + Quat wxyz + 29 DoF), MuJoCo-Konvention z-hoch/x-vorne — identisch zur App → 1:1-Mapping, KEIN Retargeting.
+- IMPLEMENTIERUNG:
+  * www/js/qpos.js NEU: parseQposCsv(text, opts) — reine, Node-testbare Parser-/Builder-Funktion: Zeilenprüfung (numerisch, ≥36 Spalten, Extraspalten toleriert, ≥2 Frames), q = DoF 1:1, h = pelvis z, root relativ zum ersten Frame, yaw aus Quat + STETIGE Entfaltung über ±π, baseQ w-first, meanSpeed/locomotion aus der Bahn, fps 25 (ARDY-G1-Checkpoints), robotId 'g1', src 'ardy', alg 99 (nie Re-Retarget). Deutsche Fehlermeldungen mit Zeile/Spalte + Hinweis auf --model g1.
+  * main.js: onCsvFiles (G1-Only-Gate mit klarer Meldung, Record {id:'qpos_…', name+' (ARDY)', glb:null, src:'qpos', motion:packed, motionByRobot:{g1:packed}} → putClip → refreshClipList), Verdrahtung csvImportBtn/csvFile, Log „ARDY-Referenz aktiv", VERSION 2.22.0.
+  * index.html: Button „.csv (ARDY)" + Input (accept .csv,text/csv) in der GLB-Leiste, Erklärnotiz ★ ARDY-BRÜCKE im glbStatus.
+  * ai.js: System-Prompt v2.22.0-Satz + WANN-WAS-Zeile („kein CUDA" → Notebook verweisen, dann wie GLB behandeln).
+  * Doku: mcp/CONTROL.md § ARDY-BRÜCKE, mcp/README.md (Tabelle + Kurzstand v2.22.0), README.md (Bullet).
+  * scripts/ardy_colab.ipynb NEU: deutsches Colab-Notebook — GPU-Check, ardy-Installation, HF-Token-Schritt (Llama-3-8B gated), Prompt-Liste → generate.py --model g1 --duration 8 --output …, CSV-Zip-Download, App-Import-Anleitung, TEXT_ENCODER_DEVICE=cpu-Fallback für T4.
+- TESTS: scripts/qpos_v2220_test.mjs NEU 52/52 GRÜN (Skelett-Identität aus g1.xml geparst gegen ARDY-Referenzliste; Parser mit deterministischen 29-Winkeln; meanSpeed/Root-Bahn/Yaw-Entfaltung ±π; pack/unpack-Roundtrip; Integration an ECHTER WASM-Sim: sampleRef exakt = CSV-Frames nach Einblendung, Interpolation Frame 12,5, refRoot/refSpeed, setGhostPose ohne srcPos, buildBCDataset 75 Frames, finites obs, GEIST-PAUSE-Regression; 4 Fehlerfälle + Extraspalten-Toleranz; Verdrahtung/Versionen/Notebook). REGRESSIONEN: motion_v2210 35/35 (Versions-Pins auf ≥2.22.0/34 gelockert), motion_v2150 41/41, motion_v2160 33/33, motion_ctrl ✓, canvas_v2200 84/84, canvas_v2190 61/61, canvas_v2170 69/69, test_v2140 53/53, test_v2141 32/32, dr 41/41, duck_sync 24/24, parallel 21/21 — ALLE GRÜN.
+- BUILD: SDK/Gradle 8.7 neu bestückt (/home/z/tools/android-sdk, platforms;android-34, build-tools;34.0.0), assembleRelease OK (Erst-Dependency-Download >10 min → Hintergrund-Lauf), app-release.apk 28.069.571 bytes, aapt: versionCode 34 / versionName 2.22.0, 156 WWW-Assets inkl. js/qpos.js, apksigner: CN=Trainrobot OU=Testfeld07, SHA-256 1c0422b9… IDENTISCH mit allen v2.x → Update-fähig. APK → download/Trainrobot.apk. sha256 cff8a1c0ff1fea58b676b87b1b52e25e4a161d816d14a018b19a43762c700381.
+- RELEASE: Commit lokal erledigt; PUSH + Tag v2.22.0 + CI-Release OFFEN — GitHub-Token nicht im Environment (wird nie persistiert) → beim Nutzer anfragen; nach Token: push main + tag v2.22.0 (CI auto-released), dann Asset-Integritätscheck.
+
+Stage Summary:
+- v2.22.0: ARDY-BRÜCKE lebt — eigene TEXTE werden Bewegungen: ARDY auf kostenloser Cloud-GPU (Notebook im Repo), CSV-Import per „.csv (ARDY)“ (G1), 1:1-Skelett-Mapping, vollwertiger Lehrer (Geist/BC/PPO/MOTION-KI). Kein eigenes CUDA nötig — genau wie gewünscht.
+- APK lokal gebaut + verifiziert: download/Trainrobot.apk (versionCode 34, Signatur 1c0422b9…)
+- Push/Release wartet auf GitHub-Token vom Nutzer
