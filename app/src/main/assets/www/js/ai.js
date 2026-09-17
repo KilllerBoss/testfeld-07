@@ -153,12 +153,13 @@ export const AI_DOCS = [
   { doc: 'WORLD', title: 'Welten: Presets + KI-WELT (setWorld — Objekte bauen, Farben, Regeln)' },
   { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera, AUSSEHEN (setAppearance), UI (setUI)' },
   { doc: 'TRAINING', title: 'PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen' },
+  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.17.0): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasGraph/canvasReward/canvasRun/canvasUI)' },
 ];
 
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist.
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren).
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
 ${cfgJson}
@@ -189,6 +190,10 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 13. tool="setWorld" — WELT bauen. args = {preset:"testfeld"|"flach"|"parkour"|"treppen"|"huegel"} schaltet um. Eigene Objekte: args = {objects:[{type:"box"|"ball"|"cyl"|"ramp"|"tilt"|"gate"|"stair", x, y, w,l,h (bzw. r für ball/cyl), color:"#rrggbb", euler:[rx,ry,rz]}…], replace:<bool>} — replace:true = WELT NEU bauen (nur die gelisteten Objekte), replace:false = Objekte HINZUFÜGEN. Regeln: max 40 Objekte, Spawn (0,0) bleibt frei (min 0,9 m), x/y −12…12. LIES doc "WORLD" bei Unsicherheit.
 14. tool="setUI" — APP-LOOK anpassen. args = {theme:"standard"|"neon"|"amber"|"ice"|"wald", suggestions:[{label:"≤20 Zeichen", q:"Chat-Nachricht"}…max 6]} — theme ist das Farbschema der App, suggestions ersetzt die Vorschlags-Buttons im KI-Chat (sinnvolle Kurzbefehle vorschlagen!). Beide Felder optional.
 15. tool="setMoE" — Soft-MoE-EXPERTENANZAHL ändern (NUR MicroDuck). args = {experts:2…8}. Die Policy wird neu aufgesetzt (Training startet von Null — vorher fragen/warnen!). 4 = Standard (Balance/Walk/Turn/Recover).
+16. tool="canvasGraph" — NETZ-CANVAS bauen/lesen (v2.17.0). args = {cmd:"state"|"add"|"link"|"unlink"|"remove"|"config"|"clear"|"import", …}. state = kompletter Graph als JSON (Knoten mit Ports, Kabel). add = {type:"policy", nIn, nOut, hidden:[64,64]} oder {type:"ui", kind, io, label} oder {type:"const", values:[…]}. link = {from:{node,port}, to:{node,port}} — node ist "io" (alle Sensoren einzeln + Stick X/Y), "out" (alle Aktuatoren einzeln) oder Karten-ID/-Name. config = {node, name?, nIn?, nOut?, hidden?, trainable?, lr?, T?} (Architekturwechsel = frisches Netz!) oder Senke {node:"out", sink:"residual"|"direct"}. import = {node} lädt die AKTUELLE App-Policy (64×64) in die Karte. LIES doc "CANVAS", bevor du baust.
+17. tool="canvasReward" — Belohnung JE KARTE. args = {card:"<id|name>"|"alle", mode:"global"|"custom", scale:0…3, w:{alive,up,vel,turn,energy,fall}}. global = Aufgaben-Belohnung × scale. custom = eigene Formel: alive (Grundbetrag), up·(upz−0,7), vel·min(1,|vfwd|), turn·min(1,|yawRate|), −energy·Σact², −fall bei Sturz.
+18. tool="canvasRun" — Canvas ausführen/trainieren. args = {run:<bool>} = Graph fährt den Roboter (Modus CANVAS) oder zurück zu MANUELL; {train:<bool>} = Canvas-TRAINING an/aus (PPO je trainierbarer Karte; impliziert run).
+19. tool="canvasUI" — EIGENE UI-Elemente als Policy-Ein-/Ausgänge. args = {node?, kind:"button"|"toggle"|"slider"|"joy"|"gauge"|"light"|"code", io:"in"|"out" (nur code), label, nOut:1…4 (code-in), code:"…" (nur code), remove:<bool>}. Eingänge liefern Werte (Button 1/0, Slider 0…1, Joystick X/Y) und können in Karten verdrahtet werden; Ausgänge zeigen Werte (gauge/light). code-in MUSS je Schritt ein Array mit nOut Zahlen zurückgeben: ctx = {t, dt, state}.
 
 PLUGIN-API (das Objekt „api" in runCode/writePlugin):
 - api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
@@ -228,7 +233,7 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin|canvasGraph|canvasReward|canvasRun|canvasUI   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
@@ -236,6 +241,7 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 
 WANN WAS?
 - Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
+- ARCHITEKTUREN BAUEN („bau einen Router über meine Geh-Policy“, „verbinde den Joystick mit einem neuen Netz“, „eigene Belohnung für eine Karte“) → ERST readDoc "CANVAS", dann canvasGraph (Karten add/link/config/import), canvasReward (Belohnung je Karte), canvasRun (ausführen/trainieren), canvasUI (eigene UI-Elemente als Ein-/Ausgänge). Der Canvas läuft je Roboter getrennt und bleibt gespeichert.
 - AUSSEHEN („mach die Ente pink“, „Chrome-Ente“, „G1 Kopf rot“) → setAppearance (erst {list:true}). WELT („bau einen Turm“, „stell einen Ball hin“, „mach die Welt leer“) → setWorld. APP-DESIGN/Schnellstart-Buttons („Neon-Design“) → setUI. MicroDuck-Experten („nur 3 Experten“) → setMoE (Policy startet neu — vorher warnen!).
 - Fragen zu obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung → erst readDoc (ART-MCP), dann antworten/handeln.
 - „Zeig, was der Roboter sieht" → setCamera on:true (nur Anzeige).

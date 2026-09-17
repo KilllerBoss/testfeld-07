@@ -39,6 +39,9 @@
       <button id="btnTrainTop" class="iconbtn" aria-label="Training" title="Training">
         <svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
       </button>
+      <button id="btnCanvas" class="iconbtn" aria-label="Netz-Canvas" title="Netz-Canvas (Policies bauen und verbinden)">
+        <svg viewBox="0 0 24 24"><circle cx="4.5" cy="6.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="4.5" cy="17.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="14.5" y="9" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 6.5h4a2 2 0 0 1 2 2V10M6.5 17.5h4a2 2 0 0 0 2-2V14" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+      </button>
       <button id="btnAI" class="iconbtn" aria-label="KI-Trainer" title="KI-Trainer (Gemini)">
         <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7zM18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9zM5.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" fill="currentColor"/></svg>
       </button>
@@ -56,6 +59,7 @@
   <nav id="modeBar" class="ui hidden" aria-label="Modus">
     <button id="modeManuell" class="mode-chip active">MANUELL</button>
     <button id="modePolicy" class="mode-chip">POLICY</button>
+    <button id="modeCanvas" class="mode-chip" title="Netz-Canvas auf dem Roboter ausführen">CANVAS</button>
     <span id="policyHint" class="policy-hint hidden">keine Policy gespeichert</span>
   </nav>
 
@@ -213,6 +217,43 @@
     </div>
     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>
+
+  <!-- ── v2.17.0: NETZ-CANVAS ────────────────────────────────── -->
+  <section id="canvasSheet" class="sheet cv-sheet hidden">
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <span class="sheet-title">NETZ-CANVAS</span>
+      <span id="cvInfo" class="sheet-sub">Policies bauen, verbinden, ausführen</span>
+      <button id="cvClose" class="iconbtn" aria-label="Canvas schließen">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="cv-toolbar">
+      <button id="cvAddPolicy" class="btn small">+ Netz</button>
+      <button id="cvAddUI" class="btn small">+ UI</button>
+      <button id="cvAddConst" class="btn small">+ Konst</button>
+      <span class="cv-sep"></span>
+      <button id="cvZoomOut" class="btn small" aria-label="Verkleinern">−</button>
+      <button id="cvZoomIn" class="btn small" aria-label="Vergrößern">+</button>
+      <button id="cvFit" class="btn small" title="Alles sichtbar machen">⤢</button>
+      <button id="cvClear" class="btn small" title="Canvas leeren">Leeren</button>
+    </div>
+    <div class="cv-toolbar">
+      <button id="cvRun" class="btn btn-solid">AUSFÜHREN</button>
+      <button id="cvTrain" class="btn">TRAINIEREN</button>
+      <span id="cvStat" class="stat-k">0 Karten · 0 Kabel</span>
+    </div>
+    <div id="cvPort" class="cv-viewport">
+      <div id="cvWorld" class="cv-world">
+        <svg id="cvWires" class="cv-wires" width="6000" height="4000"></svg>
+      </div>
+    </div>
+    <div id="cvEdit" class="cv-edit hidden"></div>
+    <div class="train-note">LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
+  </section>
+
+  <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->
+  <div id="canvasUIBar" class="ai-buttons hidden"></div>
 
   <!-- KI-Trainer (Gemini) -->
   <section id="aiSheet" class="sheet hidden">

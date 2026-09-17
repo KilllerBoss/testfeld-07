@@ -11,14 +11,12 @@ Sie sind die EINZIGE verlässliche Quelle für Schnittstellen — rate nicht.
 | REWARDS | rW-Felder, rWx-Zielterme (v2.14.0), expertR, DR-Felder, Abbruch |
 | CONTROL | Steuerung, Buttons, Makros, Szenarien, Sturz-Verhalten, FPV, setAppearance, setUI |
 | TRAINING | PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen (Handy) |
+| CANVAS | NETZ-CANVAS (v2.17.0): Karten bauen/verbinden, Router-Architekturen, Belohnung je Karte, UI-Elemente als Ein-/Ausgänge (canvasGraph/canvasReward/canvasRun/canvasUI) |
 
-## App-Version v2.14.0 (Kurzstand)
-- 3 Roboter: **MicroDuck** (Soft-MoE, 74 obs / 14 act, 2–8 Experten per setMoE), G1 (29 act, GLB-Tracking), X2 (Drohne). v2.15.0: GLB für alle (Duck: Beine, X2: Flugbahn-Autopilot) + Referenz-Modi STELLE/FREI/FOLGT + „OHNE ANIM WEITER“ (Policy ohne Animation weitertrainieren)
-- **Neu v2.14.0**: setAppearance (Farben + Glanz/Metallik je Teil, nur Rendering) · setWorld (KI-WELT: Objekte
-  bauen/löschen, replace/add) · setUI (App-Designs + eigene Vorschlags-Chips) · setMoE (Expertenanzahl 2–8) ·
-  rWx-Komplexterme (goTo/stayNear/heightBand/faceYaw/paceMax/paceMin/uprightMin, optional hard) ·
-  Tempo-SLIDER 1–16 statt MAX (UI-Freeze behoben) · Live-Kurven (Tempo+Loss) · Policy-Export mit Metadaten ·
-  Roboter-Entfernung: A1, Spot, Go2 raus (APK deutlich kleiner)
+## App-Version v2.17.0 (Kurzstand)
+- 3 Roboter: **MicroDuck** (Soft-MoE, 74 obs / 14 act, 2–8 Experten per setMoE), G1 (29 act, GLB-Tracking), X2 (Drohne). v2.15.0: GLB für alle + Referenz-Modi STELLE/FREI/FOLGT + „OHNE ANIM WEITER“; v2.16.0: Policy animations-unabhängig (Aktions-Anker = Keyframe, Kommandogang, ANIM-DROPOUT)
+- **Neu v2.17.0 — NETZ-CANVAS**: Node-Editor im eigenen Sheet — links ALLE Sensoren einzeln (+ Stick X/Y), rechts ALLE Aktuatoren einzeln, dazwischen Policy-Karten mit frei wählbaren nIn/nOut/Hidden-Layern/Neuronen, Kabel zwischen allen Ports, JEDE Karte mit eigener Belohnung (global × Skala oder eigene Formel alive/up/vel/turn/energy/fall), App-Policies als Karten importierbar + einfrierbar (Router-Architekturen), EIGENE UI-Elemente (button/toggle/slider/joy/gauge/light/code) als Policy-Ein-/Ausgänge, Canvas läuft LIVE als Modus CANVAS, PPO-Training je Karte. Werkzeuge: canvasGraph/canvasReward/canvasRun/canvasUI — doc "CANVAS" lesen, bevor du baust.
+- **v2.14.0-Bestand**: setAppearance · setWorld (KI-WELT) · setUI (Designs + Vorschlags-Chips) · setMoE (2–8 Experten) · rWx-Komplexterme · Tempo-SLIDER 1–16 · Live-Kurven · Policy-Export mit Metadaten
 
 ## Eiserne Regeln
 1. Physik > Balance > Aufgabe > Stil — niemals andersrum.

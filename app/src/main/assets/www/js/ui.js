@@ -91,7 +91,9 @@ export class UI {
   setMode(mode) {
     this.$('modeManuell').classList.toggle('active', mode === 'manuell');
     this.$('modePolicy').classList.toggle('active', mode === 'policy');
-    this.$('stMode').textContent = mode === 'policy' ? 'POLICY' : 'MANUELL';
+    const cvChip = this.$('modeCanvas');
+    if (cvChip) cvChip.classList.toggle('active', mode === 'canvas');
+    this.$('stMode').textContent = mode === 'policy' ? 'POLICY' : mode === 'canvas' ? 'CANVAS' : 'MANUELL';
   }
   policyAvailable(available) {
     this.$('policyHint').classList.toggle('hidden', available);

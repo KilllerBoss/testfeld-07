@@ -139,7 +139,10 @@ const cfg = { nu, actSpan: 0.4 };
   // Ziel bleibt stehen
   const tx0 = t._tx, ty0 = t._ty;
   t.advance(0.5);
-  check('animOn=false (ohne joy): Wurzel-Ziel bleibt fix', t._tx === tx0 && t._ty === ty0);
+  // v2.16.0: OHNE Animation ist das Ziel KOMMANDOGESTEUERT (Kommandogang):
+  // cmdDriven() ist jetzt immer true — das Ziel integriert (ggf. neu
+  // gewürfelte) Kommandos statt fix am Startpunkt zu bleiben.
+  check('animOn=false (ohne joy): KOMMANDOGANG — cmdDriven aktiv (v2.16.0)', t.cmdDriven() === true && Number.isFinite(t._tx) && Number.isFinite(t._ty));
   const { r, done } = t.reward(sim);
   check('animOn=false: Reward endlich, Stehen endet nicht', Number.isFinite(r) && !done);
   // joy + animOn=false: Ziel wandert (Bonus-Kombi)

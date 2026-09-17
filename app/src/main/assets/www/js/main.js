@@ -27,8 +27,9 @@ import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnunge
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
+import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy } from './canvas.js'; // v2.17.0: NETZ-CANVAS
 
-const VERSION = '2.16.0';
+const VERSION = '2.17.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -83,6 +84,7 @@ const S = {
   // Sturz-Verhalten (Auto-Reset vs. Liegen lassen) und Plugin-Werkstatt.
   scenario: {},      // je Roboter: 'gehen' | 'getup' | 'drop' (GLB-Clip zählt als eigene Aufgabe)
   fallMode: 'reset', // 'reset' = Auto-Teleport bei Sturz, 'stay' = Roboter bleibt liegen
+  canvasBoard: null, // v2.17.0: NETZ-CANVAS (Graph + Karten-PPOs + Editor)
 };
 
 // Persistierte Szenario-/Sturz-Wahl laden (v2.8.0)
@@ -243,6 +245,13 @@ async function loadRobot(id, first = false) {
     ui.$('glbSection').classList.remove('hidden');
     // KI-Anpassungen für diese Aufgabe wieder aufschalten (Belohnungen etc.)
     applySavedAICfg(id);
+    // v2.17.0: Canvas auf den neuen Roboter/die neue Aufgabe umschalten —
+    // je Roboter gibt es einen EIGENEN Graphen (Ports = obsDim/nu der Aufgabe)
+    if (S.canvasBoard) {
+      S.canvasBoard.load();
+      updateCvStat();
+      log('Netz-Canvas geladen: ' + S.canvasBoard.graph.nodes.filter(n => n.type === 'policy').length + ' Karten, ' + S.canvasBoard.graph.links.length + ' Kabel', S.canvasBoard.graph.nodes.length > 2 ? 'ok' : '');
+    }
 
     // Gespeicherte Policy für DIESE Aufgabenart laden (falls vorhanden).
     // v2.7.0: Bei Weltwechsel (gleicher Roboter) bleibt das TRAINING im
@@ -802,6 +811,18 @@ function observeState() {
     plugins: pluginHost.list.filter(p => p.enabled).map(p => p.name),
     joystick: controls.joyMap,
     buttons: S.aiButtons.map(b => ({ id: b.id, label: b.label, action: b.action })),
+    // v2.17.0: Canvas-Status (Gemini sieht den Graph-Zustand im observe)
+    canvas: S.canvasBoard ? (() => {
+      const d = S.canvasBoard.describe();
+      return {
+        karten: d.nodes.filter(n => n.type === 'policy').length,
+        uiElemente: d.nodes.filter(n => n.type === 'ui').length,
+        kabel: d.links.length,
+        training: d.training,
+        modusAktiv: S.mode === 'canvas',
+        werkzeuge: 'canvasGraph/canvasReward/canvasRun/canvasUI (doc: CANVAS)',
+      };
+    })() : null,
   });
 }
 
@@ -820,6 +841,8 @@ function executeAction(action, depth = 0) {
       return 'Autofahrt gestartet: vx=' + act.vx.toFixed(2) + ' m/s, yaw=' + act.yaw.toFixed(2) + ' rad/s für ' + Math.round(act.ms / 1000) + ' s (endet früher bei Stick-Bewegung)';
     }
     case 'mode': {
+      if (act.mode === 'canvas') { setCanvasMode(true); return 'Modus: CANVAS (Netz-Graph fährt den Roboter)'; }
+      if (act.mode === 'manuell' && S.mode === 'canvas') { setCanvasMode(false); return 'Modus: MANUELL'; }
       if (act.mode === 'policy' && !S.trainer) return 'Keine Policy vorhanden — erst Training starten';
       S.mode = act.mode;
       ui.setMode(S.mode);
@@ -1011,6 +1034,11 @@ async function execTool(tool, args) {
       ui.toast('Plugin installiert: ' + rec.name);
       return 'Plugin „' + rec.name + '” (id=' + rec.id + ') installiert und AKTIV. Verfügbar: onStep/onFrame/onReset/onAct/onReward, ui.addChip, teleport, push, storage, sim(). Es läuft ab jetzt bei jedem App-Start mit.';
     }
+    // ── v2.17.0: NETZ-CANVAS — voll steuerbar ──
+    if (tool === 'canvasGraph') return canvasGraphTool(args || {});
+    if (tool === 'canvasReward') return canvasRewardTool(args || {});
+    if (tool === 'canvasRun') return canvasRunTool(args || {});
+    if (tool === 'canvasUI') return canvasUITool(args || {});
     return 'Unbekanntes Werkzeug: ' + tool;
   } catch (e) {
     return 'Werkzeug-Fehler: ' + e.message;
@@ -1311,6 +1339,10 @@ function onParallelSegment(info) {
 
 function startTraining() {
   if (!S.sim || !S.task) return;
+  // v2.17.0: Normales Training und Canvas schließen sich aus — Canvas-Modus
+  // sauber verlassen (Roboter-Reset gehört dazu).
+  if (S.mode === 'canvas') setCanvasMode(false);
+  if (S.canvasBoard && S.canvasBoard.training) S.canvasBoard.stopTraining(true);
   if (!S.trainer) {
     const moe = !!S.sim.cfg.moe;
     // v2.14.0: moeE (KI-tunbar über setMoE) steuert die Soft-MoE-Expertenanzahl
@@ -1691,7 +1723,10 @@ async function boot() {
     // ── v2.13.0: ÜBER-NACHT-SCHUTZ — Auto-Save bei Hintergrundwechsel
     // (Android killt Hintergrund-WebViews und die Policy lebte nur im RAM)
     // + Bildschirm-Wachhalten im Training.
-    const autoSave = () => { if (S.trainer && S.trainer.stepCount > 0) { try { savePolicy(S.robotId, { silent: true }); log('Auto-Save: Policy gesichert', 'ok'); } catch (e) { /* egal */ } } };
+    const autoSave = () => {
+      if (S.trainer && S.trainer.stepCount > 0) { try { savePolicy(S.robotId, { silent: true }); log('Auto-Save: Policy gesichert', 'ok'); } catch (e) { /* egal */ } }
+      if (S.canvasBoard) S.canvasBoard.saveNow(); // v2.17.0: Canvas + Karten-Netze sichern
+    };
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autoSave(); });
     window.addEventListener('pagehide', autoSave);
     window.addEventListener('beforeunload', autoSave);
@@ -1702,6 +1737,44 @@ async function boot() {
 
     ui.splash('Kompiliere Unitree G1 …', 0.6);
     await loadRobot('g1', true);
+
+    // ── v2.17.0: NETZ-CANVAS — Board erstellen, Sheet verdrahten ──
+    try {
+      S.canvasBoard = new CanvasBoard({
+        log,
+        toast: (m, e, ms) => ui.toast(m, e, ms),
+        buzz: (ms) => controls.buzz(ms),
+        getSim: () => S.sim,
+        getTask: () => S.task,
+        getRobotId: () => S.robotId,
+        getStick: () => ({ x: controls.stickX, y: controls.stickY }),
+        setMode: (m) => { if (m === 'canvas' && S.mode !== 'canvas') setCanvasMode(true); },
+        getMode: () => S.mode,
+        stopMainTraining: () => { if (S.training) stopTraining(true); },
+        fireAct: (sim, ctrl) => pluginHost.fireAct(sim, ctrl),
+        fireReset: () => pluginHost.fireReset(),
+        fireReward: (sim, info) => pluginHost.fireReward(sim, info),
+        pushEpisodeReward: (r) => ui.pushEpisodeReward(r),
+        getMainPolicyJSON: () => (S.trainer ? S.trainer.toJSON() : null),
+        toggleRun: () => setCanvasMode(S.mode !== 'canvas'),
+      });
+      S.canvasBoard.mount({
+        viewport: document.getElementById('cvPort'),
+        world: document.getElementById('cvWorld'),
+        wires: document.getElementById('cvWires'),
+        uiBar: document.getElementById('canvasUIBar'),
+        edit: document.getElementById('cvEdit'),
+        runBtn: document.getElementById('cvRun'),
+        trainBtn: document.getElementById('cvTrain'),
+        sheet: document.getElementById('canvasSheet'),
+      });
+      S.canvasBoard.load();
+      updateCvStat();
+      log('Netz-Canvas bereit — Sensoren links, Aktuatoren rechts, Karten frei verdrahtbar', 'ok');
+    } catch (e) {
+      log('Canvas nicht verfügbar: ' + e.message, 'err');
+      S.canvasBoard = null;
+    }
 
     ui.splash('Bereit.', 1);
     setTimeout(() => { ui.splashDone(); }, 250);
@@ -1729,7 +1802,38 @@ function loop(now) {
   pluginHost.fireFrame(dt); // Plugin-Hook: je Bild (v2.8.0)
   if (controls.consumeReset()) resetRobot();
 
-  if (S.training) {
+  if (S.mode === 'canvas' && S.canvasBoard) {
+    // ── v2.17.0: NETZ-CANVAS — Ausführung (Echtzeit) oder Karten-Training ──
+    const b = S.canvasBoard;
+    if (b.training) {
+      const nSteps = Math.min(16, Math.max(1, parseInt(S.speedMode, 10) || 1));
+      const t0 = performance.now();
+      let done = 0;
+      while (done < nSteps) {
+        b.trainCtrlStep();
+        done++;
+        if (performance.now() - t0 > 34) break; // Not-Aus: max ~2 Frames
+      }
+      b.stats._times.push({ n: done, ms: performance.now() - t0 });
+      if (b.stats._times.length > 30) b.stats._times.shift();
+      let sn = 0, sm = 0;
+      for (const s of b.stats._times) { sn += s.n; sm += s.ms; }
+      b.stats.rate = sm > 0 ? (sn / sm) * 1000 : 0;
+      S.stepsPerSec = b.stats.rate;
+    } else {
+      const cdt = S.sim.cfg.ctrlDt || CTRL_DT;
+      S.acc += dt;
+      let guard = 0;
+      while (S.acc >= cdt && guard < 10) {
+        S.acc -= cdt;
+        guard++;
+        b.execCtrlStep();
+        checkFall();
+        pluginHost.fireStep(cdt);
+      }
+      S.stepsPerSec = fps * Math.max(1, Math.round(CTRL_DT / S.sim.timestep));
+    }
+  } else if (S.training) {
     if (S.parallel && S.parallel.active) {
       // v2.10.0 PARALLEL: Worker rollen selbstständig; hier nur Takt/Anzeige.
       S.stepsPerSec = S.parallel.rate;
@@ -1832,6 +1936,12 @@ function loop(now) {
   if (statusT > 0.2) {
     statusT = 0;
     ui.status(S.sim.baseSpeed(), S.sim.baseHeight(), fps);
+    // v2.17.0: Canvas-Liveanzeigen (Karten-Fußzeilen, Gauges, Lichter)
+    if (S.canvasBoard) {
+      S.canvasBoard.renderLive();
+      const cvSheetEl = document.getElementById('canvasSheet');
+      if (cvSheetEl && !cvSheetEl.classList.contains('hidden')) updateCvStat();
+    }
     // v2.9.0: sichtbarer Beweis, dass Plugins das Training formen
     if (S.plgBonus && (S.training || S.mode === 'policy') && performance.now() - (S._plgLogT || 0) > 10000) {
       log(`Plugin-Belohnung aktiv (Σ Bonus ${S.plgBonus >= 0 ? '+' : ''}${S.plgBonus.toFixed(1)}) — Training reagiert`, 'ok');
@@ -1887,6 +1997,260 @@ function lastEma() {
 }
 
 // ── UI-Verdrahtung ──────────────────────────────────────────
+// ── v2.17.0: NETZ-CANVAS — Modus, Sheet, Gemini-Werkzeuge ──
+/** Canvas-Modus EIN/AUS: der Graph fährt den Roboter (statt Gait/Policy). */
+function setCanvasMode(on) {
+  if (on) {
+    if (S.training) stopTraining(true);
+    S.mode = 'canvas';
+    log('CANVAS-Modus: der Netz-Graph fährt den Roboter (unverbundene Aktuatoren halten die Keyframe-Pose)', 'ok');
+  } else {
+    if (S.canvasBoard) S.canvasBoard.stopTraining(true);
+    S.mode = 'manuell';
+    log('Canvas-Modus beendet — MANUELL');
+  }
+  ui.setMode(S.mode);
+  if (S.sim) S.sim.reset();
+  if (S.task && S.task.kind === 'motion') S.task.reset(new RNG(4242), S.sim);
+  // Laufzeit-Leiste: nur im Canvas-Modus sichtbar (Inhalt baut das Board)
+  const bar = document.getElementById('canvasUIBar');
+  if (bar) {
+    if (S.mode === 'canvas' && S.canvasBoard) S.canvasBoard.renderUIBar();
+    else bar.classList.add('hidden');
+  }
+  if (S.canvasBoard) S.canvasBoard.syncButtons();
+}
+
+function updateCvStat() {
+  const el = document.getElementById('cvStat');
+  if (!el || !S.canvasBoard) return;
+  const g = S.canvasBoard.graph;
+  const pol = g.nodes.filter(n => n.type === 'policy');
+  const tr = pol.filter(n => n.trainable).length;
+  el.textContent = pol.length + ' Karten (' + tr + ' trainierbar) · ' + g.links.length + ' Kabel · ' +
+    (g._ioCount || 0) + ' Sensor-Ports · ' + (g._actCount || 0) + ' Aktuator-Ports';
+}
+
+function toggleCanvasSheet(force) {
+  const sheet = document.getElementById('canvasSheet');
+  if (!sheet) return;
+  const show = force !== undefined ? force : sheet.classList.contains('hidden');
+  sheet.classList.toggle('hidden', !show);
+  const btn = document.getElementById('btnCanvas');
+  if (btn) btn.classList.toggle('lit', show);
+  if (show) {
+    ui.toggleTrain(false);
+    ui.toggleAI(false);
+    if (S.canvasBoard) {
+      S.canvasBoard.attach();
+      S.canvasBoard.render();
+      updateCvStat();
+    }
+  }
+}
+
+/** Werkzeug 16: canvasGraph — Graph bauen/lesen (voller Zugriff). */
+function canvasGraphTool(args) {
+  const b = S.canvasBoard;
+  if (!b) return 'Fehler: Canvas nicht bereit';
+  const g = b.graph;
+  const cmd = args.cmd || 'state';
+  try {
+    if (cmd === 'state') return JSON.stringify(b.describe());
+    if (cmd === 'clear') { b.clearAll(); return 'Canvas geleert (je Roboter)'; }
+    if (cmd === 'add') {
+      let nd;
+      if (args.type === 'policy') nd = addPolicyNode(g, args);
+      else if (args.type === 'ui') nd = addUINode(g, args);
+      else if (args.type === 'const') nd = addConstNode(g, args);
+      else return 'Fehler: type muss "policy", "ui" oder "const" sein';
+      b._ensurePPO(nd);
+      b._cacheLinks();
+      b.render();
+      b.scheduleSave();
+      return 'Knoten erstellt: id=' + nd.id + ' type=' + nd.type +
+        (nd.type === 'policy' ? ' nIn=' + nd.nIn + ' nOut=' + nd.nOut + ' hidden=' + nd.hidden.join('/') + ' — verbinde Ports jetzt mit cmd=link (io = Sensoren, out = Aktuatoren). Ausgänge wirken als tanh×Aktionsamplitude um die Ruhepose.'
+          : nd.type === 'ui' ? ' kind=' + nd.kind + ' io=' + nd.io
+          : ' values=' + nd.values.join(','));
+    }
+    if (cmd === 'link') {
+      if (!args.from || !args.to) return 'Fehler: from/to brauchen {node, port}';
+      const fromNd = findNode(g, args.from.node) || findNodeByName(g, args.from.node);
+      const toNd = findNode(g, args.to.node) || findNodeByName(g, args.to.node);
+      if (!fromNd) return 'Fehler: Quell-Knoten "' + args.from.node + '" nicht gefunden (io = Sensoren, out = Aktuatoren, sonst Karten-IDs/Namen)';
+      if (!toNd) return 'Fehler: Ziel-Knoten "' + args.to.node + '" nicht gefunden';
+      const res = addLink(g, { n: fromNd.id, port: +args.from.port || 0 }, { n: toNd.id, port: +args.to.port || 0 });
+      if (!res.ok) return 'Fehler: ' + res.error;
+      b._cacheLinks();
+      b.render();
+      b.scheduleSave();
+      return 'Kabel gesetzt: ' + (fromNd.name || fromNd.id) + '[' + args.from.port + '] → ' + (toNd.name || toNd.id) + '[' + args.to.port + ']';
+    }
+    if (cmd === 'unlink') {
+      const ok = args.id ? removeLink(g, { id: args.id }) : (args.from && args.to ? removeLink(g, { from: args.from, to: args.to }) : false);
+      if (!ok) return 'Fehler: Kabel nicht gefunden (ids stehen in cmd=state)';
+      b._cacheLinks();
+      b.render();
+      b.scheduleSave();
+      return 'Kabel entfernt';
+    }
+    if (cmd === 'remove') {
+      const nd = findNode(g, args.node) || findNodeByName(g, args.node);
+      if (!nd) return 'Fehler: Knoten nicht gefunden';
+      b.removeNodeUI(nd.id);
+      return 'Knoten entfernt: ' + nd.id;
+    }
+    if (cmd === 'config') {
+      const nd = findNode(g, args.node) || findNodeByName(g, args.node);
+      if (!nd) return 'Fehler: Knoten nicht gefunden';
+      let archChanged = false;
+      if (args.name) nd.name = String(args.name).slice(0, 24);
+      if (nd.type === 'policy') {
+        if (args.hidden !== undefined) {
+          const h = (Array.isArray(args.hidden) ? args.hidden : String(args.hidden).split(',')).map(x => Math.round(+x)).filter(x => Number.isFinite(x) && x >= 8 && x <= 256).slice(0, 3);
+          if (h.length && h.join(',') !== nd.hidden.join(',')) { archChanged = true; nd.hidden = h; }
+        }
+        if (args.nIn !== undefined) { const v = Math.round(+args.nIn); if (v >= 1 && v <= 64 && v !== nd.nIn) { archChanged = true; nd.nIn = v; } }
+        if (args.nOut !== undefined) { const v = Math.round(+args.nOut); if (v >= 1 && v <= 32 && v !== nd.nOut) { archChanged = true; nd.nOut = v; } }
+        if (args.trainable !== undefined) nd.trainable = !!args.trainable;
+        if (args.lr !== undefined && Number.isFinite(+args.lr)) nd.lr = Math.max(1e-5, Math.min(3e-3, +args.lr));
+        if (args.T !== undefined && Number.isFinite(+args.T)) nd.T = Math.round(Math.max(128, Math.min(4096, +args.T)));
+        if (archChanged) { nd.ppo = null; b.ppo.delete(nd.id); }
+        b._ensurePPO(nd);
+        g.links = g.links.filter(l => {
+          const tN = findNode(g, l.to.n), fN = findNode(g, l.from.n);
+          if (tN && tN.id === nd.id && l.to.port >= nd.nIn) return false;
+          if (fN && fN.id === nd.id && l.from.port >= nd.nOut) return false;
+          return true;
+        });
+      } else if (nd.type === 'const') {
+        if (Array.isArray(args.values)) nd.values = args.values.slice(0, 8).map(v => Math.max(-10, Math.min(10, Number.isFinite(+v) ? +v : 0)));
+      } else if (nd.type === 'out') {
+        if (args.sink === 'direct' || args.sink === 'residual') { for (let a = 0; a < (g._actCount || 0); a++) nd.sink[a] = args.sink; }
+      }
+      b._cacheLinks();
+      b.render();
+      b.scheduleSave();
+      return 'Konfiguration gesetzt für „' + (nd.name || nd.id) + '"' + (archChanged ? ' — Architektur geändert, das Netz ist FRISCH (lernt von 0)' : '');
+    }
+    if (cmd === 'import') {
+      const nd = findNode(g, args.node) || findNodeByName(g, args.node);
+      if (!nd || nd.type !== 'policy') return 'Fehler: node muss eine Policy-Karte sein';
+      const json = b.hooks.getMainPolicyJSON ? b.hooks.getMainPolicyJSON() : null;
+      if (!json) return 'Fehler: keine App-Policy im Speicher — erst normal trainieren (oder „Laden" im Trainings-Panel), dann importieren';
+      if (json.obsDim !== nd.nIn || json.actDim !== nd.nOut) return 'Fehler: Maße passen nicht (Policy ' + json.obsDim + '→' + json.actDim + ', Karte ' + nd.nIn + '→' + nd.nOut + ') — setze nIn/nOut der Karte passend (cmd=config)';
+      const p = cardPPOFromAppPolicy(json);
+      b.ppo.set(nd.id, p);
+      nd.ppo = p.toJSON();
+      b.render();
+      b.scheduleSave();
+      return 'App-Policy in Karte „' + nd.name + '" geladen (' + p.stepCount + ' Schritte, 64×64-MLP) — sie läuft jetzt an ihren verkabelten Ports';
+    }
+    return 'Fehler: unbekannter cmd — erlaubt: state | add | link | unlink | remove | config | clear | import';
+  } catch (e) { return 'Fehler: ' + e.message; }
+}
+
+/** Werkzeug 17: canvasReward — globale oder karteigene Belohnung. */
+function canvasRewardTool(args) {
+  const b = S.canvasBoard;
+  if (!b) return 'Fehler: Canvas nicht bereit';
+  const g = b.graph;
+  let targets;
+  if (args.card && args.card !== 'alle') {
+    const nd = findNode(g, args.card) || findNodeByName(g, args.card);
+    if (!nd || nd.type !== 'policy') return 'Fehler: Karten-ID/-Name nicht gefunden (' + args.card + ')';
+    targets = [nd];
+  } else {
+    targets = g.nodes.filter(n => n.type === 'policy');
+    if (!targets.length) return 'Fehler: keine Policy-Karten im Canvas';
+  }
+  for (const nd of targets) {
+    if (args.mode === 'global' || args.mode === 'custom') nd.reward.mode = args.mode;
+    if (args.scale !== undefined && Number.isFinite(+args.scale)) nd.reward.scale = Math.max(0, Math.min(3, +args.scale));
+    if (args.w && typeof args.w === 'object') {
+      for (const [k, [lo, hi]] of Object.entries(CARD_R_FIELDS)) {
+        if (args.w[k] !== undefined && Number.isFinite(+args.w[k])) nd.reward.w[k] = Math.max(lo, Math.min(hi, +args.w[k]));
+      }
+    }
+  }
+  b.scheduleSave();
+  return 'Belohnung gesetzt für [' + targets.map(n => n.name).join(', ') + ']: ' + JSON.stringify(targets[0].reward) +
+    (targets[0].reward.mode === 'custom' ? ' — EIGENE Formel: r = alive + up·(upz−0,7) + vel·min(1,|vfwd|) + turn·min(1,|yawRate|) − energy·Σact² − fall·(Sturz)' : ' — GLOBALE Aufgaben-Belohnung × ' + targets[0].reward.scale);
+}
+
+/** Werkzeug 18: canvasRun — Ausführung/Training schalten. */
+function canvasRunTool(args) {
+  const b = S.canvasBoard;
+  if (!b) return 'Fehler: Canvas nicht bereit';
+  if (args.train !== undefined) {
+    if (args.train) {
+      b.startTraining();
+      const n = b.graph.nodes.filter(n2 => n2.type === 'policy' && n2.trainable).length;
+      return 'Canvas-TRAINING gestartet (' + n + ' trainierbare Karten, Tempo = Tempo-Slider im Trainings-Panel) — Modus CANVAS ist aktiv, der Roboter läuft den Graph live';
+    }
+    b.stopTraining();
+    return 'Canvas-Training pausiert (' + b.stats.episodes + ' Episoden, ' + b.stats.steps + ' Schritte)';
+  }
+  if (args.run !== undefined) {
+    setCanvasMode(!!args.run);
+    return args.run
+      ? 'Canvas AUSGEFÜHRT — Modus CANVAS aktiv. Der Graph fährt den Roboter.'
+      : 'Canvas-Modus beendet — Modus MANUELL';
+  }
+  return 'Fehler: run oder train angeben (true/false)';
+}
+
+/** Werkzeug 19: canvasUI — eigene UI-Elemente als Ein-/Ausgänge. */
+function canvasUITool(args) {
+  const b = S.canvasBoard;
+  if (!b) return 'Fehler: Canvas nicht bereit';
+  const g = b.graph;
+  try {
+    if (args.remove) {
+      const nd = findNode(g, args.node) || findNodeByName(g, args.node);
+      if (!nd || nd.type !== 'ui') return 'Fehler: UI-Knoten nicht gefunden (node = id oder Name)';
+      b.removeNodeUI(nd.id);
+      return 'UI-Element entfernt: ' + nd.name;
+    }
+    let nd = args.node ? (findNode(g, args.node) || findNodeByName(g, args.node)) : null;
+    if (!nd) {
+      nd = addUINode(g, args);
+    } else if (nd.type !== 'ui') {
+      return 'Fehler: Knoten ' + nd.id + ' ist kein UI-Element';
+    } else {
+      if (args.kind && ['button', 'toggle', 'slider', 'joy', 'gauge', 'light', 'code'].includes(args.kind)) nd.kind = args.kind;
+      if (args.label) nd.label = String(args.label).slice(0, 16);
+      if (args.name) nd.name = String(args.name).slice(0, 20);
+      if ((args.io === 'in' || args.io === 'out') && nd.io !== args.io) {
+        nd.io = args.io;
+        g.links = g.links.filter(l => l.from.n !== nd.id && l.to.n !== nd.id);
+      }
+      if (args.nOut !== undefined) nd.nOut = Math.max(1, Math.min(4, Math.round(+args.nOut) || 1));
+      if (typeof args.code === 'string') {
+        nd.code = args.code.slice(0, 2000);
+        nd._codeRev = (nd._codeRev || 0) + 1;
+        if (b._codeFn) delete b._codeFn[nd.id + ':' + (nd._codeRev - 1)];
+      }
+    }
+    // Harte io-Semantik je Art (Widgets sind eindeutig)
+    if (nd.kind === 'gauge' || nd.kind === 'light') nd.io = 'out';
+    if (['button', 'toggle', 'slider', 'joy'].includes(nd.kind)) nd.io = 'in';
+    let codeNote = '';
+    if (nd.kind === 'code' && nd.code && nd.code.trim()) {
+      try { new Function('ctx', '"use strict";' + nd.code); } catch (e) {
+        return 'UI „' + nd.name + '" gespeichert, aber SYNTAX-FEHLER im Code: ' + e.message + ' — korrigiere und rufe canvasUI erneut auf.';
+      }
+      codeNote = ' Code läuft je Schritt mit ctx = {t (Sekunden), dt, state (dauerhafter Speicher)} und MUSS ein Array mit ' + nd.nOut + ' Zahl(en) zurückgeben (io=in) bzw. bekommt ctx.value (io=out).';
+    }
+    b._cacheLinks();
+    b.render();
+    b.scheduleSave();
+    return 'UI-Element „' + nd.name + '" (id=' + nd.id + ', kind=' + nd.kind + ', io=' + nd.io +
+      (nd.io === 'in' ? ', ' + nodeOutCount(g, nd) + ' Ausgangsport(s)' : ', 1 Eingangsport') +
+      ') bereit' + codeNote + ' — verbinde es per canvasGraph cmd=link.';
+  } catch (e) { return 'Fehler: ' + e.message; }
+}
+
 function wireUI() {
   // v2.14.1: btnConsole/consoleClose ENTFERNT (Nutzerwunsch) — Log läuft unsichtbar.
   // ── KI-Trainer ─────────────────────────────────────────
@@ -1917,6 +2281,56 @@ function wireUI() {
   }
   document.getElementById('btnTrainTop').addEventListener('click', () => { ui.toggleTrain(); controls.buzz(); });
   document.getElementById('trainClose').addEventListener('click', () => ui.toggleTrain(false));
+  // ── v2.17.0: NETZ-CANVAS ────────────────────────────────
+  document.getElementById('btnCanvas').addEventListener('click', () => { controls.buzz(); toggleCanvasSheet(); });
+  document.getElementById('cvClose').addEventListener('click', () => toggleCanvasSheet(false));
+  document.getElementById('cvAddPolicy').addEventListener('click', () => {
+    controls.buzz();
+    if (!S.canvasBoard) return;
+    const nd = addPolicyNode(S.canvasBoard.graph, { name: 'Netz ' + (S.canvasBoard.graph.nodes.filter(n => n.type === 'policy').length + 1) });
+    S.canvasBoard._ensurePPO(nd);
+    S.canvasBoard._cacheLinks();
+    S.canvasBoard.render();
+    S.canvasBoard.scheduleSave();
+    S.canvasBoard.openEdit(nd.id);
+    updateCvStat();
+    log('Canvas: neue Karte „' + nd.name + '" (' + nd.nIn + '→' + nd.hidden.join('/') + '→' + nd.nOut + ') — Ports antippen zum Verbinden', 'ok');
+  });
+  document.getElementById('cvAddUI').addEventListener('click', () => {
+    controls.buzz();
+    if (!S.canvasBoard) return;
+    const nd = addUINode(S.canvasBoard.graph, { kind: 'button', label: 'Knopf' });
+    S.canvasBoard._cacheLinks();
+    S.canvasBoard.render();
+    S.canvasBoard.scheduleSave();
+    S.canvasBoard.openEdit(nd.id);
+    updateCvStat();
+  });
+  document.getElementById('cvAddConst').addEventListener('click', () => {
+    controls.buzz();
+    if (!S.canvasBoard) return;
+    const nd = addConstNode(S.canvasBoard.graph, { values: [0] });
+    S.canvasBoard._cacheLinks();
+    S.canvasBoard.render();
+    S.canvasBoard.scheduleSave();
+    S.canvasBoard.openEdit(nd.id);
+    updateCvStat();
+  });
+  document.getElementById('cvZoomIn').addEventListener('click', () => S.canvasBoard && S.canvasBoard.zoomBy(1.18));
+  document.getElementById('cvZoomOut').addEventListener('click', () => S.canvasBoard && S.canvasBoard.zoomBy(1 / 1.18));
+  document.getElementById('cvFit').addEventListener('click', () => S.canvasBoard && S.canvasBoard.fitView());
+  document.getElementById('cvClear').addEventListener('click', () => {
+    controls.buzz();
+    if (!S.canvasBoard) return;
+    S.canvasBoard.clearAll();
+    updateCvStat();
+    ui.toast('Canvas geleert');
+  });
+  document.getElementById('modeCanvas').addEventListener('click', () => {
+    controls.buzz();
+    setCanvasMode(S.mode !== 'canvas');
+    if (S.mode === 'canvas') ui.toast('CANVAS: Graph fährt den Roboter');
+  });
   // v2.14.1: btnFull ENTFERNT — die App ist nativ Immersive (MainActivity),
   // der WebView hat keine Fullscreen-API: der Button konnte nichts tun.
 
@@ -2613,6 +3027,12 @@ Object.defineProperty(window, '__trainrobot', {
     pluginChips: () => document.querySelectorAll('#pluginChips .ai-btn').length,
     executeAction: (action) => executeAction(action),
     applyAIPatch: (patch, opts) => applyAIPatch(patch, opts),
+    // v2.17.0: NETZ-CANVAS (Tests + tiefe KI-Integration)
+    get canvas() { return S.canvasBoard; },
+    canvasDescribe: () => S.canvasBoard ? S.canvasBoard.describe() : null,
+    setCanvasMode: (on) => setCanvasMode(!!on),
+    toggleCanvasSheet: (force) => toggleCanvasSheet(force),
+    execTool: (tool, args) => execTool(tool, args || {}),
     ui,
   }),
 });
