@@ -1,0 +1,56 @@
+[
+  {
+    "url": "https://nvlabs.github.io",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "MotionBricks achieves 15000 FPS and 2 ms latency covering over 350,000 motion skills by a single neural backbone.",
+    "host_name": "nvlabs.github.io",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://arxiv.org",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "by T Wang · 2026 · Cited by 5 — MotionBricks produces state-of-the-art motion quality on open-source and proprietary datasets of various scales, while also achieving a real- ...",
+    "host_name": "arxiv.org",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://bricklabs-roblox.fandom.com",
+    "name": "MotionBrick | Brick Labs - Community Wiki - Fandom",
+    "snippet": "MotionBrick is a brick that when moved, creates a beam that points in its current velocity vector, it also shows its speed in text form.",
+    "host_name": "bricklabs-roblox.fandom.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://research.nvidia.com",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "MotionBricks enables real-time motion control across animation and robotics. 5 demo covering diverse locomotion styles, acrobatics, and object-scene ... 22 pages",
+    "host_name": "research.nvidia.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com",
+    "name": "GR00T-WholeBodyControl/motionbricks/README.md at",
+    "snippet": "Apr 27, 2026 — MotionBricks is a real-time generative framework that transforms interactive motion control for animation and robotics. Read more",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "Apr 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://bricklabs.miraheze.org",
+    "name": "MotionBrick - Bricklabs Official Wiki",
+    "snippet": "MotionBrick is a brick that when moved, generates a beam that indicating its current speed vector.",
+    "host_name": "bricklabs.miraheze.org",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  }
+]

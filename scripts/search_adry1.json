@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://research.nvidia.com",
+    "name": "ARDY: Interactive Human Motion Generation",
+    "snippet": "Humanoid Motion at NVIDIA. ARDY is part of a broader effort to support interactive humanoid motion generation and downstream robotics/animation applications. Read more",
+    "host_name": "research.nvidia.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.nvidia.com",
+    "name": "NVIDIA: World Leader in Artificial Intelligence Computing",
+    "snippet": "New NVIDIA AI Software Unlocks Scientific Discoveries. From materials simulation to experimental astronomy, NVIDIA CUDA-X™ accelerates AI for science. Read more",
+    "host_name": "www.nvidia.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co",
+    "name": "nvidia/ARDY-Core-RP-20FPS-Horizon40",
+    "snippet": "Aug 11, 2026 — ARDY is an autoregressive diffusion model designed for interactive motion generation, supporting online text prompting and flexible long-horizon ... Read more",
+    "host_name": "huggingface.co",
+    "rank": 2,
+    "date": "Aug 11, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://studio.aifilms.ai",
+    "name": "ARDY: NVIDIA Open Real Time Text to Motion Model for Digi",
+    "snippet": "Jul 28, 2026 — NVIDIA Research published ARDY on July 10, 2026 , an autoregressive diffusion model that generates 3D human and humanoid motion from text prompts ... Read more",
+    "host_name": "studio.aifilms.ai",
+    "rank": 3,
+    "date": "Jul 28, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.vp-land.com",
+    "name": "NVIDIA's ARDY Generates Controllable Human Motion in",
+    "snippet": "Jul 18, 2026 — NVIDIA's Spatial Intelligence Lab published ARDY , a framework that generates 3D human motion in real time from text prompts a user can change ... Read more",
+    "host_name": "www.vp-land.com",
+    "rank": 4,
+    "date": "Jul 18, 2026",
+    "favicon": ""
+  }
+]

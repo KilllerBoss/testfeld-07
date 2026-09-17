@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://github.com",
+    "name": "Motius/docs/model_zoo/ardy.md at main",
+    "snippet": "ARDY is NVIDIA's Autoregressive Diffusion with Hybrid Representation for Interactive Human Motion Generation (SIGGRAPH 2026). It generates motion in short  ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://research.nvidia.com",
+    "name": "ARDY: Interactive Human Motion Generation",
+    "snippet": "ARDY is an autoregressive diffusion model designed for interactive motion generation, supporting online text prompting and flexible long-horizon kinematic ... Read more",
+    "host_name": "research.nvidia.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://arxiv.org",
+    "name": "ARDY: Autoregressive Diffusion with Hybrid",
+    "snippet": "Jul 9, 2026 — We present ARDY, an autoregressive diffusion model designed for interactive human motion generation . Our approach natively supports online text ...",
+    "host_name": "arxiv.org",
+    "rank": 2,
+    "date": "Jul 9, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co",
+    "name": "nvidia/ARDY-Core-RP-20FPS-Horizon40",
+    "snippet": "Aug 11, 2026 — ARDY is an autoregressive diffusion model designed for interactive motion generation, supporting online text prompting and flexible long-horizon ... Read more",
+    "host_name": "huggingface.co",
+    "rank": 3,
+    "date": "Aug 11, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://dl.acm.org",
+    "name": "Autoregressive Diffusion with Hybrid Representation for",
+    "snippet": "Jul 3, 2026 — In this work, we introduce ARDY , a streaming generation framework that bridges this gap by enabling high-fidelity motion generation controllable ... Read more",
+    "host_name": "dl.acm.org",
+    "rank": 4,
+    "date": "Jul 3, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.vp-land.com",
+    "name": "NVIDIA's ARDY Generates Controllable Human Motion in",
+    "snippet": "Jul 18, 2026 — ARDY , a framework that generates 3D human motion in real time from text prompts a user can change while the character is still moving.",
+    "host_name": "www.vp-land.com",
+    "rank": 5,
+    "date": "Jul 18, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://studio.aifilms.ai",
+    "name": "ARDY: NVIDIA Open Real Time Text to Motion Model for Digi",
+    "snippet": "Jul 28, 2026 — NVIDIA's ARDY generates 3D human and humanoid motion from text in real time with kinematic constraints, accepted to SIGGRAPH 2026, ...",
+    "host_name": "studio.aifilms.ai",
+    "rank": 6,
+    "date": "Jul 28, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://trendshift.io",
+    "name": "nv-tlabs/ardy — GitHub trending stats & insights",
+    "snippet": "Official implementation of ARDY: Autoregressive Diffusion with Hybrid Representation for Interactive Human Motion Generation (SIGGRAPH 2026). Visit GitHub. Read more",
+    "host_name": "trendshift.io",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]

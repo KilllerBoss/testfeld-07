@@ -1,0 +1,38 @@
+[
+  {
+    "url": "https://research.nvidia.com",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "During inference , we achieve 2ms latency and 15,000 FPS through- put on a desktop with an RTX 5090 GPU . 16 GPUs 32 GPUs 64 GPUs 22 pages",
+    "host_name": "research.nvidia.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://explainx.ai",
+    "name": "NVIDIA MotionBricks: Real-Time Motion Explained",
+    "snippet": "Jul 21, 2026 — The reported setup used 32 H100 GPUs , with roughly seven days for the tokenizer, three for the root module, and seven for the pose module. ...",
+    "host_name": "explainx.ai",
+    "rank": 1,
+    "date": "Jul 21, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://arxiv.org",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "Apr 27, 2026 — MotionBricks enables real-time motion control across animation and robotics. maintaining 2ms latency and 15,000 FPS throughput, far exceeding ...",
+    "host_name": "arxiv.org",
+    "rank": 2,
+    "date": "Apr 27, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://nvlabs.github.io",
+    "name": "MotionBricks: Scalable Real-Time Motions with Modular",
+    "snippet": "MotionBricks achieves 15000 FPS and 2 ms latency covering over 350,000 motion skills by a single neural backbone.",
+    "host_name": "nvlabs.github.io",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  }
+]
