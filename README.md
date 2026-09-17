@@ -32,6 +32,7 @@ Smartphone (CPU, ohne CUDA)**.
   ziehen/verbinden, **LANG DRÜCKEN = freie Ports einer Seite wählen → andere Karte
   lang drücken = alles verbinden (Stapel)**, 2 Finger zoomen + verschieben, Ports in
   Spalten à 20 (kein Scrollen mehr). KI-Smart-Modell: gemini-3.8-flash (gepinnt).
+- **MOTION-KI (v2.21.0, MotionBrick/AI4Animation-artig)**: fertige Motion-Policy abspielen — der GLB-Clip liefert Stil/Phase (FOLGT), der Joystick führt bei Bedarf (STEUER-MIX 0–100 %), ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter; KI-Werkzeug motionKi.
 - **GLB-Animations-Training (G1)**: eigene `.glb`-Clips (Mixamo-ähnlich)
   importieren → automatisches Retargeting auf die G1-Kinematik
   (Quaternion-Weltdelta → Gelenkachse, Fuß-Boden-Anpassung) →

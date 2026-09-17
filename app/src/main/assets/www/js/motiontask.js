@@ -490,8 +490,12 @@ export function makeMotionTask(cfg, clip, sim) {
         const rs = this.refSpeed(this.phase);
         if (rs > 0.15) factor = Math.min(1.7, Math.max(0.4, Math.abs(this.cmd.vx) / rs));
       }
-      this.phase += dt * c.fps / c.n * factor;
-      this.phase %= 1;
+      // v2.21.0 MOTION-KI: GEIST-PAUSE — die Phase friert ein, der Geist hält
+      // die Pose (die Policy hält sie nach) — der Roboter „stoppt" im Stil.
+      // Cmd-/Trigger-Integration läuft weiter, nur die Referenzzeit steht.
+      if (!this.ghostPaused) {
+        this.phase += dt * c.fps / c.n * factor;
+        this.phase %= 1;
       // Schleifen-Sprung: die Bahn läuft von der ENDPOSITION weiter
       // (Endlosgehen über die Arena statt Teleport zurück zum Start).
       // NUR bei echten Bewegungs-Clips (locomotion) — bei Idles würde der
@@ -500,11 +504,12 @@ export function makeMotionTask(cfg, clip, sim) {
       // bzw. wanderte davon (v2.4.1-Fix).
       // v2.15.0: auch NUR im 'frei'-Modus — 'stelle'/'folgt' haben keine
       // wandernde Bahn (der Loop-Offset würde den fixen Anker verschieben).
-      if (this.phase < old && hasRoot && clip.n > 1 && clip.locomotion !== false && this.refMode === 'frei' && !joy) {
+      if (!this.ghostPaused && this.phase < old && hasRoot && clip.n > 1 && clip.locomotion !== false && this.refMode === 'frei' && !joy) {
         const m = clip.n - 1;
         this._loopX += clip.root[2 * m] - clip.root[0];
         this._loopY += clip.root[2 * m + 1] - clip.root[1];
         this._loopYaw = wrapAngle(this._loopYaw + wrapAngle(clip.yaw[m] - clip.yaw[0]));
+      }
       }
       this.tElapsed = (this.tElapsed || 0) + dt;
     },

@@ -29,7 +29,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.20.0';
+const VERSION = '2.21.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -76,6 +76,7 @@ const S = {
   pushStrength: 3.0, // Schubs-Stärke (Δv in m/s — v2.5.0, KI-tunbar, persistiert)
   animTraining: true, // GLB-Animation im Training an/aus (aus = nur Gleichgewicht)
   refMode: 'frei',    // v2.15.0: 'frei' (Bahn ablaufen) | 'stelle' (fix) | 'folgt' (am Roboter)
+  motionKi: { on: false, mix: 0.7, prevRef: null }, // v2.21.0: MOTION-KI — trainierte Motion animiert, Stick/Buttons steuern bei Bedarf
   cruise: null,      // KI-Autofahrt {vx, yaw, until} — endet bei Stick-Bewegung
   aiButtons: [],     // KI-eingerichtete Buttons (agent.js)
   world: loadWorldState(), // v2.7.0: aktuelle Welt {id, seed} — prozedural generiert
@@ -798,6 +799,7 @@ function observeState() {
     look: (function () { try { const l = loadAppearance(S.robotId); return l ? { teile: l.parts.map(p => p.part), grund: !!l.all } : null; } catch (e) { return null; } })(),
     motionClips: S.clips.map((c, i) => ({ index: i, name: c.name })),
     activeClip: S.motionClip ? S.motionClip.name : null,
+    motionKi: { on: S.motionKi.on, mix: +S.motionKi.mix.toFixed(2), ghostPaused: !!(S.task && S.task.ghostPaused), hinweis: 'Modus POLICY + aktive GLB-Referenz — die Policy animiert, Stick/Buttons steuern bei Bedarf (mix 0 = nur Clip, 1 = nur Stick)' },
     motionCtrl: S.task && S.task.kind === 'motion'
       ? { ctrlMode: S.task.ctrlMode, animOn: S.task.animOn, cmd: { vx: +S.task.cmd.vx.toFixed(2), wz: +S.task.cmd.wz.toFixed(2) }, triggers: Array.from(S.task.trg).map(v => +v.toFixed(2)) }
       : null,
@@ -1040,6 +1042,7 @@ async function execTool(tool, args) {
     if (tool === 'canvasRun') return canvasRunTool(args || {});
     if (tool === 'canvasUI') return canvasUITool(args || {});
     if (tool === 'canvasBuild') return canvasBuildTool(args || {}); // v2.19.0: EIN Aufruf = ganze Architektur
+    if (tool === 'motionKi') return motionKiTool(args || {}); // v2.21.0: Motion-Wiedergabe mit Steuer-Mix
     return 'Unbekanntes Werkzeug: ' + tool;
   } catch (e) {
     return 'Werkzeug-Fehler: ' + e.message;
@@ -1546,6 +1549,26 @@ function policyCtrlStep() {
   // v2.15.0: Drohnen-Lehrpfad — die cmd-Kanäle (vx/alt/yaw) folgen der Bahn,
   // die Policy fliegt sie (obs enthält cmd.vx/alt)
   if (task && task.pathOn) task.updateCmd(S.sim.cfg.ctrlDt || CTRL_DT, sim);
+  // v2.21.0: ⭐ MOTION-KI — die trainierte Motion-Policy ANIMIERT (Clip liefert
+  // Stil/Phase in 'folgt'-Semantik), der Nutzer steuert BEI BEDARF: der
+  // STEUER-MIX mischt Stick-Kommando und Clip-Tempo in die Befehl-Kanäle.
+  //   mix = 0   → nur Clip (autonome Motion-Wiedergabe)
+  //   mix = 1   → nur Stick (volle Steuerung, Stil bleibt)
+  // Der GEIST kann per ⏸ eingefroren werden (ghostPaused — Roboter hält die Pose).
+  if (S.motionKi.on && task) {
+    const ki = S.motionKi, mix = Math.max(0, Math.min(1, ki.mix));
+    const c = controls.command(S.sim.cfg);
+    if (task.kind === 'motion') {
+      const clipVx = task.refSpeed ? (task.refSpeed(task.phase) || 0) : 0;
+      task.cmd.vx = mix * c.vx + (1 - mix) * clipVx;
+      task.cmd.wz = mix * c.yaw; // Clip-Gierdreh-Tempo ist im Stil selbst enthalten
+      task._manualCmd = true;    // advance darf die Kommandos NICHT überschreiben
+    } else if (task.pathOn && task.cmd) {
+      const wzKey = 'wz' in task.cmd ? 'wz' : 'yaw'; // Drohne: cmd.yaw
+      task.cmd.vx = mix * c.vx + (1 - mix) * (task.cmd.vx || 0);
+      task.cmd[wzKey] = mix * c.yaw + (1 - mix) * (task.cmd[wzKey] || 0);
+    }
+  }
   // Joystick/Buttons-Steuerung (v2.5.0): bei ctrlMode 'joy'/'btn' liefert
   // der Stick die Kommandos (vx = Vorwärts, yaw = Gieren), die die Policy
   // im Training mit Zufalls-Werten kennengelernt hat.
@@ -1658,6 +1681,12 @@ async function boot() {
     try {
       const rm = localStorage.getItem('tr_refmode_v1');
       if (rm === 'stelle' || rm === 'frei' || rm === 'folgt') S.refMode = rm;
+      // v2.21.0: MOTION-KI-Zustand wiederherstellen (on bleibt AUS — der Nutzer
+      // schaltet bewusst ein; nur mix wird gemerkt)
+      try {
+        const mki = JSON.parse(localStorage.getItem('tr_motionki_v1') || 'null');
+        if (mki && Number.isFinite(+mki.mix)) S.motionKi.mix = Math.max(0, Math.min(1, +mki.mix));
+      } catch (e2) { /* kein Speicher */ }
     } catch (e) { /* egal */ }
     syncRefChips();
     // Werkstatt (v2.8.0): Beispiele einspeisen, API aufschalten, aktivierte
@@ -2034,6 +2063,63 @@ function updateCvStat() {
     (g._ioCount || 0) + ' Sensor-Ports · ' + (g._actCount || 0) + ' Aktuator-Ports';
 }
 
+// ── v2.21.0: ⭐ MOTION-KI — MotionBrick/AI4Animation-artige Wiedergabe ──
+// Die FERTIG trainierte Motion-Policy animiert den Roboter (die GLB-Referenz
+// liefert Stil/Phase in 'folgt'-Semantik), der Nutzer steuert BEI BEDARF per
+// Joystick und Buttons: der STEUER-MIX mischt Stick-Kommando und Clip-Tempo
+// in die Befehl-Kanäle, ⏸ friert den Geist ein (Roboter hält die Pose),
+// ⏭ springt zum nächsten Clip.
+function setMotionKi(on) {
+  const ki = S.motionKi, t = S.task;
+  ki.on = !!on;
+  const chip = document.getElementById('mkiChip');
+  if (chip) {
+    chip.textContent = ki.on ? 'AN' : 'AUS';
+    chip.classList.toggle('active', ki.on);
+  }
+  if (ki.on) {
+    if (t && t.kind === 'motion' && S.refMode !== 'folgt') {
+      ki.prevRef = S.refMode;
+      S.refMode = 'folgt';
+      try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
+      t.refMode = 'folgt';
+      syncRefChips();
+    }
+    log('MOTION-KI AN — die trainierte Policy animiert, der Stick führt bei Bedarf (Mix ' + Math.round(ki.mix * 100) + ' % · 0 % = nur Clip, 100 % = nur Stick). Modus POLICY wählen.', 'ok');
+    ui.toast('MOTION-KI an — Modus POLICY starten');
+  } else {
+    if (t && t.kind === 'motion' && ki.prevRef && S.refMode === 'folgt') {
+      S.refMode = ki.prevRef;
+      try { localStorage.setItem('tr_refmode_v1', ki.prevRef); } catch (e) { /* voll */ }
+      t.refMode = ki.prevRef;
+      syncRefChips();
+    }
+    if (t && t.ghostPaused) t.ghostPaused = false;
+    const p = document.getElementById('mkiPause');
+    if (p) { p.textContent = '⏸ GEIST'; p.classList.remove('active'); }
+    log('MOTION-KI AUS — Referenz-Modus wiederhergestellt');
+    ui.toast('MOTION-KI aus');
+  }
+}
+
+/** ⏭ NÄCHSTER CLIP: springt zum nächsten Clip, der eine Variante für den
+ *  aktiven Roboter trägt (motionByRobot[robot] bzw. rec.motion beim G1). */
+async function nextMotionClip() {
+  const rid = S.robotId;
+  const eligible = (S.clips || []).filter(r => (r.motionByRobot && r.motionByRobot[rid]) || (rid === 'g1' && r.motion));
+  if (!eligible.length) { ui.toast('Keine Clips für diesen Roboter — erst GLB importieren', true); return; }
+  const idx = eligible.findIndex(r => r.id === S.activeRecId);
+  const next = eligible[(idx + 1) % eligible.length];
+  if (idx < 0 || !next) { ui.toast('Kein aktiver Clip — Referenz wählen', true); return; }
+  if (next.id === S.activeRecId) { ui.toast('Nur ein Clip vorhanden'); return; }
+  try {
+    await activateClip(next);
+    const t = S.task;
+    if (S.motionKi.on && t && t.kind === 'motion' && S.refMode !== 'folgt') { t.refMode = 'folgt'; S.refMode = 'folgt'; syncRefChips(); }
+    ui.toast('Clip: ' + next.name);
+  } catch (e) { log('Clip-Wechsel fehlgeschlagen: ' + e.message, 'err'); }
+}
+
 function toggleCanvasSheet(force) {
   const sheet = document.getElementById('canvasSheet');
   if (!sheet) return;
@@ -2323,6 +2409,42 @@ function canvasBuildTool(args) {
   } catch (e) { return 'Fehler: ' + e.message; }
 }
 
+/** Werkzeug 21: motionKi — MOTION-KI-Wiedergabe (v2.21.0): die fertig
+ *  trainierte Motion-Policy animiert den Roboter, der Nutzer steuert bei
+ *  Bedarf per Joystick/Buttons. args = {on:<bool>, mix:0…1, paused:<bool>,
+ *  nextClip:<bool>} — paused/nextClip brauchen eine aktive GLB-Referenz. */
+function motionKiTool(args) {
+  const out = [];
+  if (args.on !== undefined) {
+    setMotionKi(!!args.on);
+    out.push('MOTION-KI ' + (S.motionKi.on ? 'AN' : 'AUS') + (S.motionKi.on ? ' — Modus POLICY starten, der Stick führt je nach Mix' : ''));
+  }
+  if (args.mix !== undefined && Number.isFinite(+args.mix)) {
+    S.motionKi.mix = Math.max(0, Math.min(1, +args.mix));
+    const s = document.getElementById('mkiMix');
+    if (s) s.value = String(S.motionKi.mix);
+    const v = document.getElementById('mkiMixVal');
+    if (v) v.textContent = Math.round(S.motionKi.mix * 100) + ' %';
+    try { localStorage.setItem('tr_motionki_v1', JSON.stringify({ mix: S.motionKi.mix })); } catch (e) { /* voll */ }
+    out.push('Steuer-Mix: ' + Math.round(S.motionKi.mix * 100) + ' % Stick / ' + Math.round((1 - S.motionKi.mix) * 100) + ' % Clip');
+  }
+  if (args.paused !== undefined) {
+    const t = S.task;
+    if (!t || t.kind !== 'motion') return 'Fehler: keine aktive GLB-Referenz (erst Clip aktivieren)';
+    t.ghostPaused = !!args.paused;
+    const p = document.getElementById('mkiPause');
+    if (p) { p.textContent = t.ghostPaused ? '▶ GEIST' : '⏸ GEIST'; p.classList.toggle('active', t.ghostPaused); }
+    out.push('Geist ' + (t.ghostPaused ? 'PAUSIERT — der Roboter hält die Pose' : 'läuft weiter'));
+  }
+  if (args.nextClip) {
+    return nextMotionClip().then((/* nextMotionClip meldet selbst per toast/log */) =>
+      'Clip-Wechsel ausgelöst — aktiver Clip jetzt: ' + (S.motionClip ? S.motionClip.name : 'keiner') +
+      (out.length ? ' · ' + out.join(' · ') : ''));
+  }
+  if (!out.length) return 'Fehler: on, mix, paused oder nextClip angeben';
+  return out.join(' · ');
+}
+
 function wireUI() {
   // v2.14.1: btnConsole/consoleClose ENTFERNT (Nutzerwunsch) — Log läuft unsichtbar.
   // ── KI-Trainer ─────────────────────────────────────────
@@ -2600,6 +2722,36 @@ function wireUI() {
       log('Referenz-Modus: ' + ({ stelle: 'AN EINER STELLE — Referenz steht fix, Bewegung auf der Stelle', frei: 'FREI — der Lehrer wandert auf seiner Bahn durchs Feld', folgt: 'AM ROBOTER GEANKERT — der Lehrer hängt am Roboter, kein Bahn-Zwang' })[m], 'ok');
       ui.toast('Referenz: ' + ({ stelle: 'An einer Stelle', frei: 'Frei', folgt: 'Folgt dem Roboter' })[m]);
     });
+  }
+  // ── v2.21.0: ⭐ MOTION-KI — trainierte Motion animiert, Stick/Buttons steuern bei Bedarf ──
+  const mkiChip = document.getElementById('mkiChip');
+  if (mkiChip) {
+    mkiChip.addEventListener('click', () => {
+      controls.buzz();
+      setMotionKi(!S.motionKi.on);
+    });
+    const mkiMix = document.getElementById('mkiMix');
+    const mkiMixVal = document.getElementById('mkiMixVal');
+    const syncMix = () => { if (mkiMixVal) mkiMixVal.textContent = Math.round(S.motionKi.mix * 100) + ' %'; if (mkiMix) mkiMix.value = String(S.motionKi.mix); };
+    syncMix();
+    if (mkiMix) mkiMix.addEventListener('input', () => {
+      S.motionKi.mix = Math.max(0, Math.min(1, +mkiMix.value || 0));
+      syncMix();
+      try { localStorage.setItem('tr_motionki_v1', JSON.stringify({ mix: S.motionKi.mix })); } catch (e) { /* voll */ }
+    });
+    const mkiPause = document.getElementById('mkiPause');
+    if (mkiPause) mkiPause.addEventListener('click', () => {
+      controls.buzz();
+      const t = S.task;
+      if (!t || t.kind !== 'motion') { ui.toast('Nur mit aktiver GLB-Referenz', true); return; }
+      t.ghostPaused = !t.ghostPaused;
+      mkiPause.textContent = t.ghostPaused ? '▶ GEIST' : '⏸ GEIST';
+      mkiPause.classList.toggle('active', t.ghostPaused);
+      ui.toast(t.ghostPaused ? 'Geist PAUSIERT — der Roboter hält die Pose' : 'Geist läuft weiter');
+      log('MOTION-KI: Geist ' + (t.ghostPaused ? 'pausiert (Pose halten)' : 'läuft weiter'), 'ok');
+    });
+    const mkiNext = document.getElementById('mkiNext');
+    if (mkiNext) mkiNext.addEventListener('click', () => { controls.buzz(); nextMotionClip(); });
   }
   // ── v2.15.0/v2.16.0: ANIMATION LÖSEN — Policy WEITERTRAINIEREN ohne GLB ──
   document.getElementById('glbUnbind').addEventListener('click', () => {
@@ -3116,6 +3268,10 @@ Object.defineProperty(window, '__trainrobot', {
     setCanvasMode: (on) => setCanvasMode(!!on),
     toggleCanvasSheet: (force) => toggleCanvasSheet(force),
     execTool: (tool, args) => execTool(tool, args || {}),
+    // v2.21.0: MOTION-KI (Tests)
+    setMotionKi: (on) => setMotionKi(!!on),
+    nextMotionClip: () => nextMotionClip(),
+    motionKiState: () => ({ on: S.motionKi.on, mix: S.motionKi.mix, ghostPaused: !!(S.task && S.task.ghostPaused), refMode: S.refMode }),
     ui,
   }),
 });

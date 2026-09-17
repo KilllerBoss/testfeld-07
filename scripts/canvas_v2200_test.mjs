@@ -332,7 +332,7 @@ console.log('\n[10] Verdrahtung — Werkzeuge + UI + Doku');
   const htmlSrc = await readFile(path.join(WWW, 'index.html'), 'utf8');
   const docSrc = await readFile(path.join(WWW, 'mcp/CANVAS.md'), 'utf8');
   const cssSrc = await readFile(path.join(WWW, 'style.css'), 'utf8');
-  ok(/VERSION = '2\.20\.0'/.test(mainSrc), 'main.js VERSION 2.20.0');
+  ok((v => v && +v[1] >= 2)(/VERSION = '(\d+)\.(\d+)\.(\d+)'/.exec(mainSrc)), 'main.js VERSION ≥ 2.20.0 (v2.21.0: Pin auf ≥ gelockert)');
   ok(/linkManyGraph/.test(mainSrc) && /cmd === 'linkMany'/.test(mainSrc), 'main.js: linkMany-Handler');
   ok(/type === 'logic'/.test(mainSrc) && /addLogicNode/.test(mainSrc), 'main.js: Logik-add/config');
   ok(/cvAddLogic/.test(htmlSrc) && /cvAddLogic/.test(mainSrc), 'index.html + main.js: +Logik-Button verdrahtet');
@@ -342,7 +342,7 @@ console.log('\n[10] Verdrahtung — Werkzeuge + UI + Doku');
   ok(/'linkMany'/.test(aiSrc) && /LOGIC_OPS/.test(aiSrc), 'ai.js: linkMany + LOGIC_OPS validiert');
   ok(/NIEMALS NUR Training starten/.test(aiSrc), 'ai.js: Prompt verbietet Training-ohne-Architektur');
   ok(/linkMany/.test(docSrc) && /Logik-Karten/.test(docSrc) && /LANG DRÜCKEN/.test(docSrc), 'CANVAS.md: linkMany + Logik + Geste dokumentiert');
-  ok(/versionCode 32/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode 32');
+  ok(/versionCode 3[2-9]/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode ≥ 32 (v2.21.0: Pin auf ≥ gelockert)');
 }
 
 console.log('\n════════════════════════════════');

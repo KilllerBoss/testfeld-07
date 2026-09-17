@@ -38,3 +38,28 @@
 - „OHNE ANIM WEITER“ (v2.16.0) = animOn AUS: die Policy trainiert WEITER als KOMMANDOGANG (Netz, Norm-Statistik und Policy-Slot bleiben — NICHTS wird neu angefangen). Das Wurzel-Ziel ist die integrierte Kommando-Strecke (Training: Zufalls-Fahrbefehle, POLICY-Modus: Stick). Der Referenz-Modus bleibt wie gewählt; ohne gewählte Steuerung wird automatisch Joystick aktiviert.
 - ENTKOPLUNG (v2.16.0): Der Aktions-Anker ist IMMER die Keyframe-Pose (keyCtrl) — identische Aktions-Semantik mit und ohne Animation. Die Policy ist NICHT mehr an die Animation gebunden. ANIM-DROPOUT: im GLB-Training laufen standardmäßig 20 % der Episoden (MOTION_R.dropP) komplett OHNE Animation — die Policy lernt beide Welten von Anfang an; das spätere Lösen der Animation ist kein Bruch mehr.
 - Drohne: GLB-Clip = FLUGBAHN (Autopilot folgt der Route im MANUELL/POLICY-Modus; dieselben 3 Modi). „OHNE ANIM WEITER“ löst den Lehrpfad — die Drohne fliegt auf Stick/Gait.
+
+## ⭐ MOTION-KI (v2.21.0) — die trainierte Motion animiert, du steuerst bei Bedarf
+MotionBrick-/AI4Animation-artiger Wiedergabe-Modus (Werkzeug `motionKi`) für
+fertig trainierte Motion-Policies mit aktiver GLB-Referenz:
+
+- `motionKi {on:true}` — schaltet die Wiedergabe ein (Referenz wechselt automatisch
+  auf **FOLGT** — der Lehrer hängt am Roboter, kein Bahn-Zwang) → danach in den
+  **Modus POLICY** wechseln: die trainierte Policy ANIMIERT den Roboter (Stil/Phase
+  kommen aus dem Clip), der Nutzer greift bei Bedarf ein.
+- **STEUER-MIX** `mix` 0…1: mischt Stick-Kommando und Clip-Tempo in die Befehl-Kanäle.
+  `0` = nur Clip (autonome Wiedergabe — der Roboter geht/fliegt im gelernten Stil,
+  ohne Eingriff) · `0,7` (Standard) = Stick führt, der Clip gibt Stil und Grundtempo
+  vor · `1` = nur Stick (volle Steuerung).
+- **GEIST-PAUSE** `{paused:true}` — die Referenzzeit friert ein: der Geist hält die
+  Pose, die Policy hält sie nach → der Roboter „stoppt" IM STIL der Motion.
+  `{paused:false}` läuft weiter.
+- **CLIP-WECHSEL** `{nextClip:true}` — springt zum nächsten Clip mit Variante für den
+  aktiven Roboter (Policy-Wechsel via gespeicherten Clip-Policies bleibt erhalten).
+- Drohne: der Flugbahn-Autopilot bleibt aktiv — der Mix mischt Stick in vx/yaw
+  (Höhe weiter von der Bahn geführt).
+- Nutzer-UI: GLB-Bereich → Zeile „MOTION-KI" (AN/AUS-Chip, Steuer-Mix-Slider,
+  ⏸ GEIST, ⏭ CLIP). Status: `observe` → `motionKi`.
+- Grenzen: braucht aktive GLB-Referenz + trainierte Motion-Policy (v2.16+-Policies
+  verstehen die Befehl-Kanäle dank ANIM-DROPOUT am besten). Aktivierter
+  Steuer-Chip „Joystick"/„Buttons" überschreibt den Mix (volle Stick-Führung).
