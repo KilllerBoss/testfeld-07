@@ -203,7 +203,8 @@ console.log('\n■ 5) Worker-Propagierung (statische Quell-Prüfungen)');
   ok(/task\._manualCmd = true;/.test(mainSrc), 'policyCtrlStep markiert Stick-Kommandos (_manualCmd)');
   ok(/task\.ctrlMode === 'joy' \|\| task\.ctrlMode === 'btn' \|\| task\.animOn === false/.test(mainSrc), 'POLICY-Modus: Stick führt auch OHNE Animation');
   ok(/t\.pathOn = false; t\.pathClip = null;/.test(mainSrc), 'Unbind löst den Drohnen-Lehrpfad');
-  ok(/const VERSION = '2\.1[6-9]\.\d+'/.test(mainSrc), 'VERSION ≥ 2.16.0');
+  const vm = /const VERSION = '(\d+)\.(\d+)\.(\d+)'/.exec(mainSrc);
+  ok(vm && ((+vm[1] * 10000) + (+vm[2] * 100) + +vm[3]) >= 21600, 'VERSION ≥ 2.16.0 (v2.20.0: Pin auf ≥ gelockert)', vm && vm[0]);
 }
 
 console.log('\n■ 6) Unbound-Regression (Echt-Physik, 60 Schritte)');

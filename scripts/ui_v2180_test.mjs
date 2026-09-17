@@ -102,6 +102,15 @@ ok(geo.touchAction === 'none', 'touch-action:none auf Viewport (keine Browser-Ge
 
 // ── 2) Pinch-ZOOM um Finger-Mitte ───────────────────────────
 console.log('\n[2] PINCH-ZOOM (2 Finger)');
+// v2.20.0: io/out-Karten sind durch Spalten-Layout BREITER — für einen garantiert
+// leeren Testpunkt schieben wir sie erst aus der Mitte (fitView in [6] holt sie zurück).
+await page.evaluate(() => {
+  const b = window.__trainrobot.canvas;
+  b.graph.nodes[0].x = 16; b.graph.nodes[0].y = 900;   // io nach unten (Mitte frei)
+  b.graph.nodes[1].x = 900; b.graph.nodes[1].y = 60;   // out nach rechts
+  b.render();
+});
+await page.waitForTimeout(120);
 const vpR = await page.evaluate(() => document.getElementById('cvPort').getBoundingClientRect());
 const CX = Math.round(vpR.left + vpR.width / 2), CY = Math.round(vpR.top + vpR.height * 0.45);
 const bg = await page.evaluate(([x, y]) => {

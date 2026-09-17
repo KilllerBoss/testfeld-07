@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// canvas.js — NETZ-CANVAS (v2.17.0)
+// canvas.js — NETZ-CANVAS (v2.20.0)
 // Node-Editor für Roboter-Architekturen: Links alle Sensor-Eingänge
 // des Roboters (einzeln), rechts alle Aktuator-Ausgänge (einzeln),
 // dazwischen frei baubare Policy-Karten (eigene Eingaben/Ausgaben/
@@ -497,10 +497,73 @@ export function cardReward(rw, ctx) {
 //   {id, type:'policy', name, nIn, nOut, hidden, trainable, reward, lr, T, x, y}
 //   {id, type:'ui',     name, kind, io, nOut, code, state, x, y}
 //   {id, type:'const',  name, values, x, y}
+//   {id, type:'logic',  name, op, nIn, nOut, x, y}   v2.20.0: Verbinder/Logik OHNE Netz —
+//                                                    Signale werden per Operator (+ − × ÷
+//                                                    min max abs neg) verarbeitet
 // Kabel: {id, from:{n,port}, to:{n,port}} — Werte fließen von → nach.
 
 export const IO_ID = 'io', OUT_ID = 'out';
-export const LIMITS = { policies: 16, ui: 12, consts: 8, links: 240, nIn: [1, 64], nOut: [1, 32], hiddenLayers: 3, hiddenNeurons: [8, 256] };
+export const LIMITS = { policies: 16, ui: 12, consts: 8, logic: 16, logicPorts: 16, links: 240, nIn: [1, 64], nOut: [1, 32], hiddenLayers: 3, hiddenNeurons: [8, 256] };
+
+// ── 4b) LOGIK-KARTEN (v2.20.0) — Verbinder ohne Netz ─────
+// Kein MLP, kein Training: Signale werden per Operator zusammenge-
+// faset (acc = ((in0 ⊗ in1) ⊗ in2) …). abs/neg sind unär (in0).
+// ÷ guardt gegen 0 (Ergebnis 0 statt Infinity), NaN/±∞ → 0,
+// Ergebnis auf ±1e6 geklemmt. JEDE Ausgabe trägt DASSELBE Ergebnis
+// (nOut = Fan-out-Möglichkeit).
+export const LOGIC_OPS = {
+  add: { sym: '+', min: 2 },
+  sub: { sym: '−', min: 2 },
+  mul: { sym: '×', min: 2 },
+  div: { sym: '÷', min: 2 },
+  min: { sym: 'min', min: 2 },
+  max: { sym: 'max', min: 2 },
+  abs: { sym: '|x|', min: 1 },
+  neg: { sym: '−x', min: 1 },
+};
+
+/** Operator über n Signale falten (reine Funktion — testbar). */
+export function logicFold(op, vals) {
+  const xs = [];
+  for (const v of (vals || [])) xs.push(Number.isFinite(+v) ? +v : 0);
+  if (!xs.length) xs.push(0);
+  let acc;
+  if (op === 'abs') acc = Math.abs(xs[0]);
+  else if (op === 'neg') acc = -xs[0];
+  else {
+    acc = xs[0];
+    for (let i = 1; i < xs.length; i++) {
+      const b = xs[i];
+      if (op === 'add') acc += b;
+      else if (op === 'sub') acc -= b;
+      else if (op === 'mul') acc *= b;
+      else if (op === 'div') acc = Math.abs(b) < 1e-9 ? 0 : acc / b;
+      else if (op === 'min') acc = Math.min(acc, b);
+      else if (op === 'max') acc = Math.max(acc, b);
+      else acc += b; // unbekannt → add
+    }
+  }
+  if (!Number.isFinite(acc)) acc = 0;
+  return Math.max(-1e6, Math.min(1e6, acc));
+}
+
+/** Neue Logik-/Verbinder-Karte (kein Netz, kein Training). */
+export function addLogicNode(g, spec = {}) {
+  if (countType(g, 'logic') >= LIMITS.logic) throw new Error('Maximal ' + LIMITS.logic + ' Logik-Karten');
+  const op = LOGIC_OPS[spec.op] ? spec.op : 'add';
+  const minIn = LOGIC_OPS[op].min;
+  const nIn = Math.round(Math.max(minIn, Math.min(LIMITS.logicPorts, spec.nIn || 2)));
+  const nOut = Math.round(Math.max(1, Math.min(LIMITS.logicPorts, spec.nOut || 1)));
+  const nd = {
+    id: makeNodeId(g), type: 'logic',
+    name: String(spec.name || ('Logik ' + countType(g, 'logic'))).slice(0, 24),
+    op, nIn, nOut,
+    x: Math.round(spec.x ?? (340 + 50 * (countType(g, 'logic') % 4))),
+    y: Math.round(spec.y ?? (200 + 60 * countType(g, 'logic'))),
+  };
+  g.nodes.push(nd);
+  return nd;
+}
 
 export function newGraph() {
   return {
@@ -648,6 +711,7 @@ export function nodeOutCount(g, nd) {
   if (nd.type === 'io') return g._ioCount || 0;   // vom Board gesetzt (obsDim + 2 Stick)
   if (nd.type === 'out') return 0;
   if (nd.type === 'policy') return nd.nOut;
+  if (nd.type === 'logic') return nd.nOut;
   if (nd.type === 'ui') return nd.io === 'in' ? (nd.kind === 'joy' ? 2 : nd.kind === 'code' ? nd.nOut : 1) : 0;
   if (nd.type === 'const') return nd.values.length;
   return 0;
@@ -656,6 +720,7 @@ export function nodeInCount(g, nd) {
   if (nd.type === 'out') return g._actCount || 0; // vom Board gesetzt (nu)
   if (nd.type === 'io') return 0;
   if (nd.type === 'policy') return nd.nIn;
+  if (nd.type === 'logic') return nd.nIn;
   if (nd.type === 'ui') return nd.io === 'out' ? 1 : (nd.kind === 'code' ? 1 : 0);
   return 0;
 }
@@ -672,9 +737,9 @@ export function removeLink(g, spec) {
 // bestehende gleichnamige umkonfigurieren), Belohnungen, Kabel, Senken-Modus.
 // Reine Graph-Funktion (kein DOM/Board) → unit-testbar. Fehler pro Kabel
 // werden gesammelt statt abzubrechen (ein falscher Port killt nicht den Plan).
-// plan = { cards:[{name?, nIn, nOut, hidden?, trainable?, lr?, T?, reward?}],
+// plan = { cards:[{name?, nIn, nOut, hidden?, trainable?, lr?, T?, reward?, logic?:"add"|"sub"|"mul"|"div"|"min"|"max"|"abs"|"neg"}],
 //          links:[{from:{node,port}, to:{node,port}}], sink?:"residual"|"direct" }
-// Report = { cards:[{id, name, isNew, archReset}], linksOk, linksFail:[{i, error}], errors:[…] }
+// Report = { cards:[{id, name, isNew, archReset, kind}], linksOk, linksFail:[{i, error}], errors:[…] }
 export function buildPlanGraph(g, plan) {
   const rep = { cards: [], linksOk: 0, linksFail: [], errors: [] };
   if (!plan || typeof plan !== 'object') { rep.errors.push('Plan fehlt'); return rep; }
@@ -682,10 +747,34 @@ export function buildPlanGraph(g, plan) {
   const links = Array.isArray(plan.links) ? plan.links.slice(0, LIMITS.links) : [];
   if (Array.isArray(plan.cards) && plan.cards.length > LIMITS.policies) rep.errors.push('Nur die ersten ' + LIMITS.policies + ' Karten wurden angelegt (Limit)');
   if (Array.isArray(plan.links) && plan.links.length > LIMITS.links) rep.errors.push('Nur die ersten ' + LIMITS.links + ' Kabel wurden gesetzt (Limit)');
-  // 1) Karten: neu ODER bestehende (gleicher Name) umkonfigurieren
+  // 1) Karten: neu ODER bestehende (gleicher Name) umkonfigurieren — Policy ODER Logik (v2.20.0)
   for (const spec of specs) {
     if (!spec || typeof spec !== 'object') { rep.errors.push('Karten-Spezifikation ungültig'); continue; }
     const name = String(spec.name || '').trim().slice(0, 24);
+    // Logik-Karte: spec.logic = Operator (oder explizit type/kind 'logic')
+    if (spec.logic || spec.type === 'logic' || spec.kind === 'logic') {
+      let nd = name ? findNodeByName(g, name) : null;
+      if (nd && nd.type !== 'logic') nd = null;
+      let isNew = false;
+      if (!nd) {
+        try { nd = addLogicNode(g, { ...spec, op: spec.logic || spec.op }); isNew = true; }
+        catch (e) { rep.errors.push('Logik „' + (name || '?') + '": ' + e.message); continue; }
+      } else {
+        let changed = false;
+        if (spec.logic && LOGIC_OPS[spec.logic] && nd.op !== spec.logic) { nd.op = spec.logic; changed = true; }
+        if (spec.nIn !== undefined) { const v = Math.round(+spec.nIn); const min = LOGIC_OPS[nd.op].min; if (v >= min && v <= LIMITS.logicPorts && v !== nd.nIn) { changed = true; nd.nIn = v; } }
+        if (spec.nOut !== undefined) { const v = Math.round(+spec.nOut); if (v >= 1 && v <= LIMITS.logicPorts && v !== nd.nOut) { changed = true; nd.nOut = v; } }
+        if (changed) {
+          g.links = g.links.filter(l => {
+            if (l.to.n === nd.id && l.to.port >= nd.nIn) return false;
+            if (l.from.n === nd.id && l.from.port >= nd.nOut) return false;
+            return true;
+          });
+        }
+      }
+      rep.cards.push({ id: nd.id, name: nd.name, isNew, archReset: false, kind: 'logic' });
+      continue;
+    }
     let nd = name ? findNodeByName(g, name) : null;
     if (nd && nd.type !== 'policy') nd = null;
     let isNew = false, archReset = false;
@@ -714,7 +803,7 @@ export function buildPlanGraph(g, plan) {
       });
     }
     if (spec.reward !== undefined) nd.reward = sanitizeCardReward(spec.reward);
-    rep.cards.push({ id: nd.id, name: nd.name, isNew, archReset });
+    rep.cards.push({ id: nd.id, name: nd.name, isNew, archReset, kind: 'policy' });
   }
   // 2) Kabel: Namen/IDs auflösen, addLink (Kapazität + Zyklus-Check), Fehler sammeln
   for (let i = 0; i < links.length; i++) {
@@ -736,12 +825,33 @@ export function buildPlanGraph(g, plan) {
   return rep;
 }
 
-/** Topologische Reihenfolge der Policy-Karten (nur die mit Ausgängen). */
+/** Viele Kabel auf einmal (v2.20.0, für canvasGraph cmd=linkMany — Reparatur nach
+ *  canvasBuild oder Umbau). Wie die Kabel-Schleife in buildPlanGraph: Fehler pro
+ *  Kabel sammeln statt abbrechen. rep = {ok, fail:[{i,error}]}. */
+export function linkManyGraph(g, links) {
+  const rep = { ok: 0, fail: [] };
+  const arr = Array.isArray(links) ? links.slice(0, LIMITS.links) : [];
+  for (let i = 0; i < arr.length; i++) {
+    const l = arr[i];
+    if (!l || typeof l !== 'object' || !l.from || !l.to) { rep.fail.push({ i, error: 'from/to fehlen' }); continue; }
+    const fN = findNode(g, l.from.node) || findNodeByName(g, l.from.node);
+    const tN = findNode(g, l.to.node) || findNodeByName(g, l.to.node);
+    if (!fN) { rep.fail.push({ i, error: 'Quelle „' + l.from.node + '" nicht gefunden' }); continue; }
+    if (!tN) { rep.fail.push({ i, error: 'Ziel „' + l.to.node + '" nicht gefunden' }); continue; }
+    const res = addLink(g, { n: fN.id, port: Math.round(+l.from.port || 0) }, { n: tN.id, port: Math.round(+l.to.port || 0) });
+    if (res.ok) rep.ok++;
+    else rep.fail.push({ i, error: res.error });
+  }
+  return rep;
+}
+
+/** Ausführungs-Reihenfolge: Policy- UND Logik-Karten topologisch (v2.20.0).
+ *  Logik-Karten hängen wie Policies von anderen Karten ab (io/ui/const sind
+ *  Quellen und brauchen keine Reihenfolge). Name historisch (policyOrder). */
 export function policyOrder(g) {
-  const pol = g.nodes.filter(n => n.type === 'policy');
+  const pol = g.nodes.filter(n => n.type === 'policy' || n.type === 'logic');
   const deps = new Map(pol.map(p => [p.id, new Set()]));
   for (const l of g.links) {
-    if (deps.has(l.to.n) && (l.from.n === IO_ID || l.from.n === OUT_ID || g.nodes.some(n => n.id === l.from.n && n.type !== 'policy'))) continue;
     if (deps.has(l.to.n) && deps.has(l.from.n)) deps.get(l.to.n).add(l.from.n);
   }
   const order = [], done = new Set();
@@ -790,6 +900,8 @@ export function sanitizeGraph(raw) {
         nd.state = (rn.state && typeof rn.state === 'object') ? rn.state : {};
       } else if (rn.type === 'const') {
         nd = addConstNode(g, { ...rn, x: +rn.x || undefined, y: +rn.y || undefined });
+      } else if (rn.type === 'logic') {
+        nd = addLogicNode(g, { ...rn, x: +rn.x || undefined, y: +rn.y || undefined });
       } else continue;
       if (nd && ids.has(nd.id)) continue; // doppelte ID verwerfen
       ids.add(nd.id);
@@ -832,6 +944,8 @@ export class CanvasBoard {
     this.stats = { episodes: 0, steps: 0, rate: 0, _times: [] };
     this.dom = null;
     this._pending = null;       // Kabel ziehen
+    this._batch = null;         // v2.20.0: Stapelverbindung (Langdruck)
+    this._batchT = 0;
     this._saveT = 0;
     this._warn = {};
   }
@@ -949,6 +1063,7 @@ export class CanvasBoard {
     this._pendingTrans = [];
     const order = policyOrder(this.graph);
     for (const nd of order) {
+      if (nd.type === 'logic') { this._evalLogicNode(nd); continue; } // v2.20.0: Logik in topo-Ordnung
       const p = this._ensurePPO(nd);
       const inBuf = this._inBufFor(nd);
       for (let i = 0; i < nd.nIn; i++) {
@@ -975,6 +1090,19 @@ export class CanvasBoard {
     }
   }
 
+  /** Logik-Karte (v2.20.0): Eingänge lesen, Operator falten, ALLE Ausgänge = Ergebnis. */
+  _evalLogicNode(nd) {
+    const inBuf = this._inBufFor(nd);
+    for (let i = 0; i < nd.nIn; i++) {
+      const link = this._inLink.get(nd.id + ':' + i);
+      inBuf[i] = link ? this._sourceValue(link.from) : 0;
+    }
+    const v = logicFold(nd.op, inBuf);
+    let o = this._outVals.get(nd.id);
+    if (!o || o.length !== nd.nOut) { o = new Float32Array(nd.nOut); this._outVals.set(nd.id, o); }
+    o.fill(v);
+  }
+
   _inBufFor(nd) {
     let b = this._inBufs && this._inBufs.get(nd.id);
     if (!b || b.length !== nd.nIn) {
@@ -988,7 +1116,7 @@ export class CanvasBoard {
   _sourceValue(from) {
     const nd = findNode(this.graph, from.n);
     if (!nd) return 0;
-    if (nd.type === 'policy') {
+    if (nd.type === 'policy' || nd.type === 'logic') {
       const o = this._outVals.get(nd.id);
       return o && from.port < o.length ? o[from.port] : 0;
     }
@@ -1175,23 +1303,57 @@ export class CanvasBoard {
     this.graph = newGraph();
     this.ppo.clear();
     this.training = false;
+    this._batchClear();
     try { localStorage.removeItem('tr_canvas_v2_' + (this.hooks.getRobotId ? this.hooks.getRobotId() : 'x')); } catch (e) { /* egal */ }
     this.attach();
     this.hooks.log('Canvas geleert', 'warn');
   }
 
-  /** JSON-Übersicht (für Gemini + Tests). */
+  /** Freie (unverkabelte) Ports einer Knoten-Seite — für Stapelverbindung + describe. */
+  _freePorts(nd, side) {
+    const g = this.graph;
+    const n = side === 'in' ? nodeInCount(g, nd) : nodeOutCount(g, nd);
+    const free = [];
+    for (let p = 0; p < n; p++) {
+      const used = side === 'in'
+        ? this._inLink.has(nd.id + ':' + p)
+        : g.links.some(l => l.from.n === nd.id && l.from.port === p);
+      if (!used) free.push(p);
+    }
+    return free;
+  }
+
+  /** JSON-Übersicht (für Gemini + Tests) — v2.20.0: JEDER Port einzeln sichtbar. */
   describe() {
+    const usedFrom = new Set(), usedTo = new Set();
+    for (const l of this.graph.links) { usedFrom.add(l.from.n + ':' + l.from.port); usedTo.add(l.to.n + ':' + l.to.port); }
     const nodes = this.graph.nodes.map(nd => {
       const base = { id: nd.id, type: nd.type, name: nd.name || nd.id, x: nd.x, y: nd.y };
-      if (nd.type === 'io') { base.ports = this.graph._ioCount; base.portNamen = this._obsNames.length ? ['obs 0…' + (this._obsNames.length - 1), 'Stick X', 'Stick Y'] : []; }
-      if (nd.type === 'out') { base.ports = this.graph._actCount; base.sink = nd.sink[0] || 'residual'; base.portNamen = this._actNames; }
+      if (nd.type === 'io') {
+        base.ports = this.graph._ioCount;
+        base.portsList = [];
+        for (let p = 0; p < (this.graph._ioCount || 0); p++) {
+          base.portsList.push({ port: p, name: this._portLabel(nd, p, 'out'), used: usedFrom.has(nd.id + ':' + p) });
+        }
+      }
+      if (nd.type === 'out') {
+        base.ports = this.graph._actCount; base.sink = nd.sink[0] || 'residual';
+        base.portsList = [];
+        for (let p = 0; p < (this.graph._actCount || 0); p++) {
+          base.portsList.push({ port: p, name: this._portLabel(nd, p, 'in'), used: usedTo.has(nd.id + ':' + p) });
+        }
+      }
       if (nd.type === 'policy') {
         base.nIn = nd.nIn; base.nOut = nd.nOut; base.hidden = nd.hidden;
         base.trainable = !!nd.trainable; base.reward = nd.reward; base.lr = nd.lr; base.T = nd.T;
+        base.freeIn = this._freePorts(nd, 'in'); base.freeOut = this._freePorts(nd, 'out');
         const p = this.ppo.get(nd.id);
         base.steps = p ? p.stepCount : (nd.steps || 0);
         base.lastReward = +(nd.lastR || 0).toFixed(3);
+      }
+      if (nd.type === 'logic') {
+        base.op = nd.op; base.nIn = nd.nIn; base.nOut = nd.nOut;
+        base.freeIn = this._freePorts(nd, 'in'); base.freeOut = this._freePorts(nd, 'out');
       }
       if (nd.type === 'ui') { base.kind = nd.kind; base.io = nd.io; base.label = nd.label; base.nOut = nd.nOut; base.hasCode = !!(nd.code && nd.code.trim()); }
       if (nd.type === 'const') base.values = nd.values;
@@ -1213,6 +1375,7 @@ export class CanvasBoard {
   mount(els) {
     this.dom = els;
     this._codeFn = {};
+    this._batch = null;
     this._zoom(els);
     // Pan/Pinch auf dem Hintergrund (v2.18.0: Zwei-Finger-Zoom + -Verschieben)
     els.world.addEventListener('pointerdown', (e) => this._worldDown(e));
@@ -1245,6 +1408,7 @@ export class CanvasBoard {
   /** Hintergrund: 1 Finger = verschieben · 2 Finger = Pinch-ZOOM um Finger-Mitte + Verschieben (v2.18.0). */
   _worldDown(e) {
     if (e.target.closest('.cv-node') || e.target.closest('button') || e.target.closest('input')) return;
+    if (this._batch) this._batchClear(); // v2.20.0: Hintergrund drücken verwirft die Stapelauswahl
     const el = this.dom.world;
     const pointers = this._pan = this._pan || new Map();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1349,7 +1513,9 @@ export class CanvasBoard {
     sub.className = 'cv-nsub';
     sub.textContent = nd.type === 'policy'
       ? nd.nIn + '→' + nd.hidden.join('/') + '→' + nd.nOut + (nd.trainable ? '' : ' · FROZEN')
-      : nd.type === 'ui' ? (nd.label + ' · ' + (nd.io === 'in' ? 'Eingang' : 'Ausgang'))
+      : nd.type === 'logic'
+        ? (LOGIC_OPS[nd.op] ? LOGIC_OPS[nd.op].sym : nd.op) + ' · ' + nd.nIn + '→' + nd.nOut
+        : nd.type === 'ui' ? (nd.label + ' · ' + (nd.io === 'in' ? 'Eingang' : 'Ausgang'))
       : nd.type === 'const' ? nd.values.join(', ')
       : nd.type === 'io' ? (this.graph._ioCount || 0) + ' Ports'
       : (this.graph._actCount || 0) + ' Ports';
@@ -1382,43 +1548,37 @@ export class CanvasBoard {
     const body = document.createElement('div');
     body.className = 'cv-nbody';
     const nIn = nodeInCount(this.graph, nd), nOut = nodeOutCount(this.graph, nd);
-    if (nIn > 0) {
+    // v2.20.0: Ports in SPALTEN à max 20 — die io/out-Karten mit 30–70 Ports
+    // wurden vorher bei max-height 330px zu einer scrollbaren „Liste“, deren
+    // untere Einträge unantippbar waren (touch-action:none verhinderte Scroll).
+    const colSize = (n) => n <= 20 ? n : Math.ceil(n / Math.ceil(n / 20));
+    const makeCol = (side, from, to) => {
       const col = document.createElement('div');
-      col.className = 'cv-col';
-      for (let p = 0; p < nIn; p++) {
+      col.className = 'cv-col' + (side === 'out' ? ' cv-colOut' : '');
+      for (let p = from; p < to; p++) {
         const row = document.createElement('div');
-        row.className = 'cv-port cv-in';
+        row.className = 'cv-port cv-' + side;
         row.dataset.port = p;
-        row.dataset.side = 'in';
+        row.dataset.side = side;
         const dot = document.createElement('i');
         dot.className = 'dot';
         const lb = document.createElement('span');
         lb.className = 'cv-plabel';
-        lb.textContent = this._portLabel(nd, p, 'in');
-        row.append(dot, lb);
-        row.addEventListener('pointerdown', (e) => { e.stopPropagation(); this._portDown(nd, p, 'in', e); });
+        lb.textContent = this._portLabel(nd, p, side);
+        if (side === 'in') row.append(dot, lb);
+        else row.append(lb, dot);
+        row.addEventListener('pointerdown', (e) => { e.stopPropagation(); this._portDown(nd, p, side, e); });
         col.append(row);
       }
-      body.append(col);
+      return col;
+    };
+    if (nIn > 0) {
+      const cs = colSize(nIn);
+      for (let f = 0; f < nIn; f += cs) body.append(makeCol('in', f, Math.min(f + cs, nIn)));
     }
     if (nOut > 0) {
-      const col = document.createElement('div');
-      col.className = 'cv-col cv-colOut';
-      for (let p = 0; p < nOut; p++) {
-        const row = document.createElement('div');
-        row.className = 'cv-port cv-out';
-        row.dataset.port = p;
-        row.dataset.side = 'out';
-        const dot = document.createElement('i');
-        dot.className = 'dot';
-        const lb = document.createElement('span');
-        lb.className = 'cv-plabel';
-        lb.textContent = this._portLabel(nd, p, 'out');
-        row.append(lb, dot);
-        row.addEventListener('pointerdown', (e) => { e.stopPropagation(); this._portDown(nd, p, 'out', e); });
-        col.append(row);
-      }
-      body.append(col);
+      const cs = colSize(nOut);
+      for (let f = 0; f < nOut; f += cs) body.append(makeCol('out', f, Math.min(f + cs, nOut)));
     }
     if (nIn === 0 && nOut === 0) {
       const empty = document.createElement('div');
@@ -1427,6 +1587,12 @@ export class CanvasBoard {
       body.append(empty);
     }
     el.append(body);
+    // v2.20.0: LANGDRUCK auf dem Kartenkörper → Stapelverbindung (freie Ports
+    // einer Seite wählen; nochmal auf einer anderen Karte lang drücken = verbinden)
+    body.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this._armBatch(nd, this._sideForPress(nd, body, e), e);
+    });
 
     if (nd.type === 'policy') {
       const foot = document.createElement('div');
@@ -1472,12 +1638,135 @@ export class CanvasBoard {
     }
     if (nd.type === 'out') return this._actNames[p] || ('akt ' + p);
     if (nd.type === 'policy') return side === 'in' ? 'in ' + p : 'out ' + p;
+    if (nd.type === 'logic') return side === 'in' ? String.fromCharCode(97 + (p % 26)) : 'y' + p;
     if (nd.type === 'const') return String(nd.values[p]);
     if (nd.type === 'ui') {
       if (nd.kind === 'joy') return p === 0 ? nd.label + ' X' : nd.label + ' Y';
       return nd.label + (nd.kind === 'code' && side === 'out' ? '[' + p + ']' : '');
     }
     return String(p);
+  }
+
+  // ── Stapelverbindung per LANGDRUCK (v2.20.0) ─────────────
+  // 1) Lange auf eine Seite einer Karte drücken (≥550 ms, ohne zu ziehen) →
+  //    alle FREIEN Ports dieser Seite werden ausgewählt (gelb leuchtend).
+  // 2) Lange auf eine Seite einer ANDEREN Karte drücken → die freien Ports
+    //    werden paarweise verbunden (Reihenfolge oben→unten). Überzählige
+  //    Ports bleiben frei. Hintergrund antippen = Auswahl verwerfen.
+  _armBatch(nd, side, e) {
+    clearTimeout(this._batchT);
+    const x0 = e.clientX, y0 = e.clientY;
+    const cancel = () => {
+      clearTimeout(this._batchT);
+      window.removeEventListener('pointermove', mm);
+      window.removeEventListener('pointerup', cancel);
+      window.removeEventListener('pointercancel', cancel);
+    };
+    const mm = (ev) => { if (Math.hypot(ev.clientX - x0, ev.clientY - y0) > 14) cancel(); };
+    window.addEventListener('pointermove', mm);
+    window.addEventListener('pointerup', cancel);
+    window.addEventListener('pointercancel', cancel);
+    this._batchT = setTimeout(() => {
+      cancel();
+      this._pending = null; this._drawTemp(null); // hängendes Einzelkabel verwerfen
+      this._batchPress(nd, side);
+    }, 550);
+  }
+
+  /** Seite bestimmen, auf die der Finger auf dem Kartenkörper drückt. */
+  _sideForPress(nd, body, e) {
+    const sides = [];
+    if (nodeInCount(this.graph, nd) > 0) sides.push('in');
+    if (nodeOutCount(this.graph, nd) > 0) sides.push('out');
+    if (!sides.length) return 'out';
+    if (sides.length === 1) return sides[0];
+    const r = body.getBoundingClientRect();
+    return (e.clientX - r.left) < r.width / 2 ? 'in' : 'out';
+  }
+
+  _batchPress(nd, side) {
+    if (this._batch && this._batch.n !== nd.id) { this._batchComplete(nd, side); return; }
+    if (this._batch && this._batch.n === nd.id && this._batch.side === side) {
+      this._batchClear();
+      this.hooks.toast('Auswahl aufgehoben');
+      return;
+    }
+    const free = this._freePorts(nd, side);
+    if (!free.length) {
+      this._batchClear();
+      this.hooks.toast((side === 'in' ? 'Eingänge' : 'Ausgänge') + ' von „' + (nd.name || nd.id) + '": keine frei', true);
+      return;
+    }
+    this._batchClear();
+    this._batch = { n: nd.id, side, ports: free };
+    this._paintBatch();
+    this.hooks.buzz(18);
+    this._batchMsg(free.length + ' freie ' + (side === 'in' ? 'EINGÄNGE' : 'AUSGÄNGE') + ' gewählt — andere Karte lang drücken');
+  }
+
+  _batchComplete(nd, side) {
+    const sel = this._batch;
+    if (!sel) return;
+    const selNd = findNode(this.graph, sel.n);
+    this._batchClear();
+    if (!selNd) return;
+    const need = sel.side === 'out' ? 'in' : 'out';
+    if (side !== need) {
+      this.hooks.toast(sel.side === 'out'
+        ? 'Ausgewählte AUSGÄNGE brauchen EINGÄNGE als Gegenstück'
+        : 'Ausgewählte EINGÄNGE brauchen AUSGÄNGE als Gegenstück', true);
+      return;
+    }
+    const fromNd = sel.side === 'out' ? selNd : nd;
+    const toNd = sel.side === 'out' ? nd : selNd;
+    const fromFree = sel.side === 'out' ? sel.ports : this._freePorts(nd, 'out');
+    const toFree = sel.side === 'out' ? this._freePorts(nd, 'in') : sel.ports;
+    const nPair = Math.min(fromFree.length, toFree.length);
+    if (!nPair) { this.hooks.toast('Keine freien Gegen-Ports auf dieser Seite', true); return; }
+    let okN = 0, firstErr = '';
+    for (let i = 0; i < nPair; i++) {
+      const res = addLink(this.graph, { n: fromNd.id, port: fromFree[i] }, { n: toNd.id, port: toFree[i] });
+      if (res.ok) okN++;
+      else if (!firstErr) firstErr = res.error;
+    }
+    this._cacheLinks();
+    this.render();
+    this.scheduleSave();
+    if (okN) {
+      this.hooks.buzz(24);
+      this.hooks.log('Canvas-Stapel: ' + okN + ' Kabel ' + (fromNd.name || fromNd.id) + ' → ' + (toNd.name || toNd.id) + (firstErr ? ' (' + (nPair - okN) + ' abgelehnt: ' + firstErr + ')' : ''), okN ? 'ok' : 'warn');
+      this._batchMsg(okN + ' KABEL VERBUNDEN' + (nPair - okN > 0 ? ' · ' + (nPair - okN) + ' abgelehnt' : ''));
+      setTimeout(() => this._batchMsg(null), 2200);
+    } else {
+      this.hooks.toast('Kabel abgelehnt: ' + firstErr, true);
+    }
+  }
+
+  _batchClear() {
+    this._batch = null;
+    if (this.dom && this.dom.world) this.dom.world.querySelectorAll('.cv-port.cv-sel').forEach(el => el.classList.remove('cv-sel'));
+    this._batchMsg(null);
+  }
+
+  _paintBatch() {
+    if (!this.dom || !this.dom.world) return;
+    this.dom.world.querySelectorAll('.cv-port.cv-sel').forEach(el => el.classList.remove('cv-sel'));
+    if (!this._batch) return;
+    const sel = this._batch;
+    const nodeEl = this.dom.world.querySelector('.cv-node[data-id="' + sel.n + '"]');
+    if (!nodeEl) return;
+    for (const p of sel.ports) {
+      const row = nodeEl.querySelector('.cv-port[data-side="' + sel.side + '"][data-port="' + p + '"]');
+      if (row) row.classList.add('cv-sel');
+    }
+  }
+
+  _batchMsg(text) {
+    const el = this.dom && this.dom.batch;
+    if (!el) { if (text) this.hooks.toast(text); return; }
+    if (!text) { el.classList.remove('on'); el.textContent = ''; return; }
+    el.textContent = text;
+    el.classList.add('on');
   }
 
   _portDown(nd, port, side, e) {
@@ -1494,6 +1783,7 @@ export class CanvasBoard {
     if (pend) { this._pending = null; this._drawTemp(null); return; }
     this._pending = { n: nd.id, port, side, x0: e.clientX, y0: e.clientY, moved: false };
     this._drawTemp([e.clientX, e.clientY]);
+    this._armBatch(nd, side, e); // v2.20.0: langer Druck auf einem Port = Stapelauswahl der Seite
     const move = (ev) => {
       if (!this._pending) { cleanup(); return; }
       if (Math.hypot(ev.clientX - this._pending.x0, ev.clientY - this._pending.y0) > 10) this._pending.moved = true;
@@ -1596,6 +1886,7 @@ export class CanvasBoard {
     w.querySelectorAll('.cv-node').forEach(el => el.remove());
     for (const nd of this.graph.nodes) w.append(this._nodeEl(nd));
     this._drawWires();
+    this._paintBatch();
     this._viewApply();
     this.renderUIBar();
     this.syncButtons();
@@ -1735,6 +2026,7 @@ export class CanvasBoard {
   removeNodeUI(id) {
     try { removeNode(this.graph, id); } catch (e) { this.hooks.toast(e.message, true); return; }
     this.ppo.delete(id);
+    if (this._batch && (this._batch.n === id)) this._batchClear();
     this._cacheLinks();
     const ed = this.dom.edit;
     if (ed && !ed.classList.contains('hidden') && ed.dataset.id === id) ed.classList.add('hidden');
@@ -1756,7 +2048,7 @@ export class CanvasBoard {
     close.addEventListener('click', () => { ed.classList.add('hidden'); this.scheduleSave(); });
     const title = document.createElement('div');
     title.className = 'cv-edit-title';
-    title.textContent = nd.type === 'policy' ? 'NETZ: ' + nd.name : nd.type === 'out' ? 'AKTUATOR-SENKEN' : nd.type === 'ui' ? 'UI: ' + nd.name : 'KONSTANTE';
+    title.textContent = nd.type === 'policy' ? 'NETZ: ' + nd.name : nd.type === 'logic' ? 'LOGIK: ' + nd.name : nd.type === 'out' ? 'AKTUATOR-SENKEN' : nd.type === 'ui' ? 'UI: ' + nd.name : 'KONSTANTE';
     title.append(close);
     ed.append(title);
 
@@ -1871,6 +2163,52 @@ export class CanvasBoard {
       del.textContent = 'Löschen';
       del.addEventListener('click', () => { this.removeNodeUI(nd.id); });
       rowBtns.append(apply, imp, del);
+      ed.append(rowBtns);
+    } else if (nd.type === 'logic') {
+      const name = document.createElement('input');
+      name.type = 'text'; name.value = nd.name; name.maxLength = 24;
+      ed.append(row('Name', name));
+      const opSel = document.createElement('select');
+      for (const [op, def] of Object.entries(LOGIC_OPS)) {
+        const o = document.createElement('option');
+        o.value = op; o.textContent = def.sym + '  (' + op + ')';
+        if (nd.op === op) o.selected = true;
+        opSel.append(o);
+      }
+      ed.append(row('Operator', opSel));
+      const nIn = num(nd.nIn, 1, LIMITS.logicPorts);
+      const nOut = num(nd.nOut, 1, LIMITS.logicPorts);
+      ed.append(row('Eingänge', nIn), row('Ausgänge', nOut));
+      const note = document.createElement('div');
+      note.className = 'cv-edit-note';
+      note.textContent = 'KEIN Netz — reiner Verbinder: Ergebnis = ((in0 ⊗ in1) ⊗ in2) … mit dem gewählten Operator. abs/−x nutzen nur in0. ÷ durch 0 ergibt 0. Jeder Ausgang trägt DASSELBE Ergebnis (Verteiler). Kein Training.';
+      ed.append(note);
+      const rowBtns = document.createElement('div');
+      rowBtns.className = 'cv-edit-btns';
+      const apply = document.createElement('button');
+      apply.className = 'btn small btn-solid';
+      apply.textContent = 'Übernehmen';
+      apply.addEventListener('click', () => {
+        nd.name = (name.value || nd.name).slice(0, 24);
+        if (LOGIC_OPS[opSel.value]) nd.op = opSel.value;
+        nd.nIn = Math.max(LOGIC_OPS[nd.op].min, Math.min(LIMITS.logicPorts, Math.round(+nIn.value) || nd.nIn));
+        nd.nOut = Math.max(1, Math.min(LIMITS.logicPorts, Math.round(+nOut.value) || nd.nOut));
+        this.graph.links = this.graph.links.filter(l => {
+          if (l.to.n === nd.id && l.to.port >= nd.nIn) return false;
+          if (l.from.n === nd.id && l.from.port >= nd.nOut) return false;
+          return true;
+        });
+        this._cacheLinks();
+        this.render();
+        this.scheduleSave();
+        this.hooks.toast('Logik gespeichert');
+        ed.classList.add('hidden');
+      });
+      const del = document.createElement('button');
+      del.className = 'btn small';
+      del.textContent = 'Löschen';
+      del.addEventListener('click', () => this.removeNodeUI(nd.id));
+      rowBtns.append(apply, del);
       ed.append(rowBtns);
     } else if (nd.type === 'ui') {
       const name = document.createElement('input');

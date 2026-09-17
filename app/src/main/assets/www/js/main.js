@@ -27,9 +27,9 @@ import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnunge
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
-import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph } from './canvas.js'; // v2.19.0: + buildPlanGraph
+import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.19.0';
+const VERSION = '2.20.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -1765,6 +1765,7 @@ async function boot() {
         wires: document.getElementById('cvWires'),
         uiBar: document.getElementById('canvasUIBar'),
         edit: document.getElementById('cvEdit'),
+        batch: document.getElementById('cvBatch'), // v2.20.0: Stapel-Banner
         runBtn: document.getElementById('cvRun'),
         trainBtn: document.getElementById('cvTrain'),
         sheet: document.getElementById('canvasSheet'),
@@ -2028,7 +2029,8 @@ function updateCvStat() {
   const g = S.canvasBoard.graph;
   const pol = g.nodes.filter(n => n.type === 'policy');
   const tr = pol.filter(n => n.trainable).length;
-  el.textContent = pol.length + ' Karten (' + tr + ' trainierbar) · ' + g.links.length + ' Kabel · ' +
+  const lg = g.nodes.filter(n => n.type === 'logic').length;
+  el.textContent = pol.length + ' Karten' + (lg ? ' · ' + lg + ' Logik' : '') + ' (' + tr + ' trainierbar) · ' + g.links.length + ' Kabel · ' +
     (g._ioCount || 0) + ' Sensor-Ports · ' + (g._actCount || 0) + ' Aktuator-Ports';
 }
 
@@ -2059,19 +2061,31 @@ function canvasGraphTool(args) {
   const cmd = args.cmd || 'state';
   try {
     if (cmd === 'state') return JSON.stringify(b.describe());
+    if (cmd === 'linkMany') { // v2.20.0: viele Kabel in EINEM Aufruf (Reparatur)
+      if (!Array.isArray(args.links) || !args.links.length) return 'Fehler: links = [{from:{node,port}, to:{node,port}}, …] fehlen';
+      const rep = linkManyGraph(g, args.links);
+      b._cacheLinks();
+      b.render();
+      b.scheduleSave();
+      let out = 'Kabel gesetzt: ' + rep.ok + '/' + args.links.length;
+      if (rep.fail.length) out += ' · FEHLGESCHLAGEN: ' + rep.fail.slice(0, 6).map(f => '#' + f.i + ' ' + f.error).join(' | ') + (rep.fail.length > 6 ? ' … (' + rep.fail.length + ' gesamt)' : '');
+      return out + ' — Port-Status (frei/belegt) steht in cmd=state';
+    }
     if (cmd === 'clear') { b.clearAll(); return 'Canvas geleert (je Roboter)'; }
     if (cmd === 'add') {
       let nd;
       if (args.type === 'policy') nd = addPolicyNode(g, args);
+      else if (args.type === 'logic') nd = addLogicNode(g, args); // v2.20.0
       else if (args.type === 'ui') nd = addUINode(g, args);
       else if (args.type === 'const') nd = addConstNode(g, args);
-      else return 'Fehler: type muss "policy", "ui" oder "const" sein';
+      else return 'Fehler: type muss "policy", "logic", "ui" oder "const" sein';
       b._ensurePPO(nd);
       b._cacheLinks();
       b.render();
       b.scheduleSave();
       return 'Knoten erstellt: id=' + nd.id + ' type=' + nd.type +
         (nd.type === 'policy' ? ' nIn=' + nd.nIn + ' nOut=' + nd.nOut + ' hidden=' + nd.hidden.join('/') + ' — verbinde Ports jetzt mit cmd=link (io = Sensoren, out = Aktuatoren). Ausgänge wirken als tanh×Aktionsamplitude um die Ruhepose.'
+          : nd.type === 'logic' ? ' op=' + nd.op + ' nIn=' + nd.nIn + ' nOut=' + nd.nOut + ' (KEIN Netz — Verbinder: Ergebnis = ((in0 ⊗ in1) …), alle Ausgänge = Ergebnis)'
           : nd.type === 'ui' ? ' kind=' + nd.kind + ' io=' + nd.io
           : ' values=' + nd.values.join(','));
     }
@@ -2125,6 +2139,17 @@ function canvasGraphTool(args) {
           if (fN && fN.id === nd.id && l.from.port >= nd.nOut) return false;
           return true;
         });
+      } else if (nd.type === 'logic') { // v2.20.0
+        if (args.op && LOGIC_OPS[args.op]) nd.op = args.op;
+        if (args.nIn !== undefined) { const v = Math.round(+args.nIn); const min = LOGIC_OPS[nd.op].min; if (v >= min && v <= 16 && v !== nd.nIn) { archChanged = true; nd.nIn = v; } }
+        if (args.nOut !== undefined) { const v = Math.round(+args.nOut); if (v >= 1 && v <= 16 && v !== nd.nOut) { archChanged = true; nd.nOut = v; } }
+        if (archChanged) {
+          g.links = g.links.filter(l => {
+            if (l.to.n === nd.id && l.to.port >= nd.nIn) return false;
+            if (l.from.n === nd.id && l.from.port >= nd.nOut) return false;
+            return true;
+          });
+        }
       } else if (nd.type === 'const') {
         if (Array.isArray(args.values)) nd.values = args.values.slice(0, 8).map(v => Math.max(-10, Math.min(10, Number.isFinite(+v) ? +v : 0)));
       } else if (nd.type === 'out') {
@@ -2148,7 +2173,7 @@ function canvasGraphTool(args) {
       b.scheduleSave();
       return 'App-Policy in Karte „' + nd.name + '" geladen (' + p.stepCount + ' Schritte, 64×64-MLP) — sie läuft jetzt an ihren verkabelten Ports';
     }
-    return 'Fehler: unbekannter cmd — erlaubt: state | add | link | unlink | remove | config | clear | import';
+    return 'Fehler: unbekannter cmd — erlaubt: state | add | link | linkMany | unlink | remove | config | clear | import';
   } catch (e) { return 'Fehler: ' + e.message; }
 }
 
@@ -2283,7 +2308,7 @@ function canvasBuildTool(args) {
     // Kompakter Report für die KI
     const parts = [];
     if (cleared) parts.push('Canvas geleert');
-    parts.push('Karten: ' + (rep.cards.map(c => '„' + c.name + '"(id=' + c.id + (c.isNew ? ',neu' : ',angepasst') + (c.archReset ? ',Netz-FRISCH' : '') + ')').join(', ') || 'keine'));
+    parts.push('Karten: ' + (rep.cards.map(c => (c.kind === 'logic' ? 'LOGIK „' : '„') + c.name + '"(id=' + c.id + (c.isNew ? ',neu' : ',angepasst') + (c.archReset ? ',Netz-FRISCH' : '') + ')').join(', ') || 'keine'));
     parts.push('Kabel gesetzt: ' + rep.linksOk);
     if (rep.linksFail.length) {
       parts.push('Kabel FEHLGESCHLAGEN: ' + rep.linksFail.slice(0, 6).map(f => '#' + f.i + ' ' + f.error).join(' | ') +
@@ -2352,6 +2377,17 @@ function wireUI() {
     S.canvasBoard.scheduleSave();
     S.canvasBoard.openEdit(nd.id);
     updateCvStat();
+  });
+  document.getElementById('cvAddLogic').addEventListener('click', () => { // v2.20.0: Logik/Verbinder
+    controls.buzz();
+    if (!S.canvasBoard) return;
+    const nd = addLogicNode(S.canvasBoard.graph, { op: 'add', nIn: 2, nOut: 1 });
+    S.canvasBoard._cacheLinks();
+    S.canvasBoard.render();
+    S.canvasBoard.scheduleSave();
+    S.canvasBoard.openEdit(nd.id);
+    updateCvStat();
+    log('Canvas: Logik-Karte „' + nd.name + '" (' + LOGIC_OPS[nd.op].sym + ', ' + nd.nIn + '→' + nd.nOut + ') — KEIN Netz, verbindet Signale', 'ok');
   });
   document.getElementById('cvAddConst').addEventListener('click', () => {
     controls.buzz();

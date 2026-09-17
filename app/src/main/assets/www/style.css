@@ -680,7 +680,7 @@ body.cv-open #canvasUIBar {
 
 /* Knoten */
 .cv-node {
-  position: absolute; min-width: 132px; max-width: 210px;
+  position: absolute; min-width: 132px; max-width: 560px;
   background: rgba(13, 19, 28, 0.94);
   border: 1.4px solid rgba(148, 180, 220, 0.35);
   border-radius: 10px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
@@ -692,6 +692,8 @@ body.cv-open #canvasUIBar {
 .cv-node.cv-frozen { border-style: dashed; opacity: 0.92; }
 .cv-node.cv-const { border-color: #b48cff; }
 .cv-node.cv-ui { border-color: #ffd166; }
+.cv-node.cv-logic { border-color: #ff5f7e; }
+.cv-node.cv-logic .cv-nname { color: #ffb3c0; }
 .cv-nhead {
   display: flex; align-items: center; gap: 5px;
   padding: 5px 7px; cursor: move;
@@ -704,7 +706,10 @@ body.cv-open #canvasUIBar {
   font-size: 12px; line-height: 1; padding: 1px 3px; cursor: pointer; flex: none;
 }
 .cv-nbtn.cv-del { color: #ff6b6b; }
-.cv-nbody { display: flex; justify-content: space-between; gap: 4px; padding: 4px 0; max-height: 330px; overflow-y: auto; }
+/* v2.20.0: KEIN max-height/overflow mehr — Ports laufen in Spalten à 20
+   (vorher wurde der Körper zur scrollbar-„Liste", deren untere Einträge
+   wegen touch-action:none unantippbar waren) */
+.cv-nbody { display: flex; justify-content: space-between; gap: 4px; padding: 4px 0; }
 .cv-col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .cv-colOut { align-items: flex-end; }
 .cv-port { display: flex; align-items: center; gap: 4px; padding: 1px 6px; position: relative; min-height: 15px; }
@@ -714,6 +719,20 @@ body.cv-open #canvasUIBar {
 .cv-plabel { font-size: 8.5px; color: rgba(198, 214, 232, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 132px; }
 .cv-port.cv-out { flex-direction: row-reverse; }
 .cv-port:active .dot, .cv-port .dot:active { transform: scale(1.25); }
+/* v2.20.0: Stapelauswahl (Langdruck) — freie Ports leuchten gelb */
+.cv-port.cv-sel { background: rgba(255, 209, 102, 0.14); border-radius: 6px; }
+.cv-port.cv-sel .dot { border-color: #ffd166; background: #ffd166; box-shadow: 0 0 8px rgba(255, 209, 102, 0.95); }
+.cv-port.cv-sel .cv-plabel { color: #ffd166; }
+/* v2.20.0: Stapel-Banner oben im Viewport */
+.cv-batch {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em;
+  color: #ffd166; background: rgba(10, 15, 23, 0.85);
+  border: 1px solid rgba(255, 209, 102, 0.55); border-radius: 999px;
+  padding: 5px 14px; pointer-events: none; white-space: nowrap;
+  display: none; z-index: 6; max-width: 92%; overflow: hidden; text-overflow: ellipsis;
+}
+.cv-batch.on { display: block; }
 .cv-empty { font-size: 8.5px; color: rgba(147, 164, 184, 0.5); padding: 4px 8px; }
 .cv-nfoot { font-size: 8.5px; color: #ffd166; padding: 3px 8px 4px; border-top: 1px solid rgba(148, 180, 220, 0.12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

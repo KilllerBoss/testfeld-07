@@ -159,13 +159,13 @@ export const AI_DOCS = [
   { doc: 'WORLD', title: 'Welten: Presets + KI-WELT (setWorld — Objekte bauen, Farben, Regeln)' },
   { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera, AUSSEHEN (setAppearance), UI (setUI)' },
   { doc: 'TRAINING', title: 'PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen' },
-  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.19.0 canvasBuild = ganze Architektur in 1 Aufruf; VOLLBILD + 2-Finger-Zoom): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasBuild/canvasGraph/canvasReward/canvasRun/canvasUI)' },
+  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.20.0 canvasBuild = ganze Architektur in 1 Aufruf; LOGIK-Verbinder + − × ÷; linkMany; jeder Port sichtbar): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasBuild/canvasGraph/canvasReward/canvasRun/canvasUI)' },
 ];
 
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren). v2.18.0: Das Canvas ist ein VOLLBILD-Editor mit Multi-Touch (1 Finger = Karten/Kabel ziehen, 2 Finger = Zoomen + Verschieben, Zoom-Buttons + ⤢); UI-Elemente, die du über canvasUI anlegst, erscheinen als Leiste ÜBER dem Vollbild-Canvas. v2.19.0: ⭐ canvasBuild — du baust GANZE Architekturen (Router + Experten, Kabel, Belohnungen je Karte, Ausführung/Training) in EINEM Werkzeug-Aufruf.
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren). v2.18.0: Das Canvas ist ein VOLLBILD-Editor mit Multi-Touch (1 Finger = Karten/Kabel ziehen, 2 Finger = Zoomen + Verschieben, Zoom-Buttons + ⤢); UI-Elemente, die du über canvasUI anlegst, erscheinen als Leiste ÜBER dem Vollbild-Canvas. v2.19.0: ⭐ canvasBuild — du baust GANZE Architekturen (Router + Experten, Kabel, Belohnungen je Karte, Ausführung/Training) in EINEM Werkzeug-Aufruf. v2.20.0: LOGIK-KARTEN (Verbinder ohne Netz: + − × ÷ min max abs neg, Ein-/Ausgänge frei wählbar — Signale werden direkt verarbeitet) und canvasGraph {cmd:"linkMany"} (viele Kabel in einem Aufruf nachsetzen); cmd="state" listet JEDEN Port EINZELN mit frei/belegt — du siehst also jeden Punkt und kannst jeden Punkt verbinden.
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
 ${cfgJson}
@@ -196,11 +196,11 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 13. tool="setWorld" — WELT bauen. args = {preset:"testfeld"|"flach"|"parkour"|"treppen"|"huegel"} schaltet um. Eigene Objekte: args = {objects:[{type:"box"|"ball"|"cyl"|"ramp"|"tilt"|"gate"|"stair", x, y, w,l,h (bzw. r für ball/cyl), color:"#rrggbb", euler:[rx,ry,rz]}…], replace:<bool>} — replace:true = WELT NEU bauen (nur die gelisteten Objekte), replace:false = Objekte HINZUFÜGEN. Regeln: max 40 Objekte, Spawn (0,0) bleibt frei (min 0,9 m), x/y −12…12. LIES doc "WORLD" bei Unsicherheit.
 14. tool="setUI" — APP-LOOK anpassen. args = {theme:"standard"|"neon"|"amber"|"ice"|"wald", suggestions:[{label:"≤20 Zeichen", q:"Chat-Nachricht"}…max 6]} — theme ist das Farbschema der App, suggestions ersetzt die Vorschlags-Buttons im KI-Chat (sinnvolle Kurzbefehle vorschlagen!). Beide Felder optional.
 15. tool="setMoE" — Soft-MoE-EXPERTENANZAHL ändern (NUR MicroDuck). args = {experts:2…8}. Die Policy wird neu aufgesetzt (Training startet von Null — vorher fragen/warnen!). 4 = Standard (Balance/Walk/Turn/Recover).
-16. tool="canvasGraph" — NETZ-CANVAS bauen/lesen (v2.17.0). args = {cmd:"state"|"add"|"link"|"unlink"|"remove"|"config"|"clear"|"import", …}. state = kompletter Graph als JSON (Knoten mit Ports, Kabel). add = {type:"policy", nIn, nOut, hidden:[64,64]} oder {type:"ui", kind, io, label} oder {type:"const", values:[…]}. link = {from:{node,port}, to:{node,port}} — node ist "io" (alle Sensoren einzeln + Stick X/Y), "out" (alle Aktuatoren einzeln) oder Karten-ID/-Name. config = {node, name?, nIn?, nOut?, hidden?, trainable?, lr?, T?} (Architekturwechsel = frisches Netz!) oder Senke {node:"out", sink:"residual"|"direct"}. import = {node} lädt die AKTUELLE App-Policy (64×64) in die Karte. LIES doc "CANVAS", bevor du baust.
+16. tool="canvasGraph" — NETZ-CANVAS bauen/lesen (v2.17.0). args = {cmd:"state"|"add"|"link"|"linkMany"|"unlink"|"remove"|"config"|"clear"|"import", …}. state = kompletter Graph als JSON — JEDER Knoten mit JEDERM Port: io/out liefern portsList:[{port,name,used}] (jeder Sensor/Aktuator einzeln mit frei/belegt), Karten liefern freeIn/freeOut (freie Port-Indices). add = {type:"policy", nIn, nOut, hidden:[64,64]} oder {type:"logic", op:"add"|"sub"|"mul"|"div"|"min"|"max"|"abs"|"neg", nIn, nOut} (KEIN Netz — reiner Verbinder, verarbeitet Signale direkt) oder {type:"ui", kind, io, label} oder {type:"const", values:[…]}. link = {from:{node,port}, to:{node,port}} — node ist "io" (alle Sensoren einzeln + Stick X/Y), "out" (alle Aktuatoren einzeln) oder Karten-ID/-Name. linkMany = {links:[{from,to},…]} — VIELE Kabel in EINEM Aufruf (Reparatur/Ausbau; Fehler pro Kabel im Ergebnis). config = {node, name?, op?, nIn?, nOut?, hidden?, trainable?, lr?, T?} (Architekturwechsel = frisches Netz!) oder Senke {node:"out", sink:"residual"|"direct"}. import = {node} lädt die AKTUELLE App-Policy (64×64) in die Karte. LIES doc "CANVAS", bevor du baust.
 17. tool="canvasReward" — Belohnung JE KARTE. args = {card:"<id|name>"|"alle", mode:"global"|"custom", scale:0…3, w:{alive,up,vel,turn,energy,fall}}. global = Aufgaben-Belohnung × scale. custom = eigene Formel: alive (Grundbetrag), up·(upz−0,7), vel·min(1,|vfwd|), turn·min(1,|yawRate|), −energy·Σact², −fall bei Sturz.
 18. tool="canvasRun" — Canvas ausführen/trainieren. args = {run:<bool>} = Graph fährt den Roboter (Modus CANVAS) oder zurück zu MANUELL; {train:<bool>} = Canvas-TRAINING an/aus (PPO je trainierbarer Karte; impliziert run).
 19. tool="canvasUI" — EIGENE UI-Elemente als Policy-Ein-/Ausgänge. args = {node?, kind:"button"|"toggle"|"slider"|"joy"|"gauge"|"light"|"code", io:"in"|"out" (nur code), label, nOut:1…4 (code-in), code:"…" (nur code), remove:<bool>}. Eingänge liefern Werte (Button 1/0, Slider 0…1, Joystick X/Y) und können in Karten verdrahtet werden; Ausgänge zeigen Werte (gauge/light). code-in MUSS je Schritt ein Array mit nOut Zahlen zurückgeben: ctx = {t, dt, state}.
-20. tool="canvasBuild" — ⭐ GANZE ARCHITEKTUR IN EINEM AUFRUF (v2.19.0, bevorzugt!). args = {clear:<bool>, cards:[{name, nIn, nOut, hidden:[…], trainable?, lr?, reward?}], links:[{from:{node,port}, to:{node,port}}], sink?"residual"|"direct", run?:<bool>, train?:<bool>}. cards = Policy-Karten (bestehende Karten mit gleichem Namen werden umkonfiguriert statt doppelt angelegt; reward = {mode:"global"|"custom", scale, w:{alive,up,vel,turn,energy,fall}}). links verbinden NAMEN: from {node:"io", port:<Sensor-Port>}, to {node:"Experte Gehen", port:0} … bis {node:"out", port:<Aktuator-Port>}. FEHLER PRO KABEL werden gesammelt statt abzubrechen — du bekommst im TOOL-ERGEBNIS die Report-Liste und kannst fehlende Kabel einzeln mit canvasGraph cmd=link nachsetzen. Port-Zahlen je Sensor/Aktuator liefert canvasGraph {cmd:"state"}.
+20. tool="canvasBuild" — ⭐ GANZE ARCHITEKTUR IN EINEM AUFRUF (v2.19.0, bevorzugt!). args = {clear:<bool>, cards:[…], links:[{from:{node,port}, to:{node,port}}], sink?"residual"|"direct", run?:<bool>, train?:<bool>}. cards = Policy-Karten {name, nIn, nOut, hidden:[…], trainable?, lr?, reward?} ODER Logik-Karten {name, logic:"add"|"sub"|"mul"|"div"|"min"|"max"|"abs"|"neg", nIn, nOut} (bestehende Karten mit gleichem Namen werden umkonfiguriert statt doppelt angelegt; reward = {mode:"global"|"custom", scale, w:{alive,up,vel,turn,energy,fall}}). links verbinden NAMEN: from {node:"io", port:<Sensor-Port>}, to {node:"Experte Gehen", port:0} … bis {node:"out", port:<Aktuator-Port>}. FEHLER PRO KABEL werden gesammelt statt abzubrechen — du bekommst im TOOL-ERGEBNIS die Report-Liste und setzt fehlende Kabel dann in EINEM canvasGraph cmd=linkMany-Aufruf nach. Port-Zahlen/-Namen je Sensor/Aktuator liefert canvasGraph {cmd:"state"}.
 
 PLUGIN-API (das Objekt „api" in runCode/writePlugin):
 - api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
@@ -248,7 +248,7 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 
 WANN WAS?
 - Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
-- ARCHITEKTUREN BAUEN („bau einen Router über meine Geh-Policy“, „Soft-MoE mit 4 Experten“, „eigene Belohnung für eine Karte“) → ⭐ SOFORT canvasBuild mit dem KOMPLETTEN Plan in EINEM Aufruf (Karten + Kabel + Belohnungen + train) — NIEMALS nur beschreiben, NIEMALS nachfragen, NIEMALS Karte für Karte mit canvasGraph (das schafft das Schritt-Limit nicht!). Nur fehlende Einzelkabel danach mit canvasGraph cmd=link nachsetzen. Port-Namen/-Zahlen: canvasGraph {cmd:"state"} oder doc CANVAS. Der Canvas läuft je Roboter getrennt und bleibt gespeichert.
+- ARCHITEKTUREN BAUEN („bau einen Router über meine Geh-Policy“, „Soft-MoE mit 4 Experten“, „eigene Belohnung für eine Karte“, „Verbinde die Sensoren mit …“) → ⭐ SOFORT canvasBuild mit dem KOMPLETTEN Plan in EINEM Aufruf (Karten + Kabel + Belohnungen + train) — NIEMALS nur beschreiben, NIEMALS nachfragen, NIEMALS Karte für Karte mit canvasGraph (das schafft das Schritt-Limit nicht!), NIEMALS NUR Training starten ohne die Architektur vorher gebaut zu haben (Training ohne Verkabelung lernt nichts Sinnvolles — der Nutzer sieht das als Fehler!). ABLAUF: (1) bei unbekannten Port-Zahlen ERST canvasGraph {cmd:"state"} — es zeigt JEDEN Port einzeln mit Name und frei/belegt; (2) canvasBuild mit dem GANZEN Plan (Karten, Logik-Verbinder, ALLE Kabel, Belohnungen, train); (3) Report prüfen: wenn „Kabel FEHLGESCHLAGEN“ → fehlende Kabel in EINEM canvasGraph {cmd:"linkMany", links:[…]} nachsetzen; (4) erst dann train/run. Port-Namen/-Zahlen: canvasGraph {cmd:"state"} oder doc CANVAS. Der Canvas läuft je Roboter getrennt und bleibt gespeichert.
   REZEPT „ROUTER + EXPERTEN“ (z. B. MicroDuck: Gehen/Drehen/Gleichgewicht/Aufstehen, geringe Latenz = kleine Netze): (1) 4 Experten-Karten hidden:[48,32] mit EIGENEN custom-Belohnungen — Gehen w:{vel:1.2,alive:0.3,energy:0.002,fall:2} · Drehen w:{turn:1.2,alive:0.3,fall:2} · Gleichgewicht w:{up:1.5,alive:0.3,fall:3} · Aufstehen w:{up:2,alive:0.3,fall:0}; (2) Experten mit io-Sensorik und ihren Aktuator-Ports von out verkabeln (Kanäle via canvasGraph cmd=state); (3) Router-Karte (hidden:[48]) auf dieselbe Sensorik, Router-Ausgänge auf FREIE Eingänge der Experten (dort nIn erhöhen) oder parallel auf out; (4) canvasBuild mit train:true — erst die Experten lernen, dann Router trainieren und Experten einfrieren (trainable:false).
 - AUSSEHEN („mach die Ente pink“, „Chrome-Ente“, „G1 Kopf rot“) → setAppearance (erst {list:true}). WELT („bau einen Turm“, „stell einen Ball hin“, „mach die Welt leer“) → setWorld. APP-DESIGN/Schnellstart-Buttons („Neon-Design“) → setUI. MicroDuck-Experten („nur 3 Experten“) → setMoE (Policy startet neu — vorher warnen!).
 - Fragen zu obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung → erst readDoc (ART-MCP), dann antworten/handeln.
@@ -444,12 +444,14 @@ export function validateToolCall(parsed) {
   if (tool === 'setMoE') {
     return { tool, args: { experts: Number.isFinite(parseFloat(args.experts)) ? parseFloat(args.experts) : null } };
   }
-  // ── v2.17.0/2.19.0: CANVAS-WERKZEUGE (jetzt mit harter Validierung) ──
+  // ── v2.17.0/2.19.0/2.20.0: CANVAS-WERKZEUGE (mit harter Validierung) ──
+  const LOGIC_OPS = ['add', 'sub', 'mul', 'div', 'min', 'max', 'abs', 'neg'];
   if (tool === 'canvasGraph') {
-    const cmd = ['state', 'add', 'link', 'unlink', 'remove', 'config', 'clear', 'import'].includes(args.cmd) ? args.cmd : 'state';
+    const cmd = ['state', 'add', 'link', 'linkMany', 'unlink', 'remove', 'config', 'clear', 'import'].includes(args.cmd) ? args.cmd : 'state';
     const out = { cmd };
     if (cmd === 'add') {
-      out.type = ['policy', 'ui', 'const'].includes(args.type) ? args.type : null;
+      out.type = ['policy', 'logic', 'ui', 'const'].includes(args.type) ? args.type : null;
+      out.op = LOGIC_OPS.includes(args.op) ? args.op : undefined;
       out.nIn = _intOrUndef(args.nIn, 1, 64);
       out.nOut = _intOrUndef(args.nOut, 1, 32);
       out.hidden = _hiddenArr(args.hidden);
@@ -464,10 +466,17 @@ export function validateToolCall(parsed) {
       out.to = _portRef(args.to);
       if (cmd === 'unlink' && typeof args.id === 'string') out.id = args.id;
     }
+    if (cmd === 'linkMany') {
+      out.links = Array.isArray(args.links) ? args.links.slice(0, 240).map(l => {
+        const from = l && _portRef(l.from), to = l && _portRef(l.to);
+        return from && to ? { from, to } : null;
+      }).filter(Boolean) : undefined;
+    }
     if (cmd === 'remove' || cmd === 'config' || cmd === 'import') {
       out.node = _strOrUndef(args.node, 24);
       if (cmd === 'config') {
         out.name = _strOrUndef(args.name, 24);
+        out.op = LOGIC_OPS.includes(args.op) ? args.op : undefined;
         out.nIn = _intOrUndef(args.nIn, 1, 64);
         out.nOut = _intOrUndef(args.nOut, 1, 32);
         out.hidden = _hiddenArr(args.hidden);
@@ -506,12 +515,22 @@ export function validateToolCall(parsed) {
       remove: !!args.remove,
     } };
   }
-  // v2.19.0: EIN-SCHRITT-BAUPLAN — ganze Architektur (z. B. Router + 4 Experten) in EINEM Aufruf
+  // v2.19.0/2.20.0: EIN-SCHRITT-BAUPLAN — ganze Architektur (z. B. Router + 4 Experten) in EINEM Aufruf
   if (tool === 'canvasBuild') {
     const out = { clear: !!args.clear };
     if (Array.isArray(args.cards)) {
       out.cards = args.cards.slice(0, 16).map(c => {
         if (!c || typeof c !== 'object') return null;
+        // Logik-Karte: c.logic = Operator (KEIN Netz)
+        if (c.logic || c.type === 'logic') {
+          const lg = {
+            name: _strOrUndef(c.name, 24),
+            logic: LOGIC_OPS.includes(c.logic) ? c.logic : 'add',
+            nIn: _intOrUndef(c.nIn, 1, 16),
+            nOut: _intOrUndef(c.nOut, 1, 16),
+          };
+          return lg;
+        }
         const card = {
           name: _strOrUndef(c.name, 24),
           nIn: _intOrUndef(c.nIn, 1, 64),

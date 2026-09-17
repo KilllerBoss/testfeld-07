@@ -263,11 +263,15 @@ console.log('\n[5] System-Prompt / Doku / Version');
   ok(docs && docs.title.includes('canvasBuild'), 'AI_DOCS: CANVAS-Titel nennt canvasBuild');
 
   const mainSrc = await readFile(path.join(WWW, 'js/main.js'), 'utf8');
-  ok(mainSrc.includes("VERSION = '2.19.0'"), 'main.js VERSION 2.19.0');
+  const verM = /const VERSION = '(\d+)\.(\d+)\.(\d+)'/.exec(mainSrc);
+  const verOk = verM && ((+verM[1] * 10000) + (+verM[2] * 100) + +verM[3]) >= 20100;
+  ok(verOk, 'main.js VERSION ≥ 2.19.0 (v2.20.0: Pin auf ≥ gelockert)', verM && verM[0]);
   ok(mainSrc.includes('canvasBuildTool') && mainSrc.includes("buildPlanGraph"), 'main.js: canvasBuildTool + buildPlanGraph importiert');
   ok(/tool === 'canvasBuild'/.test(mainSrc), 'execTool registriert canvasBuild');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(gradle.includes('versionCode 31') && gradle.includes('versionName "2.19.0"'), 'build.gradle: versionCode 31 / versionName 2.19.0');
+  const gvM = /versionCode (\d+)\s*\/\s*versionName "(\d+)\.(\d+)\.(\d+)"/.exec(gradle.replace('\n', ' ')) || /versionCode (\d+)[\s\S]*?versionName "(\d+)\.(\d+)\.(\d+)"/.exec(gradle);
+  const gvOk = gvM && +gvM[1] >= 31;
+  ok(gvOk, 'build.gradle: versionCode ≥ 31 (v2.20.0: Pin auf ≥ gelockert)', gvM && gvM[0]);
   const canvasDoc = await readFile(path.join(WWW, 'mcp/CANVAS.md'), 'utf8');
   ok(canvasDoc.includes('canvasBuild') && canvasDoc.includes('5 Werkzeuge'), 'CANVAS.md: canvasBuild + 5-Werkzeuge-Tabelle');
 }

@@ -223,9 +223,9 @@ const persisted = await page.evaluate(() => {
 ok(!!persisted && persisted.policies === 1 && persisted.ui === 1, 'Graph im localStorage (je Roboter)', JSON.stringify(persisted));
 ok(persisted && persisted.links >= 4, 'Kabel gespeichert', String(persisted.links));
 
-// canvasGraph state für Gemini
+// canvasGraph state für Gemini (v2.20.0: portsList ersetzt portNamen — jeder Port einzeln)
 const st = await page.evaluate(() => window.__trainrobot.execTool('canvasGraph', { cmd: 'state' }));
-ok(/"nodes"/.test(st) && /"links"/.test(st) && /"portNamen"/.test(st), 'canvasGraph state liefert Graph-JSON');
+ok(/"nodes"/.test(st) && /"links"/.test(st) && /"portsList"/.test(st), 'canvasGraph state liefert Graph-JSON');
 
 // ── 9) Fehler ──────────────────────────────────────────────
 console.log('\n[9] Seitenfehler');

@@ -229,6 +229,7 @@
     </div>
     <div class="cv-toolbar">
       <button id="cvAddPolicy" class="btn small">+ Netz</button>
+      <button id="cvAddLogic" class="btn small" title="Logik/Verbinder: + − × ÷ min max abs neg — kein Netz">+ Logik</button>
       <button id="cvAddUI" class="btn small">+ UI</button>
       <button id="cvAddConst" class="btn small">+ Konst</button>
       <span class="cv-sep"></span>
@@ -246,10 +247,11 @@
       <div id="cvWorld" class="cv-world">
         <svg id="cvWires" class="cv-wires" width="6000" height="4000"></svg>
       </div>
-      <div id="cvGesture" class="cv-gesture">2 FINGER: ZOOMEN · VERSCHIEBEN&nbsp;&nbsp;|&nbsp;&nbsp;1 FINGER: ZIEHEN · VERBINDEN</div>
+      <div id="cvBatch" class="cv-batch"></div>
+      <div id="cvGesture" class="cv-gesture">2 FINGER: ZOOMEN · VERSCHIEBEN&nbsp;&nbsp;|&nbsp;&nbsp;LANG DRÜCKEN: MEHRERE PORTS AUF EINMAL VERBINDEN</div>
     </div>
     <div id="cvEdit" class="cv-edit hidden"></div>
-    <div class="train-note">VOLLBILD-CANVAS: 1 Finger zieht Karten/Kabel, 2 Finger zoomen und verschieben die Fläche (Zoom-Buttons unten + ⤢ passt alles ein). LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
+    <div class="train-note">VOLLBILD-CANVAS: 1 Finger zieht Karten/Kabel, 2 Finger zoomen und verschieben die Fläche. LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) und LOGIK-Verbinder (+ Logik: + − × ÷ min max abs neg — reine Signalverarbeitung ohne Netz, Ein-/Ausgänge frei wählbar). STAPEL-VERBINDEN: eine Seite einer Karte LANG drücken (freie Ports leuchten gelb), dann eine Seite einer anderen Karte LANG drücken — alles Passende wird verbunden, Überzähliges bleibt frei. Einzelkabel: Port antippen und dann einen anderen Port (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel. „AUSFÜHREN" = Canvas fährt den Roboter, „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (canvasBuild / canvasGraph / canvasReward / canvasRun / canvasUI).</div>
   </section>
 
   <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->
