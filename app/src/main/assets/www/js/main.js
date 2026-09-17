@@ -32,7 +32,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.23.0';
+const VERSION = '2.24.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -56,6 +56,10 @@ const S = {
   robotId: null,
   motionClip: null,   // aktive GLB-Referenz (v2.15.0: je Roboter retargetet)
   srcScene: null,     // Original-3D-Modell des Lehrer-Ghosts (In-Memory)
+  // v2.24.0 — Geist vs. Original getrennt: Der G1-Geist zeigt die RETARGETETE
+  // Referenz (= exakt was trainiert wird), das Original-Mesh ist NUR Deko.
+  // Nutzerwunsch: Mesh weg, nur Geist → Original standardmäßig AUS.
+  srcShow: false,
   clips: [],          // gespeicherte Clips (IndexedDB)
   ghostOn: true,
   sim: null,
@@ -280,6 +284,12 @@ async function loadRobot(id, first = false) {
       if (look && (look.all || look.parts.length)) log('Aussehen geladen (' + (look.parts.length ? look.parts.length + ' Teil(e)' : 'Grundfarbe') + ')');
     } catch (e) { /* Look ist optional */ }
     r3d.camDist = cfg.dist; controls._camDist = cfg.dist;
+    // v2.24.0: Geister NEU aufbauen — die alten Gruppen hängen an der alten
+    // Modell-Geometrie (fossiler Cyan-Geist des Vorgänger-Roboters blieb
+    // sonst eingefroren stehen). Nur mit aktivem Clip + Toggles.
+    r3d.removeGhost();
+    r3d.removeSourceGhost();
+    if (S.motionClip) applyGhosts();
     sim.reset();
     S.epReward = 0; S.episodes = 0;
 
@@ -1843,6 +1853,11 @@ async function boot() {
     S.animTraining = localStorage.getItem('tr_animOn') !== '0';
     const animTog = document.getElementById('animTrainToggle');
     if (animTog) animTog.checked = S.animTraining;
+    // v2.24.0: Geist/Original-Trennung (Original = Mesh AUS) — Nutzerwunsch
+    // „mache das 3d mesh weg, lasse nur den Geist“
+    S.srcShow = localStorage.getItem('tr_srcShow') === '1';
+    const srcTog = document.getElementById('srcShowToggle');
+    if (srcTog) srcTog.checked = S.srcShow;
     // v2.15.0: Referenz-Modus persistiert (frei/stelle/folgt)
     try {
       const rm = localStorage.getItem('tr_refmode_v1');
@@ -2087,7 +2102,7 @@ function loop(now) {
   //   stelle → Lehrer steht FIX am Startpunkt (Bewegung auf der Stelle)
   //   folgt  → Lehrer hängt am LEBENDEN Roboter (Bewegung relativ zu ihm)
   // Die Drohne (pathOn) zeigt nur den Lehrer (humanoid auf der Bahn).
-  if (S.ghostOn && S.task && (S.task.kind === 'motion' || S.task.pathOn) && (r3d.ghostGroups || r3d.sourceGhost)) {
+  if ((S.ghostOn || S.srcShow) && S.task && (S.task.kind === 'motion' || S.task.pathOn) && (r3d.ghostGroups || r3d.sourceGhost)) {
     const clip = S.task.kind === 'motion' ? S.task.clip : S.task.pathClip;
     if (clip) {
       const isMotion = S.task.kind === 'motion';
@@ -2993,13 +3008,24 @@ function wireUI() {
       : 'Animation im Training: AUS — Kommandogang ohne GLB (Fahrbefehle führen; Gehen/Balance bleiben erhalten, nichts wird neu angefangen)', 'warn');
     ui.toast(animT.checked ? 'Animation im Training an' : 'Nur Gleichgewicht lernen');
   });
+  // ── Geist & Original getrennt (v2.24.0) ────────────────
+  // Geist = cyanfarbener Roboter mit der retargeteten Referenz (= was
+  // trainiert wird). Original = Mesh der Quelldatei (nur Deko, Standard AUS
+  // — Nutzerwunsch „3D-Mesh weg, nur den Geist lassen").
   document.getElementById('ghostToggle').addEventListener('change', (e) => {
     S.ghostOn = e.target.checked;
-    if (!S.ghostOn) { r3d.removeGhost(); r3d.removeSourceGhost(); }
-    else if (S.task && S.task.kind === 'motion' && S.motionClip) {
-      if (S.sim) r3d.buildGhost(S.sim);
-      r3d.buildSourceGhost(S.motionClip, S.srcScene || null);
-    }
+    applyGhosts();
+    log(S.ghostOn ? 'Geist AN — der cyanfarbene Roboter zeigt die trainierte Referenzbewegung'
+      : 'Geist AUS — nur der echte Roboter', 'warn');
+  });
+  const srcTog = document.getElementById('srcShowToggle');
+  if (srcTog) srcTog.addEventListener('change', (e) => {
+    S.srcShow = e.target.checked;
+    try { localStorage.setItem('tr_srcShow', S.srcShow ? '1' : '0'); } catch (err) { /* voll */ }
+    applyGhosts();
+    log(S.srcShow ? 'Original-Lehrer AN — Quelldatei (Mesh) läuft mit'
+      : 'Original-Lehrer AUS — nur der Geist zeigt, was trainiert wird', 'warn');
+    ui.toast(S.srcShow ? 'Original-Lehrer an' : 'Nur Geist (Standard)');
   });
 
   refreshClipList().catch(() => { /* IDB evtl. gesperrt */ });
@@ -3012,6 +3038,42 @@ function wireUI() {
 // das Ziel ist der AKTUELLE Roboter (G1: Beine+Arme, MicroDuck: Beine,
 // Drohne: Flugbahn); andere Roboter werden on-demand nachretargetet.
 // ALLE Animationen einer Datei werden importiert (Hart-Limit 8).
+
+// ══ v2.24.0 — Geist / Original getrennt ═════════════════════
+// Geister gemäß den beiden Toggles aufbauen/abbauen. Der Roboter-Geist
+// (cyan) zeigt die retargetete Referenz = EXAKT was trainiert wird. Das
+// Original-Mesh (Lehrer) ist reine Deko und standardmäßig ausgeblendet —
+// die Szene wird erst LAZY gebaut, wenn der Nutzer es einschaltet.
+function applyGhosts() {
+  if (!r3d) return;
+  if (!S.ghostOn && !S.srcShow) { r3d.removeGhost(); r3d.removeSourceGhost(); return; }
+  if (S.ghostOn) { if (S.sim && !S.sim.cfg.drone) r3d.buildGhost(S.sim); } else r3d.removeGhost();
+  if (S.srcShow && S.motionClip) {
+    r3d.buildSourceGhost(S.motionClip, S.srcScene || null);
+    ensureSrcScene();
+  } else {
+    r3d.removeSourceGhost();
+  }
+}
+
+// Original-GLB-Szene erst bauen, wenn sie wirklich angezeigt werden soll
+function ensureSrcScene() {
+  if (S.srcScene || !S.activeRecId) return;
+  const rec = S.clips.find(r => r.id === S.activeRecId);
+  if (!rec || !rec.glb) return;
+  try {
+    const c2 = new GlbClip(rec.glb);
+    c2.useAnimation(rec.animIndex || 0);
+    const pkg = buildGlbScene(c2);
+    if (pkg) {
+      S.srcScene = pkg;
+      if (S.srcShow && S.motionClip && r3d) r3d.buildSourceGhost(S.motionClip, pkg);
+      log('Original-Modell gebaut (' + pkg.meshCount + ' Meshes, ' + pkg.bones + ' Knochen) — zeigt die Quell-Animation');
+    }
+  } catch (e) {
+    log('Original-Modell nicht darstellbar — Skelett-Lehrer aktiv (' + e.message + ')');
+  }
+}
 async function onGlbFiles(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
@@ -3224,15 +3286,30 @@ async function refreshClipList() {
     // unmöglich: „nur entfernen, aber es bleibt geladen")
     const active = S.activeRecId ? S.activeRecId === rec.id : false;
     row.className = 'glb-clip' + (active ? ' active' : '');
+
+    // v2.24.0: Zeile zeigt, WIE der Clip ist — Dauer · Frames · fps · Root-Weg.
+    // Tippen auf Name/Meta/Chevron klappt die Detail-Liste auf (Ablauf,
+    // Root-Bahn, Lehrer-Pose, assimp, Steuerung, Buttons, Größe, Status …).
     const name = document.createElement('span');
     name.className = 'glb-clip-name';
     name.textContent = rec.name;
     const meta = document.createElement('span');
     meta.className = 'glb-clip-meta';
+    meta.textContent = clipMetaText(rec);
+    const chev = document.createElement('span');
+    chev.className = 'glb-clip-chevron';
+    chev.textContent = '▾';
+    const det = buildClipDetails(rec, active);
+    const toggleDet = () => {
+      det.classList.toggle('hidden');
+      row.classList.toggle('open');
+    };
+    name.addEventListener('click', toggleDet);
+    meta.addEventListener('click', toggleDet);
+    chev.addEventListener('click', toggleDet);
+
     // v2.15.0: neue Records tragen motionByRobot (je Roboter) — rec.motion
     // kann fehlen. Für die Meta-Zeile genügt irgendeine Variante.
-    const m = rec.motion || (rec.motionByRobot ? Object.values(rec.motionByRobot)[0] : null) || { duration: 0, n: 0 };
-    meta.textContent = (m.duration || 0).toFixed(1) + 's · ' + m.n + 'F';
     // v2.7.0: Policy-Badge — zeigt, dass dieser Clip ein gespeichertes
     // Training hat (bleibt auch nach Deaktivieren/Neustart erhalten)
     if (policyExistsForClip(rec.id)) {
@@ -3264,9 +3341,76 @@ async function refreshClipList() {
       // ein versehentliches Entfernen zerstört kein Training.
       ui.toast('Clip entfernt — seine Policy bleibt gespeichert');
     });
-    row.append(name, meta, use, del);
+    row.append(name, meta, chev, use, del, det);
     list.appendChild(row);
   }
+}
+
+// Irgendeine Motion-Variante des Records (rec.motion oder je-Roboter-Map)
+function clipMotionAny(rec) {
+  return rec.motion
+    || (rec.motionByRobot ? Object.values(rec.motionByRobot)[0] : null)
+    || { duration: 0, n: 0 };
+}
+
+// Kompakt-Meta: „12,3s · 370F · 30fps · 4,2m" (Root-Weg nur bei Root-Motion)
+function clipMetaText(rec) {
+  const m = clipMotionAny(rec);
+  const parts = [(m.duration || 0).toFixed(1).replace('.', ',') + 's', (m.n || 0) + 'F'];
+  if (m.fps) parts.push(Math.round(m.fps) + 'fps');
+  const dist = rootPathLength(m);
+  if (dist !== null) parts.push(dist.toFixed(1).replace('.', ',') + 'm');
+  return parts.join(' · ');
+}
+
+// Root-Bahnlänge in Metern (Summe der Teilstrecken) oder null (In-place)
+function rootPathLength(m) {
+  if (!m.root || !m.yaw || !m.n || m.root.length < 2 * m.n) return null;
+  let d = 0;
+  for (let i = 1; i < m.n; i++) {
+    const dx = m.root[2 * i] - m.root[2 * (i - 1)];
+    const dy = m.root[2 * i + 1] - m.root[2 * (i - 1) + 1];
+    d += Math.hypot(dx, dy);
+  }
+  return d;
+}
+
+// Detail-Zeilen pro Clip („zeige wie die Clips sind")
+function buildClipDetails(rec, active) {
+  const m = clipMotionAny(rec);
+  const rows = [];
+  const add = (k, v, hi) => rows.push({ k, v, hi });
+  const ctrlLabel = rec.ctrl === 'joy' ? 'Joystick (Training: Zufalls-Fahrbefehle · POLICY: Stick)'
+    : rec.ctrl === 'btn' ? 'Buttons (Joystick + Aktionstasten)'
+    : 'Keine (reine Referenzbahn)';
+  const dist = rootPathLength(m);
+  add('Clip', rec.name);
+  if (rec.animIndex) add('Animation #' + rec.animIndex, 'aus einer Mehr-Anim-Datei');
+  add('Ablauf', (m.n || 0) + ' Frames × ' + (m.nu || 0) + ' Gelenke @ ' + (m.fps ? Math.round(m.fps) + ' fps' : '?') + ' → ' + (m.duration || 0).toFixed(2).replace('.', ',') + 's, Endlosschleife');
+  add('Root-Bahn', dist !== null ? dist.toFixed(1).replace('.', ',') + ' m Wegstrecke (Lehrer läuft durchs Feld)' : 'In-place (Bewegung auf der Stelle)');
+  add('Lehrer-Pose', m.srcPos && m.srcJoints ? m.srcJoints.length + ' Quell-Gelenke erfasst' : 'keine Quell-Posen');
+  if (m.mergedFrom) add('assimp', m.mergedFrom + ' Fragmente zusammengeführt');
+  if (rec.motionByRobot) add('Varianten', Object.keys(rec.motionByRobot).join(', ') + ' (je Roboter retargetet)');
+  add('Steuerung', ctrlLabel, !!rec.ctrl && rec.ctrl !== 'none');
+  add('Buttons', Array.isArray(rec.buttons) && rec.buttons.length ? rec.buttons.join(', ') : '—', !!(rec.buttons && rec.buttons.length));
+  add('Gelernt', m.locomotion === false ? 'In-place-Task' : 'Locomotion (Root folgt der Bahn)');
+  if (rec.size) add('Dateigröße', (rec.size / 1048576).toFixed(1).replace('.', ',') + ' MB');
+  add('Status', (active ? 'AKTIV — wird trainiert' : 'bereit') + (policyExistsForClip(rec.id) ? ' · Policy gespeichert' : ''), active);
+  const det = document.createElement('div');
+  det.className = 'glb-clip-details hidden';
+  for (const r of rows) {
+    const line = document.createElement('div');
+    line.className = 'glb-cd-row';
+    const k = document.createElement('span');
+    k.className = 'glb-cd-k';
+    k.textContent = r.k;
+    const v = document.createElement('span');
+    v.className = 'glb-cd-v' + (r.hi ? ' hi' : '');
+    v.textContent = r.v;
+    line.append(k, v);
+    det.appendChild(line);
+  }
+  return det;
 }
 
 async function activateClip(rec) {
@@ -3317,25 +3461,12 @@ async function activateClip(rec) {
       log('Neu-Retargeting fehlgeschlagen — alter Bestand bleibt (' + (e && e.message ? e.message : e) + ')', 'warn');
     }
   }
-  // Lehrer-Ghost: Skelett-Figur sofort, Original-Mesh sobald gebaut
-  // (Drohne: nur Lehrer — der Dronen-Geist wäre statisch/irreführend)
+  // Lehrer-Ghost: v2.24.0 — der GEIST zeigt die trainierte Referenz;
+  // das Original-Mesh wird nur gebaut, wenn der Nutzer „Original" einschaltet
+  // (Standard AUS: „Mesh weg, nur den Geist" — spart RAM & Upload).
+  // Drohne: nur Lehrer — der Dronen-Geist wäre statisch/irreführend.
   S.srcScene = null;
-  if (S.ghostOn) {
-    if (!S.sim.cfg.drone) r3d.buildGhost(S.sim);
-    r3d.buildSourceGhost(S.motionClip, null);
-  }
-  if (rec.glb) {
-    try {
-      const c2 = new GlbClip(rec.glb);
-      c2.useAnimation(rec.animIndex || 0);
-      const pkg = buildGlbScene(c2);
-      if (pkg) {
-        S.srcScene = pkg;
-        if (S.ghostOn) r3d.buildSourceGhost(S.motionClip, pkg);
-        log('Lehrer: Original-Modell (' + pkg.meshCount + ' Meshes, ' + pkg.bones + ' Knochen) zeigt die Animation');
-      }
-    } catch (e) { log('Original-Modell nicht darstellbar — Skelett-Lehrer aktiv (' + e.message + ')'); }
-  }
+  applyGhosts();
   const modeInfo = ' · Referenz: ' + (({ stelle: 'AN EINER STELLE', folgt: 'AM ROBOTER GEANKERT', frei: 'FREI (Bahn ablaufen)' })[S.refMode] || 'FREI');
   if (S.sim.cfg.drone) {
     // ── v2.15.0: DROHNE — der Clip wird zum FLUGWEG (keine Gelenk-Pose);

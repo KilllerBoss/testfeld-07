@@ -95,6 +95,10 @@ export class Controls {
     this.padOn = !!on;
     const el = document.getElementById('padOverlay');
     if (el) { el.classList.toggle('on', this.padOn); el.classList.toggle('hidden', !this.padOn); }
+    // v2.24.0: body.pad-on = Leisten weichen; btnPad zeigt den Zustand (.lit)
+    // (DOM-safe: setPad wird auch ohne echtes DOM in Tests aufgerufen)
+    if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('pad-on', this.padOn);
+    if (typeof document !== 'undefined') { const pb = document.getElementById('btnPad'); if (pb) pb.classList.toggle('lit', this.padOn); }
     if (!this.padOn) {
       this.pad = { lx: 0, ly: 0, rx: 0, ry: 0 };
       this.padBtn = [0, 0, 0, 0];
@@ -140,6 +144,10 @@ export class Controls {
       el.addEventListener('pointercancel', off);
       el.addEventListener('pointerleave', (e) => { if (e.buttons === 0) off(); });
     }
+    // v2.24.0: ×-Knopf AUF dem Controller — schließt das Overlay. Er hängt
+    // als erster Flex-Item ÜBER den Pad-Tasten und ist damit nie blockiert.
+    const pc = document.getElementById('padClose');
+    if (pc) pc.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.setPad(false); this.buzz(16); });
   }
 
   /** Physisches Gamepad einlesen (falls verbunden) — überschreibt Overlay. */

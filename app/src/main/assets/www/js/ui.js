@@ -113,6 +113,14 @@ export class UI {
     const show = force !== undefined ? force : sheet.classList.contains('hidden');
     sheet.classList.toggle('hidden', !show);
     this.$('btnTrainTop').classList.toggle('lit', show);
+    // v2.24.0: Öffnet das Training, weichen KI-Trainer + Konsole — sonst
+    // überdeckt die Konsole (z45) bzw. das KI-Sheet (gleicher z, später im
+    // DOM) den trainClose-Knopf: „die Tasten blockieren den Schließen-Button”.
+    if (show) {
+      this.toggleAI(false);
+      const cp = this.consolePanel; if (cp) cp.classList.add('hidden');
+      const bc = this.$('btnConsole'); if (bc) bc.classList.remove('lit');
+    }
   }
 
   // ── KI-Trainer ──────────────────────────────────────────
@@ -121,7 +129,11 @@ export class UI {
     const show = force !== undefined ? force : sheet.classList.contains('hidden');
     sheet.classList.toggle('hidden', !show);
     this.$('btnAI').classList.toggle('lit', show);
-    if (show) this.toggleTrain(false);
+    if (show) {
+      this.toggleTrain(false);
+      const cp = this.consolePanel; if (cp) cp.classList.add('hidden');
+      const bc = this.$('btnConsole'); if (bc) bc.classList.remove('lit');
+    }
   }
 
   trainStats(stats) {

@@ -111,13 +111,17 @@
     </div>
   </div>
 
-  <!-- v2.23.0: GAMEPAD-Overlay (Controller-Layout, touch-action:none) -->
+  <!-- v2.23.0: GAMEPAD-Overlay (Controller-Layout, touch-action:none) ·
+       v2.24.0: eigener ×-Knopf als ERSTES Element der rechten Pad-Seite —
+       er hängt ÜBER den A/B/C/D-Tasten in derselben Flex-Spalte und kann
+       deshalb von keiner Taste blockiert werden -->
   <div id="padOverlay" class="ui hidden">
     <div class="padSide padSideL">
       <div id="padLZone" class="padZone"><div id="padLStick" class="padStick"></div></div>
       <span class="padLbl">VOR / SEIT</span>
     </div>
     <div class="padSide padSideR">
+      <button id="padClose" class="padClose" aria-label="Controller schließen" title="Controller schließen">×</button>
       <div class="padBtns">
         <button id="padBtnA" class="padBtn padA" aria-label="A: Hüpfen/Sprung">A</button>
         <button id="padBtnB" class="padBtn padB" aria-label="B: Hinlegen">B</button>
@@ -207,7 +211,10 @@
     <div id="glbSection" class="glb-section hidden">
       <div class="glb-head">
         <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · FÜR JEDEN ROBOTER</span>
-        <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Lehrer &amp; Geist zeigen</label>
+        <span class="glb-toggles">
+          <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Geist</label>
+          <label class="glb-toggle"><input type="checkbox" id="srcShowToggle"> Original</label>
+        </span>
       </div>
       <div class="glb-row">
         <button id="glbImportBtn" class="btn small">.glb importieren</button>

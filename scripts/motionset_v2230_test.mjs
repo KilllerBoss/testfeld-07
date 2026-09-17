@@ -11,7 +11,7 @@
 //      ⇒ exakt alter Reward), Trigger + Ablauf
 //   D) controls.js: Gamepad-State + command()-Merge
 //   E) ai.js: setTeacher/setExpertR-Validierung + Whitelist
-//   F) Verdrahtung: index.html-Panels, CSS, VERSION 2.23.0, versionCode 35
+//   F) Verdrahtung: index.html-Panels, CSS, VERSION (Pins je Release gepflegt: 2.24.0/36)
 // Aufruf: node scripts/motionset_v2230_test.mjs
 // ═══════════════════════════════════════════════════════════
 
@@ -190,8 +190,8 @@ const gradle = readFileSync(join(HERE, '..', 'app', 'build.gradle'), 'utf8');
 check('index.html: Gamepad-Overlay (2 Zonen + 4 Buttons)', ['#padOverlay', '#padLZone', '#padRZone', '#padBtnA', '#padBtnB', '#padBtnC', '#padBtnD'].every((id) => html.includes(`id="${id.slice(1)}"`)));
 check('index.html: LEHRER-Panel + Experten-Editor + btnPad', ['teacherChip', 'teacherW', 'teacherWVal', 'teacherReload', 'teacherSrc', 'erToggle', 'expertRPanel', 'btnPad'].every((id) => html.includes(`id="${id}"`)));
 check('CSS: padOverlay-Layout', css.includes('#padOverlay.on') && css.includes('.padZone') && css.includes('.padBtn'));
-check('main.js: VERSION 2.23.0 + Teacher-Verdrahtung', mainJs.includes("const VERSION = '2.23.0';") && mainJs.includes('initTeacherUI();') && mainJs.includes('downloadMotionSetBg();') && mainJs.includes('wireTeacher(t);'));
-check('build.gradle: versionCode 35 / versionName 2.23.0', gradle.includes('versionCode 35') && gradle.includes('versionName "2.23.0"'));
+check('main.js: VERSION >= 2.23.0 + Teacher-Verdrahtung (v2.24.0-Pin)', mainJs.includes("const VERSION = '2.24.0';") && mainJs.includes('initTeacherUI();') && mainJs.includes('downloadMotionSetBg();') && mainJs.includes('wireTeacher(t);'));
+check('build.gradle: versionCode 36 / versionName 2.24.0 (v2.24.0-Pin)', gradle.includes('versionCode 36') && gradle.includes('versionName "2.24.0"'));
 check('README/Doku: Datensatz dokumentiert', readFileSync(join(HERE, '..', 'dataset', 'README.md'), 'utf8').includes('Kommando-Spur'));
 
 console.log(`\n═══ ERGEBNIS: ${pass} OK · ${fails} FEHLER ═══`);

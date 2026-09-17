@@ -305,7 +305,17 @@ html, body {
   width: 44px; height: 4px; border-radius: 3px;
   background: rgba(148, 180, 220, 0.25); margin: 6px auto 12px;
 }
-.sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.sheet-head {
+  /* v2.24.0: STICKY — der Schließen-Knopf klebt oben, egal wie weit im
+     Sheet gescrollt ist (v2.6.2-Diagnose: Landscape trainClose bei y=−174) */
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  margin: -8px -18px 12px;      /* vollflächig über das Sheet-Padding */
+  padding: 14px 18px 10px;
+  background: linear-gradient(180deg, rgba(16, 22, 31, 0.99) 70%, rgba(16, 22, 31, 0.88));
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 22px 22px 0 0;
+}
 .sheet-title { font-family: var(--mono); letter-spacing: 0.26em; font-size: 13px; color: var(--amber); }
 .sheet-sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); flex: 1; }
 
@@ -475,25 +485,39 @@ html, body {
   border-top: 1px solid var(--line-soft);
   margin-top: 6px; padding-top: 12px;
 }
-.glb-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.glb-toggle { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+.glb-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
+.glb-toggles { display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
+.glb-toggle { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .glb-toggle input { accent-color: var(--amber); }
 .glb-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .glb-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .glb-clip {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   background: rgba(148, 180, 220, 0.05); border: 1px solid var(--line-soft);
   border-radius: 10px; padding: 8px 10px;
 }
 .glb-clip.active { border-color: var(--amber-dim); background: rgba(255, 157, 33, 0.08); }
-.glb-clip-name { font-family: var(--mono); font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glb-clip-name { font-family: var(--mono); font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .glb-clip-badge {
   font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: 0.08em;
   padding: 3px 7px; border-radius: 999px; flex: 0 0 auto;
   background: rgba(56, 214, 224, 0.12); color: #38d6e0;
   border: 1px solid rgba(56, 214, 224, 0.3);
 }
-.glb-clip-meta { font-family: var(--mono); font-size: 9px; color: var(--text-dim); }
+.glb-clip-meta { font-family: var(--mono); font-size: 9px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.glb-clip-chevron { font-size: 9px; color: var(--text-dim); cursor: pointer; transition: transform .15s ease; flex: 0 0 auto; }
+.glb-clip.open .glb-clip-chevron { transform: rotate(180deg); }
+/* Aufklappbare Clip-Details (v2.24.0: „wie sind die Clips?”) */
+.glb-clip-details {
+  flex-basis: 100%;
+  border-top: 1px dashed var(--line-soft); margin-top: 4px; padding-top: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.glb-clip-details.hidden { display: none !important; }
+.glb-cd-row { display: flex; gap: 8px; font-family: var(--mono); font-size: 9.5px; line-height: 1.6; }
+.glb-cd-k { color: var(--text-dim); flex: 0 0 92px; letter-spacing: 0.04em; }
+.glb-cd-v { color: var(--text); flex: 1; word-break: break-word; }
+.glb-cd-v.hi { color: var(--amber); }
 .glb-clip .btn.small { min-width: 46px; padding: 7px 8px; font-size: 10px; flex: 0 0 auto; }
 /* Steuerungs-Wahl + Animation-Toggle (v2.5.0) */
 .glb-ctrl-row { align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -788,9 +812,28 @@ body.cv-open #canvasUIBar {
 #padOverlay {
   position: fixed; inset: 0; pointer-events: none; z-index: 30;
   display: none; justify-content: space-between; align-items: flex-end;
-  padding: 0 calc(var(--sa-r) + 10px) calc(var(--sa-b) + 46px) calc(var(--sa-l) + 10px);
+  /* v2.24.0: rechts 88px frei halten — der rechte Tastenstapel (#actionCol
+     mit Gamepad-/Kamera-/Reset-/Schubsen-Taste, 60px breit @ right 18px)
+     bleibt damit IMMER antippbar, während das Gamepad offen ist. Vorher
+     lagen A/B/C/D + rechter Stick exakt darüber (Nutzer: „die Tasten
+     blockieren den Button zum Wieder-Schließen”). */
+  padding: 0 calc(var(--sa-r) + 88px) calc(var(--sa-b) + 46px) calc(var(--sa-l) + 10px);
 }
 #padOverlay.on { display: flex; }
+/* v2.24.0: ×-Knopf DES Controllers — erster Flex-Item der rechten Pad-Seite,
+   hängt also ÜBER allen Pad-Tasten: nie blockierbar. */
+.padClose {
+  width: 52px; height: 34px; margin-bottom: 2px;
+  border-radius: 17px; border: 1.4px solid rgba(255, 106, 85, 0.5);
+  background: rgba(20, 12, 12, 0.72); color: #ffb4a8;
+  font-size: 17px; line-height: 1; touch-action: manipulation;
+}
+.padClose:active { transform: scale(0.94); filter: brightness(1.4); }
+/* Gamepad offen = er owns die untere Bahn: die Tasten-Leisten (KI-Buttons /
+   Clip-Buttons) weichen — sie wären sonst unter den Pad-Zonen verdeckt und
+   nicht antippbar (stille Blockade). */
+body.pad-on .clip-buttons,
+body.pad-on .ai-buttons { display: none !important; }
 .padSide { pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .padSideL { margin-left: 4px; }
 .padSideR { margin-right: 4px; }

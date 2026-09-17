@@ -532,7 +532,9 @@ export class Renderer3D {
   }
 
   removeSourceGhost() {
-    if (!this.sourceGhost) { this._srcMotion = null; this._srcScene = null; return; }
+    // v2.24.0: IMMER null schreiben (auch beim Early-Return) — sonst bleibt
+    // sourceGhost „undefined" und die UI kann den Zustand nicht sauber lesen.
+    if (!this.sourceGhost) { this.sourceGhost = null; this._srcMotion = null; this._srcScene = null; return; }
     this.sourceGhost.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
     this.world.remove(this.sourceGhost);
     this.sourceGhost = null;
