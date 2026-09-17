@@ -690,3 +690,5 @@ Work Log:
 
 Stage Summary:
 - v2.23.0: Der LEHRER lebt — 41 Basis-Motionen (Kaggle + HuggingFace, Auto-Download) formen NUR die Belohnung, nie die Eingänge: Gewicht 0 = Animation weg, Verhalten bleibt. Soft-MoE + individuelle Router-/Experten-Rewards für ALLE 3 Roboter. Gamepad-Overlay mit A/B/C/D triggert Lehrer-Skills. Die Joystick-Frage ist beantwortet: die Kommando-Spur steckt in JEDEM Datensatz-Frame.
+
+- RELEASE ABGESCHLOSSEN: CI-Run 35271363371 SUCCESS → APK (versionCode 35 / 2.23.0) heruntergeladen; apksigner: SHA-256 1c0422b9251e47ce… IDENTISCH mit allen v2.x → update-fähig; abgelegt unter download/Trainrobot.apk (+ download/trainrobot-motionclips-v1.zip als lokale Datensatz-Kopie).
