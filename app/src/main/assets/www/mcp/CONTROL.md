@@ -63,3 +63,34 @@ fertig trainierte Motion-Policies mit aktiver GLB-Referenz:
 - Grenzen: braucht aktive GLB-Referenz + trainierte Motion-Policy (v2.16+-Policies
   verstehen die Befehl-Kanäle dank ANIM-DROPOUT am besten). Aktivierter
   Steuer-Chip „Joystick"/„Buttons" überschreibt den Mix (volle Stick-Führung).
+
+---
+
+## ★ ARDY-BRÜCKE (v2.22.0) — NEUE Bewegungen aus TEXT, ohne eigenes CUDA
+
+NVIDIA **ARDY** (Text→Motion, SIGGRAPH 2026, `github.com/nv-tlabs/ardy`) erzeugt
+**Unitree-G1-Bewegungen aus Text-Prompts** und exportiert sie als **MuJoCo-QPOS-CSV**
+(36 Spalten: root xyz + Quaternion wxyz + 29 Gelenke). ARDY braucht eine CUDA-GPU —
+aber NICHT auf dem Handy: das Notebook **`scripts/ardy_colab.ipynb`** (im GitHub-Repo)
+läuft auf einer **kostenlosen Colab-GPU (T4)**: Prompt rein → CSV raus → herunterladen.
+
+**Import in der App (nur G1):** GLB-Bewegung → **„.csv (ARDY)“** → CSV wählen.
+Das App-G1-Skelett ist mit ARDYs G1-XML **Gelenk-für-Gelenk identisch** (Name und
+Reihenfolge) — das Mapping ist 1:1, es wird nichts retargetet. Der CSV-Clip erscheint
+mit Zusatz „(ARDY)“ in der Clip-Liste und ist ein **VOLLWERTIGER Lehrer**:
+
+- Geist/Lehrer rendert die Pose direkt aus `clip.q` (`setGhostPose`)
+- **BC vortrainieren** + **PPO-Motion-Tracking** wie bei GLB-Clips
+- Referenz-Modi STELLE/FREI/FOLGT, Steuerung Keine/Joystick/Buttons je Clip
+- ⭐ **MOTION-KI-Wiedergabe** (Werkzeug `motionKi`) — Steuer-Mix, Geist-Pause, Clip-Wechsel
+- Tempo/meanSpeed/Lokomotion werden aus der Bahn berechnet (G1-Checkpoints = 25 fps)
+
+**CSV-Anforderungen:** `--model g1` bei der ARDY-Generierung (Core-Modelle haben ein
+anderes Skelett!), Zeilen pro Frame, kein Header, ≥ 2 Frames. Zusätzliche Spalten
+jenseits von 36 werden toleriert. Fehlermeldungen nennen Zeile/Spalte.
+
+**Für Gemini:** „Ich will X als Bewegung/Lehrer, habe aber kein CUDA“ → auf das
+Colab-Notebook verweisen (Schritte stehen im Notebook), danach die importierte
+Referenz wie einen GLB-Clip behandeln (Referenz antippen → BC → PPO → MOTION-KI).
+Ein eigener ARDY-Import per Werkzeug ist absichtlich NICHT nötig — der Import ist
+eine Nutzer-UI-Aktion (Dateizugriff), das Training danach ist dein Job.

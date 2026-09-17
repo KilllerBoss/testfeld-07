@@ -191,6 +191,8 @@
       <div class="glb-row">
         <button id="glbImportBtn" class="btn small">.glb importieren</button>
         <input type="file" id="glbFile" accept=".glb,model/gltf-binary" class="hidden" multiple>
+        <button id="csvImportBtn" class="btn small" title="NVIDIA ARDY — Text→Motion als G1-QPOS-CSV (erzeugt auf einer kostenlosen Cloud-GPU, siehe ardy_colab.ipynb im Repo)">.csv (ARDY)</button>
+        <input type="file" id="csvFile" accept=".csv,text/csv" class="hidden" multiple>
         <button id="bcBtn" class="btn small">BC vortrainieren</button>
         <button id="glbUnbind" class="btn small">OHNE ANIM WEITER</button>
       </div>
@@ -221,7 +223,7 @@
         <span class="glb-ctrl-label glb-btn-hint">max. 4 · lang drücken = löschen</span>
       </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus. ⭐ MOTION-KI: fertige Motion-Policy abspielen — der Clip animiert (Stil/Phase), der Joystick führt bei Bedarf (STEUER-MIX: 0 % = nur Clip, 100 % = nur Stick, dazwischen gemischt); ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter.</div>
+      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus. ⭐ MOTION-KI: fertige Motion-Policy abspielen — der Clip animiert (Stil/Phase), der Joystick führt bei Bedarf (STEUER-MIX: 0 % = nur Clip, 100 % = nur Stick, dazwischen gemischt); ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter. ★ ARDY-BRÜCKE (v2.22.0): eigene TEXTE als Bewegung — NVIDIA ARDY (Text→Motion) läuft auf einer KOSTENLOSEN Cloud-GPU (Notebook: ardy_colab.ipynb im GitHub-Repo, kein eigenes CUDA nötig); die erzeugte G1-QPOS-CSV per „.csv (ARDY)“ importieren → wird zum Lehrer wie ein GLB-Clip (Geist, BC, PPO, MOTION-KI).</div>
     </div>
     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>

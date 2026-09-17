@@ -33,6 +33,13 @@ Smartphone (CPU, ohne CUDA)**.
   lang drücken = alles verbinden (Stapel)**, 2 Finger zoomen + verschieben, Ports in
   Spalten à 20 (kein Scrollen mehr). KI-Smart-Modell: gemini-3.8-flash (gepinnt).
 - **MOTION-KI (v2.21.0, MotionBrick/AI4Animation-artig)**: fertige Motion-Policy abspielen — der GLB-Clip liefert Stil/Phase (FOLGT), der Joystick führt bei Bedarf (STEUER-MIX 0–100 %), ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter; KI-Werkzeug motionKi.
+- **★ ARDY-BRÜCKE (v2.22.0) — Text→Motion als Lehrer OHNE eigenes CUDA**: NVIDIA ARDY
+  (SIGGRAPH 2026, `github.com/nv-tlabs/ardy`) erzeugt G1-Bewegungen aus Text-Prompts;
+  das Notebook **`scripts/ardy_colab.ipynb`** läuft auf einer kostenlosen Colab-GPU
+  (kein eigenes CUDA nötig) und liefert G1-QPOS-CSVs (36 Spalten, 25 fps). Import per
+  **„.csv (ARDY)“** im GLB-Bereich — das App-G1-Skelett ist mit ARDYs G1-XML
+  Gelenk-für-Gelenk identisch (1:1, kein Retargeting); der Clip ist ein vollwertiger
+  Lehrer (Geist, BC, PPO-Motion-Tracking, MOTION-KI).
 - **GLB-Animations-Training (G1)**: eigene `.glb`-Clips (Mixamo-ähnlich)
   importieren → automatisches Retargeting auf die G1-Kinematik
   (Quaternion-Weltdelta → Gelenkachse, Fuß-Boden-Anpassung) →

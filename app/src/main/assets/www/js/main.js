@@ -20,6 +20,7 @@ import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
 import { ParallelTrainer, suggestWorkerCount } from './parallel.js';
 import { DR_LEVELS, drFromLevel, restoreDrModel } from './dr.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
+import { parseQposCsv, ARDY_G1_NQ } from './qpos.js'; // v2.22.0: ARDY-Brücke (Lehrer ohne CUDA)
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey, AI_DOCS } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
@@ -29,7 +30,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.21.0';
+const VERSION = '2.22.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -2679,6 +2680,9 @@ function wireUI() {
   // ── GLB-Bewegung (G1) ──────────────────────────────────
   document.getElementById('glbImportBtn').addEventListener('click', () => document.getElementById('glbFile').click());
   document.getElementById('glbFile').addEventListener('change', onGlbFiles);
+  // v2.22.0: ARDY-Brücke — QPOS-CSV (NVIDIA ARDY, Text→Motion) als Lehrer
+  document.getElementById('csvImportBtn').addEventListener('click', () => document.getElementById('csvFile').click());
+  document.getElementById('csvFile').addEventListener('change', onCsvFiles);
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
   // ── Steuerung je Clip (v2.5.0): Keine = Referenzbahn, Joystick = Zufalls-
   // Kommandos im Training + echte Stick-Steuerung im POLICY-Modus.
@@ -2887,6 +2891,53 @@ async function onGlbFiles(e) {
       ui.toast('GLB-Import fehlgeschlagen: ' + err.message, true, 4000);
     }
   }
+}
+
+// ═══ v2.22.0 „ARDY-BRÜCKE“: QPOS-CSV-Import (NVIDIA ARDY — Text→Motion)
+// ═══ ARDY läuft OHNE eigenes CUDA auf einer kostenlosen Cloud-GPU
+// ═══ (Colab — Notebook: scripts/ardy_colab.ipynb im Repo). Die G1-QPOS-CSV
+// ═══ (36 Spalten: root+Quat+29 Gelenke — Gelenkliste identisch zur App)
+// ═══ wird direkt zum Lehrer-Clip: Geist, BC, PPO-Motion-Tracking,
+// ═══ MOTION-KI-Wiedergabe — genau wie GLB, nur ohne Retargeting.
+async function onCsvFiles(e) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  if (!S.sim) { ui.toast('Roboter lädt noch — kurz warten', true); return; }
+  if (S.robotId !== 'g1') {
+    ui.toast('ARDY-QPOS ist ein G1-Skelett — bitte zuerst den G1 wählen', true, 4000);
+    log('ARDY-CSV abgelehnt: aktuell ist nicht der G1 aktiv (Skelett passt nur zum G1)', 'warn');
+    return;
+  }
+  for (const f of files) {
+    ui.$('glbStatus').textContent = 'Importiere ' + f.name + ' …';
+    try {
+      const text = await f.text();
+      const motion = parseQposCsv(text, { name: f.name.replace(/\.csv$/i, '') });
+      const packed = packMotion(motion);
+      const rec = {
+        id: 'qpos_' + Date.now() + '_' + Math.floor(Math.random() * 1e4),
+        name: motion.name + ' (ARDY)',
+        size: f.size,
+        glb: null,               // kein GLB → nie Re-Retarget
+        src: 'qpos',
+        motion: packed,          // gepackt — wie beim GLB-Pfad (Legacy-Feld, G1)
+        motionByRobot: { g1: packed },
+      };
+      await putClip(rec);
+      log('ARDY-Referenz importiert: ' + rec.name + ' — ' + motion.n + ' Frames × ' + motion.nu +
+        ' Gelenke @ ' + motion.fps + ' fps (' + motion.duration.toFixed(1) + 's, Tempo ' +
+        motion.meanSpeed.toFixed(2) + ' m/s) — 1:1-Mapping, kein Retargeting nötig', 'ok');
+      ui.$('glbStatus').textContent = 'ARDY-Clip bereit: ' + rec.name + ' (' + motion.duration.toFixed(1) + 's)';
+      ui.toast('ARDY-Motion importiert: ' + rec.name + ' — jetzt „Referenz“ antippen');
+    } catch (err) {
+      console.error(err);
+      log('ARDY-CSV-Fehler: ' + err.message, 'err');
+      ui.$('glbStatus').textContent = 'Fehler: ' + err.message;
+      ui.toast('ARDY-Import fehlgeschlagen: ' + err.message, true, 5000);
+    }
+  }
+  await refreshClipList();
 }
 
 let _bcRunning = false;
@@ -3157,7 +3208,8 @@ async function activateClip(rec) {
   const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
     : S.task.ctrlMode === 'btn' ? ' · Steuerung: BUTTONS (Training würfelt Fahrbefehle + Trigger, POLICY-Modus: Stick + Tasten unten)'
     : ' · Steuerung: keine (rein Referenzbahn)';
-  log('GLB-Referenz aktiv: ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
+  const srcInfo = rec.src === 'qpos' ? 'ARDY-Referenz aktiv' : 'GLB-Referenz aktiv';
+  log(srcInfo + ': ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);
   refreshClipList().catch(() => {});
 }

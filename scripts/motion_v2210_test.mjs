@@ -131,7 +131,7 @@ console.log('\n[5] VERDRAHTUNG — Panel + Handler + Doku');
   const mtSrc = await readFile(path.join(WWW, 'js/motiontask.js'), 'utf8');
   const ctrlDoc = await readFile(path.join(WWW, 'mcp/CONTROL.md'), 'utf8');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(/VERSION = '2\.21\.0'/.test(mainSrc), 'main.js VERSION 2.21.0');
+  ok(/VERSION = '2\.2[2-9]\.|VERSION = '2\.\d{2,}\./.test(mainSrc) || parseInt((mainSrc.match(/VERSION = '(\d+)\.(\d+)\./) || [0, 0, 0])[2], 10) >= 22, 'main.js VERSION ≥ 2.22.0');
   ok(/id="mkiChip"/.test(htmlSrc) && /id="mkiMix"/.test(htmlSrc) && /id="mkiPause"/.test(htmlSrc) && /id="mkiNext"/.test(htmlSrc), 'Panel: Chip + Mix-Slider + Pause + Next');
   ok(/MOTION-KI<\/span>/.test(htmlSrc), 'Panel-Zeile „MOTION-KI"');
   ok(/function setMotionKi\(on\)/.test(mainSrc) && /setMotionKi\(!S\.motionKi\.on\)/.test(mainSrc), 'setMotionKi + Chip-Handler');
@@ -142,7 +142,8 @@ console.log('\n[5] VERDRAHTUNG — Panel + Handler + Doku');
   ok(/tr_motionki_v1/.test(mainSrc), 'Persistenz tr_motionki_v1');
   ok(/ghostPaused/.test(mtSrc) && /if \(!this\.ghostPaused\) \{/.test(mtSrc), 'motiontask: ghostPaused friert die Phase');
   ok(/MOTION-KI/.test(ctrlDoc) && /Steuer-Mix/.test(ctrlDoc), 'CONTROL.md: MOTION-KI dokumentiert');
-  ok(/versionCode 33/.test(gradle) && /versionName "2\.21\.0"/.test(gradle), 'build.gradle 33 / 2.21.0');
+  const gc = parseInt((gradle.match(/versionCode (\d+)/) || [0, 0])[1], 10);
+  ok(gc >= 34, 'build.gradle versionCode ≥ 34', String(gc));
 }
 
 console.log('\n════════════════════════════════');
