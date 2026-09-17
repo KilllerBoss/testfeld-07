@@ -1,4 +1,4 @@
-# CANVAS.md — NETZ-CANVAS (v2.17.0)
+# CANVAS.md — NETZ-CANVAS (v2.18.0 · VOLLBILD + MULTI-TOUCH)
 
 Der **Netz-Canvas** ist ein Node-Editor im Trainrobot: Architekturen aus Policy-Karten
 bauen, mit Kabeln verdrahten, **live auf dem Roboter ausführen** und **je Karte
@@ -14,6 +14,21 @@ trainieren**. Du (Gemini) hast vollen Zugriff über 4 Werkzeuge:
 **LIES zuerst** `canvasGraph {cmd:"state"}` — dann kennst du Ports, IDs und Kabel.
 
 ---
+
+## 0) Bedienung (v2.18.0: VOLLBILD + Multi-Touch)
+
+Das Canvas öffnet als **VOLLBILD-Overlay** (drei Punkte, ⛶-los — die App läuft nativ
+im Immersive Mode, das Overlay füllt also den ganzen Bildschirm):
+
+- **1 Finger** auf leerer Fläche = Fläche verschieben · auf Kartenkopf = Karte ziehen ·
+  auf Port = Kabel antippen/z ziehen
+- **2 Finger** = **Pinch-Zoomen** (um den Finger-Mittelpunkt, 0,22×–2,4×) und
+  **gleichzeitig Verschieben** — der Welt-Punkt unter den Fingern bleibt unter den Fingern
+- **Zoom-Buttons** `−` / `+` zoomen um die Fläche-Mitte, `⤢` passt alle Karten ein,
+  Mausrad zoomt um den Cursor (Desktop/Emulator)
+- Die **UI-Elemente** (canvasUI: Buttons/Slider/Joystick/Gauge) schweben als Leiste
+  ÜBER dem Vollbild-Canvas und bleiben dort immer bedienbar — auch im CANVAS-Modus
+- Schließen: `×` oben rechts (Graph bleibt je Roboter gespeichert)
 
 ## 1) Aufbau des Graphen
 

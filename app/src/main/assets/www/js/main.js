@@ -29,7 +29,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy } from './canvas.js'; // v2.17.0: NETZ-CANVAS
 
-const VERSION = '2.17.0';
+const VERSION = '2.18.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -2036,6 +2036,7 @@ function toggleCanvasSheet(force) {
   if (!sheet) return;
   const show = force !== undefined ? force : sheet.classList.contains('hidden');
   sheet.classList.toggle('hidden', !show);
+  document.body.classList.toggle('cv-open', !!show); // v2.18.0: UI-Leiste über Vollbild-Canvas
   const btn = document.getElementById('btnCanvas');
   if (btn) btn.classList.toggle('lit', show);
   if (show) {

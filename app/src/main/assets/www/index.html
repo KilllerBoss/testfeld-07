@@ -218,9 +218,8 @@
     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>
 
-  <!-- ── v2.17.0: NETZ-CANVAS ────────────────────────────────── -->
+  <!-- ── v2.17.0: NETZ-CANVAS (v2.18.0: VOLLBILD + Multi-Touch) ── -->
   <section id="canvasSheet" class="sheet cv-sheet hidden">
-    <div class="sheet-grab"></div>
     <div class="sheet-head">
       <span class="sheet-title">NETZ-CANVAS</span>
       <span id="cvInfo" class="sheet-sub">Policies bauen, verbinden, ausführen</span>
@@ -247,9 +246,10 @@
       <div id="cvWorld" class="cv-world">
         <svg id="cvWires" class="cv-wires" width="6000" height="4000"></svg>
       </div>
+      <div id="cvGesture" class="cv-gesture">2 FINGER: ZOOMEN · VERSCHIEBEN&nbsp;&nbsp;|&nbsp;&nbsp;1 FINGER: ZIEHEN · VERBINDEN</div>
     </div>
     <div id="cvEdit" class="cv-edit hidden"></div>
-    <div class="train-note">LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
+    <div class="train-note">VOLLBILD-CANVAS: 1 Finger zieht Karten/Kabel, 2 Finger zoomen und verschieben die Fläche (Zoom-Buttons unten + ⤢ passt alles ein). LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
   </section>
 
   <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->

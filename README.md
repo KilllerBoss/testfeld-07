@@ -19,6 +19,14 @@ Smartphone (CPU, ohne CUDA)**.
   (KI-Welt mit eigenen Objekten bauen), **setUI** (App-Designs + Vorschlags-Chips),
   **setMoE** (Expertenanzahl), **rWx-Zielterme** (goTo/stayNear/Höhenband/…),
   Plugins (Werkstatt), Art-MCP-Wissbasis (mcp/*.md).
+- **Netz-Canvas (v2.18.0, Vollbild + Multi-Touch)**: Node-Editor — links alle
+  Sensor-Eingänge einzeln, rechts alle Aktuatoren einzeln, dazwischen Policy-Karten
+  (nIn/nOut/Hidden-Schichten/Neuronen frei) mit Kabeln verbinden, Belohnung je
+  Karten-ID (global oder eigene Formel), Router über trainierten Policies, eigene
+  UI-Elemente (Buttons/Slider/Joystick/Code) als Ein-/Ausgänge, Graph läuft live im
+  Modus CANVAS und trainiert PPO pro Karte; Gemini steuert alles über
+  canvasGraph/canvasReward/canvasRun/canvasUI. Bedienung: 1 Finger ziehen/verbinden,
+  2 Finger zoomen + verschieben, Zoom-Buttons/⤢/Mausrad.
 - **GLB-Animations-Training (G1)**: eigene `.glb`-Clips (Mixamo-ähnlich)
   importieren → automatisches Retargeting auf die G1-Kinematik
   (Quaternion-Weltdelta → Gelenkachse, Fuß-Boden-Anpassung) →

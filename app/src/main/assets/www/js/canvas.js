@@ -1145,8 +1145,15 @@ export class CanvasBoard {
     this.dom = els;
     this._codeFn = {};
     this._zoom(els);
-    // Pan auf dem Hintergrund
+    // Pan/Pinch auf dem Hintergrund (v2.18.0: Zwei-Finger-Zoom + -Verschieben)
     els.world.addEventListener('pointerdown', (e) => this._worldDown(e));
+    // v2.18.0: Mausrad-Zoom um die Cursor-Position (Desktop/Tests)
+    if (els.viewport) {
+      els.viewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        this.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+      }, { passive: false });
+    }
     // Buttons
     if (els.runBtn) els.runBtn.addEventListener('click', () => { this.hooks.buzz(); this.hooks.toggleRun(); });
     if (els.trainBtn) els.trainBtn.addEventListener('click', () => { this.hooks.buzz(); if (this.training) this.stopTraining(); else this.startTraining(); });
@@ -1155,6 +1162,8 @@ export class CanvasBoard {
 
   _zoom(els) {
     this._vz = this.graph.view.z || 0.85;
+    this._zmin = 0.22;  // v2.18.0: Vollbild → weiter rauszoomen (IO-Karten sind hoch)
+    this._zmax = 2.4;
     const apply = () => {
       els.world.style.transform = 'translate(' + this.graph.view.x + 'px,' + this.graph.view.y + 'px) scale(' + this._vz + ')';
       this.graph.view.z = this._vz;
@@ -1164,24 +1173,49 @@ export class CanvasBoard {
   }
   _viewApply() { if (this._applyView) this._applyView(); }
 
+  /** Hintergrund: 1 Finger = verschieben · 2 Finger = Pinch-ZOOM um Finger-Mitte + Verschieben (v2.18.0). */
   _worldDown(e) {
     if (e.target.closest('.cv-node') || e.target.closest('button') || e.target.closest('input')) return;
     const el = this.dom.world;
     const pointers = this._pan = this._pan || new Map();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    el.setPointerCapture(e.pointerId);
+    try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetische Events (Tests) ohne echte Pointer-Id */ }
+    this._pinch = null; // Baseline bei jedem Finger-Wechsel neu aufbauen
+    this._vpRect = null; // Anker-Rect frisch messen
     const move = (ev) => {
       if (!pointers.has(ev.pointerId)) return;
+      const prev = pointers.get(ev.pointerId); // v2.18.0 FIX: alte Position VOR dem Überschreiben lesen (v2.17.0-Bug: Delta war immer 0 — Pan ging nicht)
       pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
       if (pointers.size === 1) {
-        const p = pointers.get(ev.pointerId);
-        this.graph.view.x += (ev.clientX - p.x);
-        this.graph.view.y += (ev.clientY - p.y);
+        this.graph.view.x += ev.clientX - prev.x;
+        this.graph.view.y += ev.clientY - prev.y;
+        this._viewApply();
+      } else if (pointers.size >= 2) {
+        // Pinch: Zoom um den MITTELPUNKT der beiden Finger + Verschieben mit der Mitte
+        // v2.18.0: Mitte von CLIENT-Koordinaten in viewport-relative umrechnen
+        // (view.x/y ist relativ zum Viewport — ohne Abzug springt der Anker um den Rand-Offset)
+        if (!this._vpRect) this._vpRect = this.dom.viewport.getBoundingClientRect();
+        const pts = [...pointers.values()].slice(0, 2);
+        const cx = (pts[0].x + pts[1].x) / 2 - this._vpRect.left;
+        const cy = (pts[0].y + pts[1].y) / 2 - this._vpRect.top;
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        if (!this._pinch || this._pinch.n !== pointers.size) {
+          this._pinch = { d: dist || 1, cx, cy, n: pointers.size, z: this._vz, vx: this.graph.view.x, vy: this.graph.view.y };
+          return;
+        }
+        const target = this._pinch.z * Math.max(0.2, Math.min(8, dist / this._pinch.d));
+        const z1 = Math.max(this._zmin, Math.min(this._zmax, target));
+        const wx = (this._pinch.cx - this._pinch.vx) / this._pinch.z;
+        const wy = (this._pinch.cy - this._pinch.vy) / this._pinch.z;
+        this._vz = z1;
+        this.graph.view.x = cx - wx * z1;
+        this.graph.view.y = cy - wy * z1;
         this._viewApply();
       }
     };
     const up = (ev) => {
       pointers.delete(ev.pointerId);
+      this._pinch = null; // Rest-Finger pannt weiter OHNE Sprung (Delta-basiert)
       if (!pointers.size) {
         el.removeEventListener('pointermove', move);
         el.removeEventListener('pointerup', up);
@@ -1195,8 +1229,22 @@ export class CanvasBoard {
     el.addEventListener('pointercancel', up);
   }
 
-  zoomBy(f) {
-    this._vz = Math.max(0.35, Math.min(1.6, this._vz * f));
+  /** Zoom um einen Bildschirmpunkt (px/py = clientX/clientY; ohne Angabe = Viewport-Mitte). */
+  zoomBy(f, px, py) {
+    const vp = this.dom.viewport;
+    if (!vp) { this._vz = Math.max(this._zmin, Math.min(this._zmax, this._vz * f)); this._viewApply(); this.scheduleSave(); return; }
+    const r = vp.getBoundingClientRect();
+    const cx = px != null ? px - r.left : r.width / 2;
+    const cy = py != null ? py - r.top : r.height / 2;
+    const z0 = this._vz;
+    const z1 = Math.max(this._zmin, Math.min(this._zmax, z0 * f));
+    if (z1 === z0) return;
+    // Weltpunkt unter dem Anker halten → geometrisch sauberer Zoom
+    const wx = (cx - this.graph.view.x) / z0;
+    const wy = (cy - this.graph.view.y) / z0;
+    this._vz = z1;
+    this.graph.view.x = cx - wx * z1;
+    this.graph.view.y = cy - wy * z1;
     this._viewApply();
     this.scheduleSave();
   }
@@ -1209,7 +1257,7 @@ export class CanvasBoard {
       maxX = Math.max(maxX, nd.x + 200); maxY = Math.max(maxY, nd.y + 160);
     }
     if (minX > maxX) return;
-    const z = Math.min(1.2, Math.max(0.35, Math.min(vp.clientWidth / (maxX - minX + 80), vp.clientHeight / (maxY - minY + 80))));
+    const z = Math.min(1.2, Math.max(this._zmin, Math.min(vp.clientWidth / (maxX - minX + 80), vp.clientHeight / (maxY - minY + 80))));
     this._vz = z;
     this.graph.view.x = 20 - minX * z;
     this.graph.view.y = 20 - minY * z;
@@ -1318,19 +1366,24 @@ export class CanvasBoard {
       foot.textContent = 'R – · 0 Schritte';
       el.append(foot);
     }
-    // Ziehen am Kopf
+    // Ziehen am Kopf (v2.18.0: Drag-Lock — ein Zeiger pro Karte, zweiter Finger startet keinen Zweitzug)
     head.addEventListener('pointerdown', (e) => {
       if (e.target.closest('.cv-nbtn')) return;
+      if (this._dragPtr != null) return;
       e.stopPropagation();
+      this._dragPtr = e.pointerId;
       const startX = e.clientX, startY = e.clientY, ox = nd.x, oy = nd.y;
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetische Events */ }
       const move = (ev) => {
+        if (this._dragPtr !== ev.pointerId) return;
         nd.x = Math.round(ox + (ev.clientX - startX) / this._vz);
         nd.y = Math.round(oy + (ev.clientY - startY) / this._vz);
         el.style.left = nd.x + 'px'; el.style.top = nd.y + 'px';
         this._drawWires();
       };
-      const up = () => {
+      const up = (ev) => {
+        if (ev && ev.pointerId !== undefined && this._dragPtr !== ev.pointerId) return;
+        this._dragPtr = null;
         el.removeEventListener('pointermove', move);
         el.removeEventListener('pointerup', up);
         el.removeEventListener('pointercancel', up);
