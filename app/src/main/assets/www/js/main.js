@@ -27,9 +27,9 @@ import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnunge
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
-import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy } from './canvas.js'; // v2.17.0: NETZ-CANVAS
+import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph } from './canvas.js'; // v2.19.0: + buildPlanGraph
 
-const VERSION = '2.18.0';
+const VERSION = '2.19.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -820,7 +820,7 @@ function observeState() {
         kabel: d.links.length,
         training: d.training,
         modusAktiv: S.mode === 'canvas',
-        werkzeuge: 'canvasGraph/canvasReward/canvasRun/canvasUI (doc: CANVAS)',
+        werkzeuge: 'canvasBuild/canvasGraph/canvasReward/canvasRun/canvasUI (doc: CANVAS)',
       };
     })() : null,
   });
@@ -1039,6 +1039,7 @@ async function execTool(tool, args) {
     if (tool === 'canvasReward') return canvasRewardTool(args || {});
     if (tool === 'canvasRun') return canvasRunTool(args || {});
     if (tool === 'canvasUI') return canvasUITool(args || {});
+    if (tool === 'canvasBuild') return canvasBuildTool(args || {}); // v2.19.0: EIN Aufruf = ganze Architektur
     return 'Unbekanntes Werkzeug: ' + tool;
   } catch (e) {
     return 'Werkzeug-Fehler: ' + e.message;
@@ -2249,6 +2250,51 @@ function canvasUITool(args) {
     return 'UI-Element „' + nd.name + '" (id=' + nd.id + ', kind=' + nd.kind + ', io=' + nd.io +
       (nd.io === 'in' ? ', ' + nodeOutCount(g, nd) + ' Ausgangsport(s)' : ', 1 Eingangsport') +
       ') bereit' + codeNote + ' — verbinde es per canvasGraph cmd=link.';
+  } catch (e) { return 'Fehler: ' + e.message; }
+}
+
+/** Werkzeug 20: canvasBuild — GANZE Architektur in EINEM Aufruf (v2.19.0).
+ *  Baut Karten (+Belohnungen), Kabel und Senken-Modus atomar (buildPlanGraph),
+ *  schaltet danach Ausführung/Training und liefert der KI einen kompakten
+ *  Report mit FEHLGESCHLAGENEN Kabeln (nicht abgebrochen — korrigierbar). */
+function canvasBuildTool(args) {
+  const b = S.canvasBoard;
+  if (!b) return 'Fehler: Canvas nicht bereit';
+  const g = b.graph;
+  try {
+    let cleared = false;
+    if (args.clear) { b.clearAll(); cleared = true; }
+    const rep = buildPlanGraph(g, args);
+    // Architektur-gänderte Karten: altes PPO im Board-Map verwerfen (wie cmd=config)
+    for (const c of rep.cards) {
+      if (!c.archReset) continue;
+      const nd = findNode(g, c.id);
+      if (nd) { nd.ppo = null; b.ppo.delete(nd.id); }
+    }
+    for (const nd of g.nodes) if (nd.type === 'policy') b._ensurePPO(nd);
+    b._cacheLinks();
+    b.render();
+    b.scheduleSave();
+    // Ausführung/Training am ENDE schalten (train schließt run ein)
+    let runNote = ' — Modus unverändert';
+    if (args.train === true) { b.startTraining(); runNote = ' — Canvas-TRAINING LÄUFT (Tempo = Tempo-Slider im Trainings-Panel)'; }
+    else if (args.run === true) { setCanvasMode(true); runNote = ' — Modus CANVAS aktiv (Graph fährt den Roboter)'; }
+    else if (args.run === false) { setCanvasMode(false); runNote = ' — Modus MANUELL'; }
+    // Kompakter Report für die KI
+    const parts = [];
+    if (cleared) parts.push('Canvas geleert');
+    parts.push('Karten: ' + (rep.cards.map(c => '„' + c.name + '"(id=' + c.id + (c.isNew ? ',neu' : ',angepasst') + (c.archReset ? ',Netz-FRISCH' : '') + ')').join(', ') || 'keine'));
+    parts.push('Kabel gesetzt: ' + rep.linksOk);
+    if (rep.linksFail.length) {
+      parts.push('Kabel FEHLGESCHLAGEN: ' + rep.linksFail.slice(0, 6).map(f => '#' + f.i + ' ' + f.error).join(' | ') +
+        (rep.linksFail.length > 6 ? ' … (' + rep.linksFail.length + ' gesamt)' : '') +
+        ' — Port-Zahlen stehen in canvasGraph cmd=state; setze diese Kabel EINZELN mit cmd=link');
+    }
+    if (rep.errors.length) parts.push('Hinweise: ' + rep.errors.slice(0, 4).join(' | '));
+    const nLinked = new Set(g.links.filter(l => l.to.n === 'out').map(l => l.to.port)).size;
+    parts.push('Aktuatoren verkabelt: ' + nLinked + '/' + (g._actCount || 0) + ' (unverkabelte halten die Ruhe-/Keyframe-Pose)');
+    parts.push('Trainierbare Karten: ' + g.nodes.filter(n => n.type === 'policy' && n.trainable).length);
+    return parts.join(' · ') + runNote;
   } catch (e) { return 'Fehler: ' + e.message; }
 }
 

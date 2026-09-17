@@ -37,13 +37,18 @@ export function isCustomKey() {
   try { return !!(localStorage.getItem(LS_KEY) || '').trim(); } catch (e) { return false; }
 }
 
-const LS_MODELS = 'tr_ai_models_v1';
+// v2.19.0: Key-Bump v1→v2 = alter Modell-Cache (7 Tage TTL) auf allen Geräten ungültig,
+// damit der NUTZERWUNSCH „Gemini 3.8 flash“ sofort greift statt der alten Entdeckung.
+const LS_MODELS = 'tr_ai_models_v2';
 const LS_CHAT = 'tr_ai_chat_v1';
 const MODEL_TTL = 7 * 24 * 3600e3;
 
 // Statische Notnagel-Kette, falls ListModels blockiert ist
 // (gelistete Modelle haben immer Vorrang — Discovery vor Ort).
 const DEFAULT_FAST = ['gemini-3.5-flash-lite', 'gemini-3-flash-lite', 'gemini-2.5-flash-lite'];
+// v2.19.0: SMART ist GEPINNT auf Gemini 3.8 Flash (Nutzerwunsch) — die Entdeckung
+// nimmt es, sobald es gelistet ist, sonst die Kette darunter.
+const PREFERRED_SMART = 'gemini-3.8-flash';
 const DEFAULT_SMART = ['gemini-3.8-flash', 'gemini-3-flash', 'gemini-2.5-flash'];
 
 // ── Transport (APK: Java-Bridge, Browser: fetch) ────────────
@@ -125,7 +130,8 @@ export async function ensureModels(force = false) {
       return best;
     };
     const fast = pick(usable, true) || DEFAULT_FAST[0];
-    const smart = pick(usable, false) || fast;
+    // v2.19.0: PIN — exakt „gemini-3.8-flash“ hat Vorrang vor der Versions-Score
+    const smart = usable.includes(PREFERRED_SMART) ? PREFERRED_SMART : (pick(usable, false) || fast);
     if (fast && smart) {
       _models = { fast, smart, t: Date.now(), src: 'list' };
       try { localStorage.setItem(LS_MODELS, JSON.stringify(_models)); } catch (e) { /* egal */ }
@@ -153,19 +159,19 @@ export const AI_DOCS = [
   { doc: 'WORLD', title: 'Welten: Presets + KI-WELT (setWorld — Objekte bauen, Farben, Regeln)' },
   { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera, AUSSEHEN (setAppearance), UI (setUI)' },
   { doc: 'TRAINING', title: 'PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen' },
-  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.18.0 VOLLBILD + 2-Finger-Zoom): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasGraph/canvasReward/canvasRun/canvasUI)' },
+  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.19.0 canvasBuild = ganze Architektur in 1 Aufruf; VOLLBILD + 2-Finger-Zoom): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasBuild/canvasGraph/canvasReward/canvasRun/canvasUI)' },
 ];
 
 // ── System-Prompt ───────────────────────────────────────────
 export function buildSystemPrompt(ctx) {
   const cfgJson = JSON.stringify(ctx.current, null, 1);
-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren). v2.18.0: Das Canvas ist ein VOLLBILD-Editor mit Multi-Touch (1 Finger = Karten/Kabel ziehen, 2 Finger = Zoomen + Verschieben, Zoom-Buttons + ⤢); UI-Elemente, die du über canvasUI anlegst, erscheinen als Leiste ÜBER dem Vollbild-Canvas.
+  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren). v2.18.0: Das Canvas ist ein VOLLBILD-Editor mit Multi-Touch (1 Finger = Karten/Kabel ziehen, 2 Finger = Zoomen + Verschieben, Zoom-Buttons + ⤢); UI-Elemente, die du über canvasUI anlegst, erscheinen als Leiste ÜBER dem Vollbild-Canvas. v2.19.0: ⭐ canvasBuild — du baust GANZE Architekturen (Router + Experten, Kabel, Belohnungen je Karte, Ausführung/Training) in EINEM Werkzeug-Aufruf.
 AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
 Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
 ${cfgJson}
 
 DU BIST EIN AGENT MIT WERKZEUGEN — du darfst mehr als Einstellungen tunen:
-Du kannst in MEHREREN SCHRITTEN arbeiten: Rufe ein Werkzeug auf; die App führt es aus und schickt dir das Ergebnis als neue Nutzer-Nachricht „TOOL-ERGEBNIS: …". Danach kannst du das nächste Werkzeug aufrufen oder fertig antworten. Maximal sinnvoll: 3 Werkzeug-Schritte pro Aufgabe.
+Du kannst in MEHREREN SCHRITTEN arbeiten: Rufe ein Werkzeug auf; die App führt es aus und schickt dir das Ergebnis als neue Nutzer-Nachricht „TOOL-ERGEBNIS: …". Danach kannst du das nächste Werkzeug aufrufen oder fertig antworten. Maximal 5 Werkzeug-Schritte pro Aufgabe — plane deshalb sparsam: ganze Canvas-Architekturen baust du in EINEM canvasBuild-Aufruf (nicht Karte für Karte).
 
 WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 1. tool="applyConfig" — Trainingskonfiguration ändern. args = {patch:{…}, resetTraining:<bool>} (gleiche Felder wie „patch" unten). Nur in einem Schritt; nutze DAS statt patch.
@@ -194,6 +200,7 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 17. tool="canvasReward" — Belohnung JE KARTE. args = {card:"<id|name>"|"alle", mode:"global"|"custom", scale:0…3, w:{alive,up,vel,turn,energy,fall}}. global = Aufgaben-Belohnung × scale. custom = eigene Formel: alive (Grundbetrag), up·(upz−0,7), vel·min(1,|vfwd|), turn·min(1,|yawRate|), −energy·Σact², −fall bei Sturz.
 18. tool="canvasRun" — Canvas ausführen/trainieren. args = {run:<bool>} = Graph fährt den Roboter (Modus CANVAS) oder zurück zu MANUELL; {train:<bool>} = Canvas-TRAINING an/aus (PPO je trainierbarer Karte; impliziert run).
 19. tool="canvasUI" — EIGENE UI-Elemente als Policy-Ein-/Ausgänge. args = {node?, kind:"button"|"toggle"|"slider"|"joy"|"gauge"|"light"|"code", io:"in"|"out" (nur code), label, nOut:1…4 (code-in), code:"…" (nur code), remove:<bool>}. Eingänge liefern Werte (Button 1/0, Slider 0…1, Joystick X/Y) und können in Karten verdrahtet werden; Ausgänge zeigen Werte (gauge/light). code-in MUSS je Schritt ein Array mit nOut Zahlen zurückgeben: ctx = {t, dt, state}.
+20. tool="canvasBuild" — ⭐ GANZE ARCHITEKTUR IN EINEM AUFRUF (v2.19.0, bevorzugt!). args = {clear:<bool>, cards:[{name, nIn, nOut, hidden:[…], trainable?, lr?, reward?}], links:[{from:{node,port}, to:{node,port}}], sink?"residual"|"direct", run?:<bool>, train?:<bool>}. cards = Policy-Karten (bestehende Karten mit gleichem Namen werden umkonfiguriert statt doppelt angelegt; reward = {mode:"global"|"custom", scale, w:{alive,up,vel,turn,energy,fall}}). links verbinden NAMEN: from {node:"io", port:<Sensor-Port>}, to {node:"Experte Gehen", port:0} … bis {node:"out", port:<Aktuator-Port>}. FEHLER PRO KABEL werden gesammelt statt abzubrechen — du bekommst im TOOL-ERGEBNIS die Report-Liste und kannst fehlende Kabel einzeln mit canvasGraph cmd=link nachsetzen. Port-Zahlen je Sensor/Aktuator liefert canvasGraph {cmd:"state"}.
 
 PLUGIN-API (das Objekt „api" in runCode/writePlugin):
 - api.log(msg), api.toast(msg, istFehler) — Konsole/Toast
@@ -233,7 +240,7 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin|canvasGraph|canvasReward|canvasRun|canvasUI   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin|canvasGraph|canvasReward|canvasRun|canvasUI|canvasBuild   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
@@ -241,7 +248,8 @@ ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 
 WANN WAS?
 - Einstellungen/Belohnungen → applyConfig. Buttons/Joystick → addButton/mapJoystick. Aufgabe wechseln (Aufstehen/Landen/Gehen) → setScenario. Sturz-Teleport an/aus → setFallMode.
-- ARCHITEKTUREN BAUEN („bau einen Router über meine Geh-Policy“, „verbinde den Joystick mit einem neuen Netz“, „eigene Belohnung für eine Karte“) → ERST readDoc "CANVAS", dann canvasGraph (Karten add/link/config/import), canvasReward (Belohnung je Karte), canvasRun (ausführen/trainieren), canvasUI (eigene UI-Elemente als Ein-/Ausgänge). Der Canvas läuft je Roboter getrennt und bleibt gespeichert.
+- ARCHITEKTUREN BAUEN („bau einen Router über meine Geh-Policy“, „Soft-MoE mit 4 Experten“, „eigene Belohnung für eine Karte“) → ⭐ SOFORT canvasBuild mit dem KOMPLETTEN Plan in EINEM Aufruf (Karten + Kabel + Belohnungen + train) — NIEMALS nur beschreiben, NIEMALS nachfragen, NIEMALS Karte für Karte mit canvasGraph (das schafft das Schritt-Limit nicht!). Nur fehlende Einzelkabel danach mit canvasGraph cmd=link nachsetzen. Port-Namen/-Zahlen: canvasGraph {cmd:"state"} oder doc CANVAS. Der Canvas läuft je Roboter getrennt und bleibt gespeichert.
+  REZEPT „ROUTER + EXPERTEN“ (z. B. MicroDuck: Gehen/Drehen/Gleichgewicht/Aufstehen, geringe Latenz = kleine Netze): (1) 4 Experten-Karten hidden:[48,32] mit EIGENEN custom-Belohnungen — Gehen w:{vel:1.2,alive:0.3,energy:0.002,fall:2} · Drehen w:{turn:1.2,alive:0.3,fall:2} · Gleichgewicht w:{up:1.5,alive:0.3,fall:3} · Aufstehen w:{up:2,alive:0.3,fall:0}; (2) Experten mit io-Sensorik und ihren Aktuator-Ports von out verkabeln (Kanäle via canvasGraph cmd=state); (3) Router-Karte (hidden:[48]) auf dieselbe Sensorik, Router-Ausgänge auf FREIE Eingänge der Experten (dort nIn erhöhen) oder parallel auf out; (4) canvasBuild mit train:true — erst die Experten lernen, dann Router trainieren und Experten einfrieren (trainable:false).
 - AUSSEHEN („mach die Ente pink“, „Chrome-Ente“, „G1 Kopf rot“) → setAppearance (erst {list:true}). WELT („bau einen Turm“, „stell einen Ball hin“, „mach die Welt leer“) → setWorld. APP-DESIGN/Schnellstart-Buttons („Neon-Design“) → setUI. MicroDuck-Experten („nur 3 Experten“) → setMoE (Policy startet neu — vorher warnen!).
 - Fragen zu obs-Aufbau/Sensoren, Architektur, Belohnungs-Feldern oder Steuerung → erst readDoc (ART-MCP), dann antworten/handeln.
 - „Zeig, was der Roboter sieht" → setCamera on:true (nur Anzeige).
@@ -334,7 +342,35 @@ export function validatePatch(raw) {
 }
 
 // ── Tool-Aufruf validieren (Agent-Vollzugriff, hart geklemmt) ─
-const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera', 'setAppearance', 'setWorld', 'setUI', 'setMoE'];
+// v2.19.0: CANVAS-WERKZEUGE ENDLICH IN DER WHITELIST (kritischer Bug bis v2.18.0:
+// canvasGraph/canvasReward/canvasRun/canvasUI fehlten hier → validateToolCall lieferte
+// null → der Aufruf wurde STUMM verworfen — Gemini schien „nichts zu machen").
+// NEU: canvasBuild (Ein-Schritt-Architekturbauer für Router/Experten-Pläne).
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera', 'setAppearance', 'setWorld', 'setUI', 'setMoE',
+  'canvasGraph', 'canvasReward', 'canvasRun', 'canvasUI', 'canvasBuild'];
+const _intOrUndef = (v, lo, hi) => {
+  if (v === undefined) return undefined;
+  const n = Math.round(+v);
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : undefined;
+};
+const _strOrUndef = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+const _hiddenArr = (h) => (Array.isArray(h) ? h.map(x => Math.round(+x)).filter(x => Number.isFinite(x)).map(x => Math.max(8, Math.min(256, x))).slice(0, 3) : undefined);
+const _portRef = (r) => {
+  if (!r || typeof r !== 'object') return null;
+  const node = typeof r.node === 'string' ? r.node.trim().slice(0, 24) : '';
+  if (!node) return null;
+  const port = Math.max(0, Math.round(+r.port || 0));
+  return { node, port };
+};
+const _cardRewardArgs = (w) => {
+  if (!w || typeof w !== 'object') return undefined;
+  const bounds = { alive: [0, 0.5], up: [0, 2], vel: [0, 2], turn: [0, 2], energy: [0, 0.01], fall: [0, 5] };
+  const out = {};
+  for (const [k, [lo, hi]] of Object.entries(bounds)) {
+    if (w[k] !== undefined && Number.isFinite(+w[k])) out[k] = Math.max(lo, Math.min(hi, +w[k]));
+  }
+  return Object.keys(out).length ? out : undefined;
+};
 export function validateToolCall(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
   const tool = typeof parsed.tool === 'string' ? parsed.tool.trim() : '';
@@ -407,6 +443,104 @@ export function validateToolCall(parsed) {
   // v2.14.0: SOFT-MOE — {experts: 2–8}
   if (tool === 'setMoE') {
     return { tool, args: { experts: Number.isFinite(parseFloat(args.experts)) ? parseFloat(args.experts) : null } };
+  }
+  // ── v2.17.0/2.19.0: CANVAS-WERKZEUGE (jetzt mit harter Validierung) ──
+  if (tool === 'canvasGraph') {
+    const cmd = ['state', 'add', 'link', 'unlink', 'remove', 'config', 'clear', 'import'].includes(args.cmd) ? args.cmd : 'state';
+    const out = { cmd };
+    if (cmd === 'add') {
+      out.type = ['policy', 'ui', 'const'].includes(args.type) ? args.type : null;
+      out.nIn = _intOrUndef(args.nIn, 1, 64);
+      out.nOut = _intOrUndef(args.nOut, 1, 32);
+      out.hidden = _hiddenArr(args.hidden);
+      out.name = _strOrUndef(args.name, 24);
+      out.kind = _strOrUndef(args.kind, 10);
+      out.io = args.io === 'in' || args.io === 'out' ? args.io : undefined;
+      out.label = _strOrUndef(args.label, 16);
+      out.values = Array.isArray(args.values) ? args.values.slice(0, 8).map(v => +v).filter(Number.isFinite) : undefined;
+    }
+    if (cmd === 'link' || cmd === 'unlink') {
+      out.from = _portRef(args.from);
+      out.to = _portRef(args.to);
+      if (cmd === 'unlink' && typeof args.id === 'string') out.id = args.id;
+    }
+    if (cmd === 'remove' || cmd === 'config' || cmd === 'import') {
+      out.node = _strOrUndef(args.node, 24);
+      if (cmd === 'config') {
+        out.name = _strOrUndef(args.name, 24);
+        out.nIn = _intOrUndef(args.nIn, 1, 64);
+        out.nOut = _intOrUndef(args.nOut, 1, 32);
+        out.hidden = _hiddenArr(args.hidden);
+        if (args.trainable !== undefined) out.trainable = !!args.trainable;
+        if (Number.isFinite(+args.lr)) out.lr = Math.max(1e-5, Math.min(3e-3, +args.lr));
+        if (Number.isFinite(+args.T)) out.T = Math.round(Math.max(128, Math.min(4096, +args.T)));
+        out.sink = args.sink === 'direct' || args.sink === 'residual' ? args.sink : undefined;
+        out.values = Array.isArray(args.values) ? args.values.slice(0, 8).map(v => +v).filter(Number.isFinite) : undefined;
+      }
+    }
+    return { tool, args: out };
+  }
+  if (tool === 'canvasReward') {
+    return { tool, args: {
+      card: _strOrUndef(args.card, 24),
+      mode: args.mode === 'global' || args.mode === 'custom' ? args.mode : undefined,
+      scale: Number.isFinite(+args.scale) ? Math.max(0, Math.min(3, +args.scale)) : undefined,
+      w: _cardRewardArgs(args.w),
+    } };
+  }
+  if (tool === 'canvasRun') {
+    const out = {};
+    if (args.run !== undefined) out.run = !!args.run;
+    if (args.train !== undefined) out.train = !!args.train;
+    return { tool, args: out };
+  }
+  if (tool === 'canvasUI') {
+    return { tool, args: {
+      node: _strOrUndef(args.node, 24),
+      kind: ['button', 'toggle', 'slider', 'joy', 'gauge', 'light', 'code'].includes(args.kind) ? args.kind : undefined,
+      io: args.io === 'in' || args.io === 'out' ? args.io : undefined,
+      label: _strOrUndef(args.label, 16),
+      name: _strOrUndef(args.name, 20),
+      nOut: _intOrUndef(args.nOut, 1, 4),
+      code: typeof args.code === 'string' ? args.code.slice(0, 2000) : undefined,
+      remove: !!args.remove,
+    } };
+  }
+  // v2.19.0: EIN-SCHRITT-BAUPLAN — ganze Architektur (z. B. Router + 4 Experten) in EINEM Aufruf
+  if (tool === 'canvasBuild') {
+    const out = { clear: !!args.clear };
+    if (Array.isArray(args.cards)) {
+      out.cards = args.cards.slice(0, 16).map(c => {
+        if (!c || typeof c !== 'object') return null;
+        const card = {
+          name: _strOrUndef(c.name, 24),
+          nIn: _intOrUndef(c.nIn, 1, 64),
+          nOut: _intOrUndef(c.nOut, 1, 32),
+          hidden: _hiddenArr(c.hidden),
+        };
+        if (c.trainable !== undefined) card.trainable = !!c.trainable;
+        if (Number.isFinite(+c.lr)) card.lr = Math.max(1e-5, Math.min(3e-3, +c.lr));
+        if (Number.isFinite(+c.T)) card.T = Math.round(Math.max(128, Math.min(4096, +c.T)));
+        if (c.reward && typeof c.reward === 'object') {
+          card.reward = {
+            mode: c.reward.mode === 'custom' ? 'custom' : (c.reward.mode === 'global' ? 'global' : undefined),
+            scale: Number.isFinite(+c.reward.scale) ? Math.max(0, Math.min(3, +c.reward.scale)) : undefined,
+            w: _cardRewardArgs(c.reward.w),
+          };
+        }
+        return card;
+      }).filter(Boolean);
+    }
+    if (Array.isArray(args.links)) {
+      out.links = args.links.slice(0, 240).map(l => {
+        const from = l && _portRef(l.from), to = l && _portRef(l.to);
+        return from && to ? { from, to } : null;
+      }).filter(Boolean);
+    }
+    out.sink = args.sink === 'direct' || args.sink === 'residual' ? args.sink : undefined;
+    if (args.run !== undefined) out.run = !!args.run;
+    if (args.train !== undefined) out.train = !!args.train;
+    return { tool, args: out };
   }
   return { tool, args: {} }; // observe
 }

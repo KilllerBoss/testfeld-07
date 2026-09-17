@@ -1,17 +1,23 @@
-# CANVAS.md — NETZ-CANVAS (v2.18.0 · VOLLBILD + MULTI-TOUCH)
+# CANVAS.md — NETZ-CANVAS (v2.19.0 · CANVASBUILD + VOLLBILD/MULTI-TOUCH)
 
 Der **Netz-Canvas** ist ein Node-Editor im Trainrobot: Architekturen aus Policy-Karten
 bauen, mit Kabeln verdrahten, **live auf dem Roboter ausführen** und **je Karte
-trainieren**. Du (Gemini) hast vollen Zugriff über 4 Werkzeuge:
+trainieren**. Du (Gemini) hast vollen Zugriff über 5 Werkzeuge:
 
 | Werkzeug | Zweck |
 |---|---|
-| `canvasGraph` | Graph lesen/bauen: Karten hinzufügen, Kabel setzen, konfigurieren, App-Policy importieren |
+| `canvasBuild` | ⭐ **GANZE Architektur in EINEM Aufruf** (Karten + Kabel + Belohnungen + run/train) — BEVORZUGT! |
+| `canvasGraph` | Graph lesen (`cmd:"state"`) + Einzel-Änderungen (add/link/unlink/remove/config/clear/import) |
 | `canvasReward` | Belohnung/Bestrafung je Karten-ID (global oder eigene Formel) |
 | `canvasRun` | Canvas ausführen (Modus CANVAS) oder Canvas-Training an/aus |
 | `canvasUI` | Eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Ein-/Ausgänge |
 
-**LIES zuerst** `canvasGraph {cmd:"state"}` — dann kennst du Ports, IDs und Kabel.
+**SO BAUST DU (v2.19.0):** Wenn der Nutzer eine Architektur beschreibt („Router mit 4
+Experten“, „Soft-MoE in Canvas“), rufst du **EINMAL** `canvasBuild` mit dem KOMPLETTEN
+Plan auf — nicht beschreiben, nicht nachfragen, nicht Karte für Karte. Port-Zahlen für
+die Kabel holst du vorher (oder danach für Korrekturen) via `canvasGraph {cmd:"state"}`.
+Fehler einzelner Kabel brechen den Plan NICHT ab — das TOOL-ERGEBNIS listet sie, du
+gesetzt sie dann einzeln mit `canvasGraph {cmd:"link"}` nach.
 
 ---
 
@@ -58,6 +64,55 @@ Dazwischen deine Knoten:
 **Wertfluss**: io/ui/const → Karten → Karten → out. KARTE → KARTE ist erlaubt
 (so baut man Router/Hierarchien), Rückkopplung (Zyklen) werden abgelehnt.
 Jeder Eingang hat genau EIN Kabel (neues Kabel ersetzt das alte), jeder Ausgang ebenfalls.
+
+## 0b) ⭐ canvasBuild — ganze Architektur, EIN Aufruf (v2.19.0)
+
+```json
+canvasBuild {
+  "clear": true,
+  "cards": [
+    {"name":"Experte Gehen", "nIn":20, "nOut":14, "hidden":[48,32],
+     "reward":{"mode":"custom","w":{"vel":1.2,"alive":0.3,"energy":0.002,"fall":2}}},
+    {"name":"Experte Drehen", "nIn":20, "nOut":14, "hidden":[48,32],
+     "reward":{"mode":"custom","w":{"turn":1.2,"alive":0.3,"fall":2}}},
+    {"name":"Experte Gleichgewicht", "nIn":20, "nOut":14, "hidden":[48,32],
+     "reward":{"mode":"custom","w":{"up":1.5,"alive":0.3,"fall":3}}},
+    {"name":"Experte Aufstehen", "nIn":20, "nOut":14, "hidden":[48,32],
+     "reward":{"mode":"custom","w":{"up":2,"alive":0.3,"fall":0}}},
+    {"name":"Router", "nIn":20, "nOut":4, "hidden":[48],
+     "reward":{"mode":"global","scale":1}}
+  ],
+  "links": [
+    {"from":{"node":"io","port":0},  "to":{"node":"Experte Gehen","port":0}},
+    {"from":{"node":"io","port":0},  "to":{"node":"Router","port":0}},
+    {"from":{"node":"Router","port":0}, "to":{"node":"out","port":0}}
+  ],
+  "sink": "residual",
+  "train": true
+}
+```
+
+- `cards`: bestehende Karten mit GLEICHEM Namen werden UMKONFIGURIERT statt doppelt
+  angelegt (Architekturwechsel = frisches Netz — steht im Report).
+- `links`: `node` ist io / out / Karten-NAME / Karten-ID; `port` 0-basiert.
+  Sensor-Port-Zahlen: `canvasGraph {cmd:"state"}` → Port-Namen je Kanal.
+- `sink:"residual"` = App-Semantik (tanh × actSpan um Ruhepose), `"direct"` = Rohwert
+  (z. B. Drohnen- Rotoren — Drohne: Residuum auf Hover-Schub).
+- `train:true` startet Canvas-Training sofort (impliziert Modus CANVAS);
+  `run:true` nur ausführen; `run:false` zurück zu MANUELL.
+- REPORT im TOOL-ERGEBNIS: Karten (neu/angepasst), Kabel ok / FEHLGESCHLAGEN mit
+  Grund, Aktuatoren verkabelt x/y, trainierbare Karten. Fehlende Kabel einzeln
+  mit `canvasGraph {cmd:"link"}` nachsetzen.
+
+### Rezept: SOFT-MOE-ARTIGE ROUTER-ARCHITEKTUR (4 Experten, geringe Latenz)
+1. **canvasBuild** wie oben: 4 Experten + Router, kleine Hidden-Schichten ([48,32],
+   Router [48]) — kleine Netze = wenig Latenz auf dem Handy-CPU.
+2. Experten mit **unterschiedlichen custom-Belohnungen**: Gehen→vel, Drehen→turn,
+   Gleichgewicht→up+fall, Aufstehen→up (ohne fall-Malus, der Roboter DARF liegen).
+3. `train:true` — Experten lernen parallel (je Karte eigenes PPO).
+4. Später: Router trainieren, Experten `trainable:false` (config oder canvasBuild
+   erneuter Aufruf mit gleichen Namen + trainable:false — Netze BLEIBEN erhalten).
+5. Fortschritt: `canvasGraph {cmd:"state"}` → je Karte steps/lastReward.
 
 ## 2) Policy-Karten
 

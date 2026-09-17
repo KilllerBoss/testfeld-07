@@ -667,6 +667,75 @@ export function removeLink(g, spec) {
   return g.links.length < before;
 }
 
+// ── 5b) EIN-SCHRITT-BAUPLAN (v2.19.0, für canvasBuild) ─────
+// Baut eine ganze Architektur ATOMAR in einen Graphen: Karten (anlegen ODER
+// bestehende gleichnamige umkonfigurieren), Belohnungen, Kabel, Senken-Modus.
+// Reine Graph-Funktion (kein DOM/Board) → unit-testbar. Fehler pro Kabel
+// werden gesammelt statt abzubrechen (ein falscher Port killt nicht den Plan).
+// plan = { cards:[{name?, nIn, nOut, hidden?, trainable?, lr?, T?, reward?}],
+//          links:[{from:{node,port}, to:{node,port}}], sink?:"residual"|"direct" }
+// Report = { cards:[{id, name, isNew, archReset}], linksOk, linksFail:[{i, error}], errors:[…] }
+export function buildPlanGraph(g, plan) {
+  const rep = { cards: [], linksOk: 0, linksFail: [], errors: [] };
+  if (!plan || typeof plan !== 'object') { rep.errors.push('Plan fehlt'); return rep; }
+  const specs = Array.isArray(plan.cards) ? plan.cards.slice(0, LIMITS.policies) : [];
+  const links = Array.isArray(plan.links) ? plan.links.slice(0, LIMITS.links) : [];
+  if (Array.isArray(plan.cards) && plan.cards.length > LIMITS.policies) rep.errors.push('Nur die ersten ' + LIMITS.policies + ' Karten wurden angelegt (Limit)');
+  if (Array.isArray(plan.links) && plan.links.length > LIMITS.links) rep.errors.push('Nur die ersten ' + LIMITS.links + ' Kabel wurden gesetzt (Limit)');
+  // 1) Karten: neu ODER bestehende (gleicher Name) umkonfigurieren
+  for (const spec of specs) {
+    if (!spec || typeof spec !== 'object') { rep.errors.push('Karten-Spezifikation ungültig'); continue; }
+    const name = String(spec.name || '').trim().slice(0, 24);
+    let nd = name ? findNodeByName(g, name) : null;
+    if (nd && nd.type !== 'policy') nd = null;
+    let isNew = false, archReset = false;
+    if (!nd) {
+      try { nd = addPolicyNode(g, spec); isNew = true; }
+      catch (e) { rep.errors.push('Karte „' + (name || '?') + '": ' + e.message); continue; }
+    } else {
+      // Bestehende Karte: Architektur/Daten übernehmen (wie cmd=config)
+      let archChanged = false;
+      if (Array.isArray(spec.hidden) && spec.hidden.length) {
+        const h = spec.hidden.slice(0, LIMITS.hiddenLayers).map(n => Math.round(Math.max(LIMITS.hiddenNeurons[0], Math.min(LIMITS.hiddenNeurons[1], +n || 0)))).filter(n => n >= LIMITS.hiddenNeurons[0] && n <= LIMITS.hiddenNeurons[1]);
+        if (h.length && h.join(',') !== nd.hidden.join(',')) { archChanged = true; nd.hidden = h; }
+      }
+      if (spec.nIn !== undefined) { const v = Math.round(+spec.nIn); if (v >= LIMITS.nIn[0] && v <= LIMITS.nIn[1] && v !== nd.nIn) { archChanged = true; nd.nIn = v; } }
+      if (spec.nOut !== undefined) { const v = Math.round(+spec.nOut); if (v >= LIMITS.nOut[0] && v <= LIMITS.nOut[1] && v !== nd.nOut) { archChanged = true; nd.nOut = v; } }
+      if (spec.trainable !== undefined) nd.trainable = !!spec.trainable;
+      if (Number.isFinite(+spec.lr)) nd.lr = Math.max(1e-5, Math.min(3e-3, +spec.lr));
+      if (Number.isFinite(+spec.T)) nd.T = Math.round(Math.max(128, Math.min(4096, +spec.T)));
+      if (archChanged) { archReset = true; nd.ppo = null; }
+      // Kabel auf tote Ports der neuen Architektur entfernen (wie cmd=config)
+      g.links = g.links.filter(l => {
+        const tN = findNode(g, l.to.n), fN = findNode(g, l.from.n);
+        if (tN && tN.id === nd.id && l.to.port >= nd.nIn) return false;
+        if (fN && fN.id === nd.id && l.from.port >= nd.nOut) return false;
+        return true;
+      });
+    }
+    if (spec.reward !== undefined) nd.reward = sanitizeCardReward(spec.reward);
+    rep.cards.push({ id: nd.id, name: nd.name, isNew, archReset });
+  }
+  // 2) Kabel: Namen/IDs auflösen, addLink (Kapazität + Zyklus-Check), Fehler sammeln
+  for (let i = 0; i < links.length; i++) {
+    const l = links[i];
+    if (!l || typeof l !== 'object' || !l.from || !l.to) { rep.linksFail.push({ i, error: 'from/to fehlen' }); continue; }
+    const fN = findNode(g, l.from.node) || findNodeByName(g, l.from.node);
+    const tN = findNode(g, l.to.node) || findNodeByName(g, l.to.node);
+    if (!fN) { rep.linksFail.push({ i, error: 'Quelle „' + l.from.node + '" nicht gefunden' }); continue; }
+    if (!tN) { rep.linksFail.push({ i, error: 'Ziel „' + l.to.node + '" nicht gefunden' }); continue; }
+    const res = addLink(g, { n: fN.id, port: Math.round(+l.from.port || 0) }, { n: tN.id, port: Math.round(+l.to.port || 0) });
+    if (res.ok) rep.linksOk++;
+    else rep.linksFail.push({ i, error: res.error });
+  }
+  // 3) Senken-Modus der Aktuatoren (residual = App-Semantik, direct = Rohwert)
+  if (plan.sink === 'residual' || plan.sink === 'direct') {
+    const outN = findNode(g, OUT_ID);
+    if (outN) for (let a = 0; a < (g._actCount || outN.sink.length || 0); a++) outN.sink[a] = plan.sink;
+  }
+  return rep;
+}
+
 /** Topologische Reihenfolge der Policy-Karten (nur die mit Ausgängen). */
 export function policyOrder(g) {
   const pol = g.nodes.filter(n => n.type === 'policy');
