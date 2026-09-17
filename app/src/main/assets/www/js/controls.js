@@ -11,6 +11,16 @@ export class Controls {
     this.climb = 0;       // Drohne: +1 steigen, −1 sinken
     this.resetRequest = false;
 
+    // ── v2.23.0 GAMEPAD: virtueller Controller-Overlay + physisches Gamepad ──
+    // padOn: Overlay sichtbar · pad = linke/rechte Stick-Position + Buttons
+    // padBtn = [bA, bB, bC, bD] (0/1) — A Hüpfen/Sprung · B Hinlegen/Sinken ·
+    // C Aufstehen/Steigen · D Stopp. Physisches Gamepad (Gamepad-API) wird
+    // automatisch eingelesen (Axes 0/1 links, 2/3 rechts, Buttons 0–3).
+    this.padOn = false;
+    this.pad = { lx: 0, ly: 0, rx: 0, ry: 0 };
+    this.padBtn = [0, 0, 0, 0];
+    this._padGamepadSeen = false;
+
     // KI-belegbare Joystick-Map (agent.js validiert + persistiert);
     // maxV/maxW skalieren das Tempo, expo formt die Stick-Kurve.
     this.joyMap = { maxV: 1.0, maxW: 1.0, invertX: false, invertY: false, deadzone: 0.08, expo: 0.4 };
@@ -30,6 +40,7 @@ export class Controls {
     this._setupCanvas();
     this._setupButtons();
     this._setupKeyboard();
+    this._setupPad(); // v2.23.0
   }
 
   buzz(ms = 12) { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) { /* egal */ } }
@@ -77,6 +88,74 @@ export class Controls {
     this.stickX = dx / max;
     this.stickY = -dy / max;
     setStick(dx, dy);
+  }
+
+  // ── v2.23.0: GAMEPAD-Overlay (Controller-Layout) ──────────
+  setPad(on) {
+    this.padOn = !!on;
+    const el = document.getElementById('padOverlay');
+    if (el) { el.classList.toggle('on', this.padOn); el.classList.toggle('hidden', !this.padOn); }
+    if (!this.padOn) {
+      this.pad = { lx: 0, ly: 0, rx: 0, ry: 0 };
+      this.padBtn = [0, 0, 0, 0];
+      document.querySelectorAll('#padOverlay .padStick').forEach((s) => { s.style.transform = 'translate(0px, 0px)'; });
+    }
+    return this.padOn;
+  }
+
+  _setupPad() {
+    const root = document.getElementById('padOverlay');
+    if (!root) return;
+    const stick = (zoneId, stickId, set) => {
+      const zone = document.getElementById(zoneId);
+      const knob = document.getElementById(stickId);
+      let id = null;
+      const move = (e) => {
+        const rect = zone.getBoundingClientRect();
+        const R = rect.width / 2 - 12;
+        let dx = e.clientX - (rect.left + rect.width / 2);
+        let dy = e.clientY - (rect.top + rect.height / 2);
+        const len = Math.hypot(dx, dy);
+        if (len > R) { dx = dx / len * R; dy = dy / len * R; }
+        set(dx / R, -dy / R); // oben = +
+        knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      };
+      zone.addEventListener('pointerdown', (e) => { if (id !== null) return; id = e.pointerId; zone.setPointerCapture(e.pointerId); this.buzz(6); move(e); });
+      zone.addEventListener('pointermove', (e) => { if (e.pointerId === id) move(e); });
+      const end = (e) => { if (e.pointerId !== id) return; id = null; set(0, 0); knob.style.transform = 'translate(0px, 0px)'; };
+      zone.addEventListener('pointerup', end);
+      zone.addEventListener('pointercancel', end);
+    };
+    stick('padLZone', 'padLStick', (x, y) => { this.pad.lx = x; this.pad.ly = y; });
+    stick('padRZone', 'padRStick', (x, y) => { this.pad.rx = x; this.pad.ry = y; });
+    const btns = [
+      ['padBtnA', 0], ['padBtnB', 1], ['padBtnC', 2], ['padBtnD', 3],
+    ];
+    for (const [bid, i] of btns) {
+      const el = document.getElementById(bid);
+      if (!el) continue;
+      el.addEventListener('pointerdown', (e) => { e.preventDefault(); this.padBtn[i] = 1; el.classList.add('hold'); this.buzz(14); });
+      const off = () => { this.padBtn[i] = 0; el.classList.remove('hold'); };
+      el.addEventListener('pointerup', off);
+      el.addEventListener('pointercancel', off);
+      el.addEventListener('pointerleave', (e) => { if (e.buttons === 0) off(); });
+    }
+  }
+
+  /** Physisches Gamepad einlesen (falls verbunden) — überschreibt Overlay. */
+  _pollGamepad() {
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) return false;
+    const pads = navigator.getGamepads();
+    for (const p of pads) {
+      if (!p || !p.connected) continue;
+      const dz = (v) => Math.abs(v) < 0.12 ? 0 : v;
+      this.pad.lx = dz(p.axes[0] || 0); this.pad.ly = -dz(p.axes[1] || 0);
+      this.pad.rx = dz(p.axes[2] || 0); this.pad.ry = -dz(p.axes[3] || 0);
+      this.padBtn = [0, 1, 2, 3].map((i) => (p.buttons[i] && p.buttons[i].pressed) ? 1 : 0);
+      this._padGamepadSeen = true;
+      return true;
+    }
+    return false;
   }
 
   // ── Kamera-Gesten auf der 3D-Fläche ──────────────────────
@@ -204,13 +283,20 @@ export class Controls {
   }
 
   // Einheitlicher Fahrbefehl für alle Roboter (inkl. KI-Map + Tempofaktor)
+  // v2.23.0: Gamepad mischt mit — linker Stick: vor/seit, rechter: drehen
+  // (+ Drohne: ry = steigen/sinken). Buttons separat via padBtn konsumieren.
   command(cfg) {
     const jm = this.joyMap;
-    const sy = this._mapAxis(this.stickY, jm.invertY);
-    const sx = this._mapAxis(this.stickX, jm.invertX);
+    const gp = this._pollGamepad();
+    const sy = this._mapAxis(this.stickY, jm.invertY) + (this.padOn || gp ? this.pad.ly : 0);
+    const sx = this._mapAxis(this.stickX, jm.invertX) + (this.padOn || gp ? this.pad.lx : 0);
+    const prx = this.padOn || gp ? this.pad.rx : 0;
+    const pry = this.padOn || gp ? this.pad.ry : 0;
+    if (cfg.drone && Math.abs(pry) > 0.05) this.climb = Math.max(-1, Math.min(1, pry));
     return {
-      vx: sy * cfg.speedMax * jm.maxV,
-      yaw: -sx * cfg.yawMax * jm.maxW,
+      vx: Math.max(-1, Math.min(1, sy)) * cfg.speedMax * jm.maxV,
+      vy: Math.max(-1, Math.min(1, sx)) * cfg.speedMax * jm.maxV, // quer (Gamepad)
+      yaw: -this._mapAxis(this.stickX, jm.invertX) * cfg.yawMax * jm.maxW - prx * cfg.yawMax,
       climb: this.climb,
     };
   }

@@ -29,6 +29,56 @@ export function defaultExpertNames(drone) {
   return drone ? ['hover', 'move', 'turn', 'descend'] : ['stand', 'walk', 'turn', 'recover'];
 }
 
+// ── v2.23.0: EXPERTEN-REWARDS PRO ROBOTER ──
+// Jeder Roboter (g1/duck/x2) bekommt SEIN eigenes Reward-Profil:
+// Basis = EXPERT_R, überschreibbar per localStorage (UI-Slider +
+// KI-Trainer setExpertR). Deep-Merge (flach + die 4 Expert-Objekte).
+const _ER_NUM = {
+  routerBonus: [0, 2, 0.25], wrongPenalty: [0, 1, 0.06], domMin: [0, 1, 0.35],
+  fallenUp: [-1, 0.99, 0.45], upOk: [-1, 0.99, 0.85], moveVx: [0, 4, 0.15], moveWz: [0, 4, 0.45],
+};
+const _ER_OBJ = { stand: { up: [0, 2, 0.10], quiet: [0, 2, 0.08] }, walk: { speed: [0, 2, 0.30] },
+                 turn: { rate: [0, 2, 0.25] }, recover: { rise: [0, 3, 1.2], uprightOnce: [0, 3, 0.8] } };
+function clampNum(v, lo, hi, dflt) {
+  const x = typeof v === 'number' && Number.isFinite(v) ? v : parseFloat(v);
+  return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : dflt;
+}
+/** Overrides für einen Roboter laden (localStorage tr_expertR_<id>). */
+export function expertROverride(robotId) {
+  try { return JSON.parse(localStorage.getItem('tr_expertR_' + (robotId || '')) || 'null'); } catch (e) { return null; }
+}
+/** Effektives Reward-Profil: EXPERT_R ⊕ Override(robotId). */
+export function expertRFor(robotId) {
+  const ov = expertROverride(robotId);
+  if (!ov || typeof ov !== 'object') return { ...EXPERT_R, stand: { ...EXPERT_R.stand }, walk: { ...EXPERT_R.walk }, turn: { ...EXPERT_R.turn }, recover: { ...EXPERT_R.recover } };
+  const out = { ...EXPERT_R };
+  for (const k of Object.keys(_ER_NUM)) if (ov[k] !== undefined) out[k] = clampNum(ov[k], ..._ER_NUM[k]);
+  for (const k of Object.keys(_ER_OBJ)) if (ov[k] && typeof ov[k] === 'object') {
+    out[k] = { ...EXPERT_R[k] };
+    for (const kk of Object.keys(_ER_OBJ[k])) if (ov[k][kk] !== undefined) out[k][kk] = clampNum(ov[k][kk], ..._ER_OBJ[k][kk]);
+  }
+  if (ov.on !== undefined) out.on = ov.on ? 1 : 0;
+  return out;
+}
+/** Reward-Profil eines Roboters setzen (validiert + persistiert). Patch = Teilobjekt. */
+export function setExpertR(robotId, patch) {
+  if (!patch || typeof patch !== 'object') return null;
+  const cur = expertRFor(robotId);
+  const clean = {};
+  for (const k of Object.keys(_ER_NUM)) if (patch[k] !== undefined) clean[k] = clampNum(patch[k], ..._ER_NUM[k]);
+  for (const k of Object.keys(_ER_OBJ)) {
+    if (patch[k] && typeof patch[k] === 'object') {
+      clean[k] = { ...cur[k] };
+      for (const kk of Object.keys(_ER_OBJ[k])) if (patch[k][kk] !== undefined) clean[k][kk] = clampNum(patch[k][kk], ..._ER_OBJ[k][kk]);
+    }
+  }
+  if (patch.on !== undefined) clean.on = (patch.on === 1 || patch.on === true || patch.on === '1') ? 1 : 0;
+  try { localStorage.setItem('tr_expertR_' + (robotId || ''), JSON.stringify(clean)); } catch (e) { /* voll */ }
+  return expertRFor(robotId);
+}
+/** Effektives Profil als plain JSON (für UI/Gemini). */
+export function expertRSummary(robotId) { return expertRFor(robotId); }
+
 // Welche Zustände zählen für einen Experten-Namen als „passend"?
 const NAME_MATCH = {
   balance: ['stand', 'hover'],
@@ -71,8 +121,9 @@ export function droneSkillState(vz, vFwd, yawRate, tiltAbs) {
  *      prevUp, wasFallen, upz, vFwd, yawRate, speed, cmdVx, cmdYaw }
  * → { r, domIdx, domName }  (r = Zusatzbelohnung; Basis-Belohnung unverändert)
  */
-export function expertRouterReward(o) {
-  const ER = EXPERT_R;
+// er: optionales Profil (v2.23.0 pro Roboter) — ohne wird EXPERT_R benutzt
+export function expertRouterReward(o, er) {
+  const ER = er || EXPERT_R;
   const out = { r: 0, domIdx: -1, domName: null };
   if (!o.route || !o.names || !o.route.length) return out;
 

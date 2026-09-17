@@ -54,7 +54,7 @@ export function obsGroups(task, cfg) {
     g.push({ name: 'Fußkontakt', n: 2 });
     g.push({ name: 'Letzte Aktion', n: nu });
   } else if (task.kind === 'hover') {
-    // robots.js Hover-Task: 15 Kanäle
+    // robots.js Hover-Task: 15 Kanäle (+13 Soft-Kommandos seit v2.23.0 = 28)
     g.push({ name: 'Aufwärts (x,y,z)', n: 3 });
     g.push({ name: 'Winkel-Tempo (x,y,z)', n: 3 });
     g.push({ name: 'Fahrt vorwärts', n: 1 });
@@ -63,6 +63,16 @@ export function obsGroups(task, cfg) {
     g.push({ name: 'Befehl Höhe', n: 1 });
     g.push({ name: 'Befehl vx', n: 1 });
     g.push({ name: 'Letzte Aktion', n: 4 });
+    if (task.softCmd) {
+      g.push({ name: 'Soft vx', n: 1 });
+      g.push({ name: 'Soft vy', n: 1 });
+      g.push({ name: 'Soft wz', n: 1 });
+      g.push({ name: 'Skill-Hover', n: 1 });
+      g.push({ name: 'Skill-Move', n: 1 });
+      g.push({ name: 'Skill-Turn', n: 1 });
+      g.push({ name: 'Skill-Descend', n: 1 });
+      g.push({ name: 'Style 1–6', n: 6 });
+    }
   } else {
     // speed/recovery (3·nu + 17 + nFeet) + Soft-MoE-Kommandos (13) beim Duck
     g.push({ name: 'Gelenk Δ-Referenz', n: nu });

@@ -1,0 +1,486 @@
+{
+ "schema": "trainrobot-motionclips",
+ "version": "1.0.0",
+ "created": "2026-09-18",
+ "license": "CC0-1.0",
+ "description": "Prozedurale Basis-Motion-Clips als LEHRER (Belohnungs-Referenz, NIE Policy-Input). ARDY-G1-QPOS-kompatibel.",
+ "cmdTrack": {
+  "format": "[vx, vy, wz, bA, bB, bC, bD]",
+  "bA": "Hüpfen/Sprung",
+  "bB": "Hinlegen",
+  "bC": "Aufstehen",
+  "bD": "Stopp",
+  "unit": "vx/vy m/s, wz rad/s, Buttons 0/1"
+ },
+ "robots": {
+  "g1": {
+   "joints": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+   ],
+   "nq": 36
+  },
+  "duck": {
+   "joints": [
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle",
+    "neck_pitch",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle"
+   ],
+   "nq": 21
+  },
+  "x2": {
+   "joints": [],
+   "nq": 7
+  }
+ },
+ "clips": [
+  {
+   "id": "g1_idle",
+   "robot": "g1",
+   "skill": "idle",
+   "label": "Stehen/Idle (Atmen)",
+   "kind": "once",
+   "frames": 114,
+   "seconds": 3.8,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_walk",
+   "robot": "g1",
+   "skill": "walk",
+   "label": "Gehen vorwärts",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.35
+  },
+  {
+   "id": "g1_walk_back",
+   "robot": "g1",
+   "skill": "walk_back",
+   "label": "Rückwärtsgehen",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.15
+  },
+  {
+   "id": "g1_walk_side",
+   "robot": "g1",
+   "skill": "walk_side",
+   "label": "Seitwärtsgehen (links)",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.12
+  },
+  {
+   "id": "g1_turn_l",
+   "robot": "g1",
+   "skill": "turn_l",
+   "label": "Drehen links",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_turn_r",
+   "robot": "g1",
+   "skill": "turn_r",
+   "label": "Drehen rechts",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_laufen",
+   "robot": "g1",
+   "skill": "laufen",
+   "label": "Laufen (schnell)",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.55
+  },
+  {
+   "id": "g1_huepfen",
+   "robot": "g1",
+   "skill": "huepfen",
+   "label": "Hüpfen (beidbeinig)",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_sprung",
+   "robot": "g1",
+   "skill": "sprung",
+   "label": "Sprung (vertikal)",
+   "kind": "once",
+   "frames": 46,
+   "seconds": 1.53,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_weitsprung",
+   "robot": "g1",
+   "skill": "weitsprung",
+   "label": "Weitsprung",
+   "kind": "once",
+   "frames": 46,
+   "seconds": 1.53,
+   "meanSpeed": 0.9333
+  },
+  {
+   "id": "g1_liegen",
+   "robot": "g1",
+   "skill": "liegen",
+   "label": "Hinlegen (Rücken)",
+   "kind": "once",
+   "frames": 102,
+   "seconds": 3.4,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_aufstehen",
+   "robot": "g1",
+   "skill": "aufstehen",
+   "label": "Aufstehen (von Rücken)",
+   "kind": "once",
+   "frames": 93,
+   "seconds": 3.1,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_ducken",
+   "robot": "g1",
+   "skill": "ducken",
+   "label": "Ducken/Hocke",
+   "kind": "once",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_winken",
+   "robot": "g1",
+   "skill": "winken",
+   "label": "Winken (rechter Arm)",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_fusskick",
+   "robot": "g1",
+   "skill": "fusskick",
+   "label": "Fußkick",
+   "kind": "once",
+   "frames": 36,
+   "seconds": 1.2,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "g1_stopp",
+   "robot": "g1",
+   "skill": "stopp",
+   "label": "Stopp/Bremsen",
+   "kind": "once",
+   "frames": 27,
+   "seconds": 0.9,
+   "meanSpeed": 0.4597
+  },
+  {
+   "id": "g1_balance",
+   "robot": "g1",
+   "skill": "balance",
+   "label": "Gleichgewicht (Störung)",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_idle",
+   "robot": "duck",
+   "skill": "idle",
+   "label": "Stehen/Idle",
+   "kind": "once",
+   "frames": 114,
+   "seconds": 3.8,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_walk",
+   "robot": "duck",
+   "skill": "walk",
+   "label": "Watscheln vorwärts",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.12
+  },
+  {
+   "id": "duck_walk_back",
+   "robot": "duck",
+   "skill": "walk_back",
+   "label": "Rückwärts",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.06
+  },
+  {
+   "id": "duck_turn_l",
+   "robot": "duck",
+   "skill": "turn_l",
+   "label": "Drehen links",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_turn_r",
+   "robot": "duck",
+   "skill": "turn_r",
+   "label": "Drehen rechts",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_sitzen",
+   "robot": "duck",
+   "skill": "sitzen",
+   "label": "Hinsetzen",
+   "kind": "once",
+   "frames": 96,
+   "seconds": 3.2,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_liegen",
+   "robot": "duck",
+   "skill": "liegen",
+   "label": "Hinliegen",
+   "kind": "once",
+   "frames": 102,
+   "seconds": 3.4,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_aufstehen",
+   "robot": "duck",
+   "skill": "aufstehen",
+   "label": "Aufstehen",
+   "kind": "once",
+   "frames": 54,
+   "seconds": 1.8,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_huepfen",
+   "robot": "duck",
+   "skill": "huepfen",
+   "label": "Hüpfen",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_flattern",
+   "robot": "duck",
+   "skill": "flattern",
+   "label": "Flattern (Kopf/Hals)",
+   "kind": "loop",
+   "frames": 75,
+   "seconds": 2.5,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "duck_stopp",
+   "robot": "duck",
+   "skill": "stopp",
+   "label": "Stopp",
+   "kind": "once",
+   "frames": 24,
+   "seconds": 0.8,
+   "meanSpeed": 0.1946
+  },
+  {
+   "id": "duck_balance",
+   "robot": "duck",
+   "skill": "balance",
+   "label": "Gleichgewicht",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_starten",
+   "robot": "x2",
+   "skill": "starten",
+   "label": "Start (Takeoff)",
+   "kind": "once",
+   "frames": 66,
+   "seconds": 2.2,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_schweben",
+   "robot": "x2",
+   "skill": "schweben",
+   "label": "Schweben (Hover)",
+   "kind": "loop",
+   "frames": 90,
+   "seconds": 3.0,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_vorwaerts",
+   "robot": "x2",
+   "skill": "vorwaerts",
+   "label": "Vorwärtsflug",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 1.0
+  },
+  {
+   "id": "x2_rueckwaerts",
+   "robot": "x2",
+   "skill": "rueckwaerts",
+   "label": "Rückwärtsflug",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.6
+  },
+  {
+   "id": "x2_seitwaerts",
+   "robot": "x2",
+   "skill": "seitwaerts",
+   "label": "Seitwärtsflug",
+   "kind": "loop",
+   "frames": 120,
+   "seconds": 4.0,
+   "meanSpeed": 0.6
+  },
+  {
+   "id": "x2_kreisen",
+   "robot": "x2",
+   "skill": "kreisen",
+   "label": "Kreisflug",
+   "kind": "loop",
+   "frames": 180,
+   "seconds": 6.0,
+   "meanSpeed": 1.5707
+  },
+  {
+   "id": "x2_steigen",
+   "robot": "x2",
+   "skill": "steigen",
+   "label": "Steigen",
+   "kind": "loop",
+   "frames": 75,
+   "seconds": 2.5,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_sinken",
+   "robot": "x2",
+   "skill": "sinken",
+   "label": "Sinken",
+   "kind": "loop",
+   "frames": 75,
+   "seconds": 2.5,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_rolle",
+   "robot": "x2",
+   "skill": "rolle",
+   "label": "Barrel Roll (vorwärts)",
+   "kind": "once",
+   "frames": 48,
+   "seconds": 1.6,
+   "meanSpeed": 1.6
+  },
+  {
+   "id": "x2_salto",
+   "robot": "x2",
+   "skill": "salto",
+   "label": "Salto (Flip vorwärts)",
+   "kind": "once",
+   "frames": 42,
+   "seconds": 1.4,
+   "meanSpeed": 1.4
+  },
+  {
+   "id": "x2_landen",
+   "robot": "x2",
+   "skill": "landen",
+   "label": "Landung",
+   "kind": "once",
+   "frames": 66,
+   "seconds": 2.2,
+   "meanSpeed": 0.0
+  },
+  {
+   "id": "x2_notstopp",
+   "robot": "x2",
+   "skill": "notstopp",
+   "label": "Notstopp",
+   "kind": "once",
+   "frames": 30,
+   "seconds": 1.0,
+   "meanSpeed": 0.0
+  }
+ ]
+}

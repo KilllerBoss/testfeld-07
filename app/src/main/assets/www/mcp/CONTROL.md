@@ -94,3 +94,12 @@ Colab-Notebook verweisen (Schritte stehen im Notebook), danach die importierte
 Referenz wie einen GLB-Clip behandeln (Referenz antippen → BC → PPO → MOTION-KI).
 Ein eigener ARDY-Import per Werkzeug ist absichtlich NICHT nötig — der Import ist
 eine Nutzer-UI-Aktion (Dateizugriff), das Training danach ist dein Job.
+
+
+## ⭐ LEHRER-DATENSATZ + GAMEPAD (v2.23.0)
+
+**LEHRER (setTeacher {on, weight 0…1})**: Basis-Motion-Datensatz (41 Clips, HF-Auto-Download) als IMITATIONS-Belohnung. Die Animation ist NIE Policy-Eingang; weight 0 = Animation „weg" ohne Verhaltenssprung (Curriculum: hoch starten → Richtung 0 faden). Panel „GLB-BEWEGUNG → LEHRER": Chip AN/AUS, Gewicht-Slider, ⟳ NEU LADEN.
+
+**GAMEPAD (Button im Steuerungs-Block)**: linker Stick = vor/seit (vy neu steuerbar!), rechter Stick = drehen (Drohne: hoch/runter = steigen/sinken), A = Hüpfen/Sprung, B = Hinlegen (Drohne sinken), C = Aufstehen (Drohne steigen), D = Stopp. Buttons triggern LEHRER-Once-Clips + Router-Hinweise. Physische Gamepads automatisch (Gamepad-API: Axes 0–3, Buttons 0–3).
+
+**Datensatz-Kommando-Spur**: Jeder Clip-Frame trägt [vx, vy, wz, bA, bB, bC, bD] — die Joystick-/Button-Stellung beim Generieren. App-Buttons senden dieselbe Semantik → späteres Mapping 1:1 (nächstes Kommando / Skill-Auslöser).

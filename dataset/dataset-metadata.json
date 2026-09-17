@@ -1,0 +1,8 @@
+{
+  "title": "Trainrobot Motion Clips",
+  "id": "rudolfbewer/trainrobot-motionclips",
+  "subtitle": "Basis-Lehrer-Animationen (G1, MicroDuck, Skydio X2) - ARDY-G1-QPOS-kompatibel",
+  "description": "Prozedurale Basis-Motion-Clips (41 Clips, 30 fps, CC0) als Belohnungs-Lehrer f\u00fcr RL-Robotertraining: idle, gehen, laufen, h\u00fc pfen, Sprung, Weitsprung, liegen, aufstehen, drehen und mehr f\u00fcr Unitree G1 + MicroDuck; Pfad-Lehrer f\u00fcr Skydio X2. G1-CSVs im NVIDIA-ARDY-QPOS-Format (36 Spalten). Jeder Frame tr\u00e4gt eine Kommando-Spur [vx, vy, wz, Buttons] (= Joystick-/Button-Stellung).",
+  "isPrivate": false,
+  "licenses": [{ "name": "CC0-1.0" }]
+}

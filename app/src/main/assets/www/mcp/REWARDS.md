@@ -46,3 +46,8 @@ Kombiniere mit setWorld: Objekte an bekannten Koordinaten + goTo-Term = Navigati
 ## Domain Randomization (v2.11.0, Störungs-Chips; beim Duck = Curriculum-DR)
 Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen,
 Schübe (Δv-exakt), Aktions-Verzögerung 0–2 Zyklen. Jede Episode neu gewürfelt, kein Akkumulieren.
+
+
+## EXPERTEN-/ROUTER-REWARDS PRO ROBOTER (v2.23.0)
+
+Jeder Roboter (g1/duck/x2) hat ein EIGENES Profil: Router (routerBonus für passenden Experten, wrongPenalty für klaren Fehlgriff) + je Experte ein Ergebnis-Bonus (stand: up/quiet · walk: speed · turn: rate · recover: rise/uprightOnce; Drohne analog hover/move/turn/descend). UI: Trainings-Panel → GLB-BEWEGUNG → EXPERTEN → „Belohnungen…". Werkzeug: setExpertR mit Teilobjekt (nur geänderte Felder). Klemmen: Zahlen 0…2/0…3, Persistenz tr_expertR_<robot>. Wirkt sofort (Cache-Refresh). Zusätzlich rW.imit (Gewicht des Lehrers in der Basis-Belohnung, 0,6 Standard) × Lehrer-Slider.

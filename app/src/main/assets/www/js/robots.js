@@ -10,13 +10,14 @@
 
 import { clamp } from './math.js';
 import { sanitizeDr, applyDrModel, applyDrStart, drSensor, drPushDue, drDelayedAct } from './dr.js';
-import { leggedSkillState, expertRouterReward } from './skill.js'; // v2.13.0: Experten-/Router-Belohnungen
+import { leggedSkillState, droneSkillState, expertRouterReward, expertRFor, defaultExpertNames } from './skill.js'; // v2.13.0 Experten-Belohnungen · v2.23.0 pro Roboter/alle Roboter
 import { rewardTerms, resetTermState } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme (rWx)
 
 // Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
 export const HOVER_R = {
   alt: 0.3, vel: 0.2, tilt: 0.1, vz: 0.3, base: 0.02, energy: 0.0001,
   zMin: 0.1, upMin: 0.4, xyMax: 12,
+  route: 0.1, imit: 0.6, // v2.23.0: Routing-Glättung + Pfad-Lehrer (fadbar)
 };
 
 // ── Gemeinsame Gait-Baugruppen ──────────────────────────────
@@ -359,10 +360,14 @@ export function makeTrackTask(cfg) {
 }
 
 // Trainingsaufgabe Drohne: Schweben + Höhe + Vorwärts (exportiert für Tests)
+// v2.23.0: SOFT-KOMMANDO-BLOCK (13 Dims: vx,vy,wz, skill[4], style[6]) →
+// Soft-MoE-Policy läuft auch auf der Drohne (obsDim 15 → 28); EXPERTEN-
+// Rewards (droneSkillState) + Pfad-LEHRER (reward-only, fadbar).
 export function makeHoverTask(cfg) {
+  const CMD_DIMS = 13;
   return {
     kind: 'hover',
-    obsDim: 15, actDim: 4,
+    obsDim: 15 + CMD_DIMS, actDim: 4,
     // v2.15.0 — GLB-LEHRPFAD: Eine importierte GLB-Animation liefert die
     // BAHN (x, y, Höhe, Yaw), die die Drohne abfliegt (Autopilot im
     // MANUELL-Modus + POLICY-Modus via cmd-Kanäle). refMode wie beim
@@ -371,6 +376,72 @@ export function makeHoverTask(cfg) {
     pathOn: false, pathClip: null, refMode: 'frei',
     _pathT: 0, // Fortschritt auf der Bahn (Frames)
     _animT: 0, // freilaufender Animations-Zähler (Geist spielt immer)
+    // ── v2.23.0 SOFT-BLOCK + MoE + LEHRER (reward-only) ──
+    softCmd: { vx: 0, vy: 0, wz: 0 },
+    skillW: new Float64Array([1, 0, 0, 0]),
+    styleW: new Float64Array([1, 0, 0, 0, 0, 0]),
+    expertNames: defaultExpertNames(true),
+    _routeW: new Float64Array(4), _routePen: 0, _erPrevUp: 1,
+    teacher: null, teacherW: 0, _tPhase: 0, _tOnce: -1, _tOnceHold: 0, _tOnceClip: null,
+    setTeacher(loopClip, onceClip) {
+      this.teacher = { loop: loopClip || null, once: onceClip || null };
+      this._tPhase = 0; this._tOnce = -1; this._tOnceHold = 0; this._tOnceClip = null;
+    },
+    setTeacherW(w) { this.teacherW = Math.max(0, Math.min(1, +w || 0)); },
+    triggerTeacherSkill(name) {
+      const once = this.teacher && this.teacher.once;
+      if (!once || !name) return false;
+      const want = String(name).toLowerCase();
+      let c = null;
+      if (once.q) { if ((once.skill || '').toLowerCase() === want) c = once; }
+      else { for (const k of Object.keys(once)) if (k.toLowerCase() === want) { c = once[k]; break; } }
+      if (!c) return false;
+      this._tOnceClip = c; this._tOnce = 0; this._tOnceHold = 0;
+      return true;
+    },
+    _teacherTick(dt) {
+      if (!this.teacher) return;
+      if (this._tOnce >= 0) {
+        const c = this._tOnceClip || this.teacher.once;
+        if (c && this._tOnce < c.n - 1) this._tOnce += Math.max(1, Math.round(c.fps * (dt || 0.02)));
+        else { this._tOnceHold += 1; if (this._tOnceHold > 40) { this._tOnce = -1; this._tOnceHold = 0; this._tOnceClip = null; } }
+        return;
+      }
+      const c = this.teacher.loop;
+      const clip = (typeof c === 'function') ? null : c;
+      if (!clip || clip.n < 2) return;
+      const rate = clip.meanSpeed > 0.05 ? Math.max(0.4, Math.min(2.5, Math.abs(this.softCmd.vx) / clip.meanSpeed)) : 1;
+      this._tPhase = (this._tPhase + (dt || 0.02) * clip.fps * rate) % (clip.n - 1);
+    },
+    setRouting(w4) {
+      if (!w4) return;
+      if (w4.length !== this._routeW.length) this._routeW = new Float64Array(w4.length);
+      let pen = 0;
+      for (let i = 0; i < this._routeW.length; i++) { const d = w4[i] - this._routeW[i]; pen += d * d; }
+      this._routePen = pen;
+      this._routeW.set(w4);
+    },
+    refreshExpertR() { this._erProf = null; },
+    /** POLICY-Modus: Stick + Gamepad-Buttons (bA Sprung · bB sinken · bC steigen · bD Stopp-Hold). */
+    setUserCmd(vx, vy, wz, btns) {
+      this._userCmd = true;
+      const R = cfg.cmd, vmax = R.vx[1], vmin = R.vx[0];
+      this._tgt = this._tgt || { vx: 0, vy: 0, wz: 0, w: [1, 0, 0, 0], alt: this.cmd.alt };
+      const cvx = Math.max(vmin, Math.min(vmax, vx || 0));
+      const cwz = Math.max(-cfg.yawMax, Math.min(cfg.yawMax, wz || 0));
+      let w;
+      if (Math.abs(cwz) > 0.25 && Math.abs(cvx) < 0.15) w = [0.06, 0.06, 0.88, 0]; // turn
+      else if (Math.abs(cvx) >= 0.15) w = [0.05, 0.85, 0.05, 0.05];               // move
+      else w = [1, 0, 0, 0];                                                        // hover
+      this._tgt.vx = cvx; this._tgt.vy = vy || 0; this._tgt.wz = cwz; this._tgt.w = w;
+      if (Array.isArray(btns)) {
+        if (!this._btnPrev) this._btnPrev = [0, 0, 0, 0];
+        if (btns[1]) this._tgt.alt = Math.max(R.alt[0], this._tgt.alt - 0.02);     // B sinken
+        if (btns[2]) this._tgt.alt = Math.min(R.alt[1], this._tgt.alt + 0.02);     // C steigen
+        if (btns[3]) { this._tgt.vx = 0; this._tgt.wz = 0; this._tgt.w = [1, 0, 0, 0]; } // D Stopp
+        for (let i = 0; i < 4; i++) this._btnPrev[i] = btns[i] ? 1 : 0;
+      }
+    },
     setPath(clip, mode = 'frei') {
       this.pathClip = clip && clip.root ? clip : null;
       this.pathOn = !!this.pathClip;
@@ -379,6 +450,15 @@ export function makeHoverTask(cfg) {
     },
     // Fortschritt je Regeltakt (vor applyGait/applyFlight aufrufen)
     updateCmd(dt, sim) {
+      if (this._userCmd && this._tgt) {
+        // v2.23.0: POLICY-Modus — weiche Annäherung an die Stick-Ziele
+        this.softCmd.vx += (this._tgt.vx - this.softCmd.vx) * 0.08;
+        this.softCmd.vy += (this._tgt.vy - this.softCmd.vy) * 0.08;
+        this.softCmd.wz += (this._tgt.wz - this.softCmd.wz) * 0.08;
+        this.cmd.alt += ((this._tgt.alt !== undefined ? this._tgt.alt : this.cmd.alt) - this.cmd.alt) * 0.05;
+        for (let i = 0; i < 4; i++) this.skillW[i] += (this._tgt.w[i] - this.skillW[i]) * 0.1;
+      }
+      this._teacherTick(dt); // v2.23.0: Lehrer-Phase immer weiter (reward-only)
       if (!this.pathOn || !sim) return;
       const c = this.pathClip;
       // Animation läuft IMMER weiter (Geist zeigt sie — auch bei 'stelle')
@@ -441,6 +521,12 @@ export function makeHoverTask(cfg) {
       this._pathT = 0; this._animT = 0; this._holdX = undefined; this._holdY = undefined; this._holdZ = undefined;
       this.lastAct = new Float64Array(4);
       this._q = new Float64Array(4); this._p = new Float64Array(3); this._v = new Float64Array(3); this._w = new Float64Array(3);
+      // v2.23.0: Soft-Block + Lehrer zurücksetzen
+      this.softCmd.vx = 0; this.softCmd.vy = 0; this.softCmd.wz = 0;
+      this.skillW.set([1, 0, 0, 0]);
+      this._routeW.set([1, 0, 0, 0]); this._routePen = 0;
+      this._userCmd = false; this._tgt = null;
+      this._tPhase = 0; this._tOnce = -1; this._tOnceHold = 0;
     },
     sampleCmd(rng) {
       const R = cfg.cmd;
@@ -463,6 +549,10 @@ export function makeHoverTask(cfg) {
       out[o++] = this._p[2];                       // Höhe
       out[o++] = this.cmd.alt; out[o++] = this.cmd.vx;
       for (let i = 0; i < 4; i++) out[o++] = this.lastAct[i];
+      // ── v2.23.0 SOFT-KOMMANDO-BLOCK (13) — letzter Block = MoE-Router-Basis ──
+      out[o++] = this.softCmd.vx; out[o++] = this.softCmd.vy; out[o++] = this.softCmd.wz;
+      for (let i = 0; i < 4; i++) out[o++] = this.skillW[i];
+      for (let i = 0; i < 6; i++) out[o++] = this.styleW[i];
       return o;
     },
     reward(sim) {
@@ -472,6 +562,7 @@ export function makeHoverTask(cfg) {
       const pitch = Math.asin(clamp(2 * (w * y - z * x), -1, 1));
       const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
       const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+      const yawRate = this._w ? this._w[2] : sim._qvel[5]; // v2.23.0: Gier-Rate für Experten-Reward
       const c = Math.cos(yaw), s = Math.sin(yaw);
       const vFwd = c * this._v[0] + s * this._v[1];
       let r = 0;
@@ -482,6 +573,45 @@ export function makeHoverTask(cfg) {
       r += HOVER_R.base;
       let e = 0; for (let i = 0; i < 4; i++) e += this.lastAct[i] * this.lastAct[i];
       r += -HOVER_R.energy * e;
+      // ── v2.23.0 EXPERTEN-/ROUTER-Belohnung (Drohne, pro-Roboter-Profil) ──
+      if (cfg.expertR && cfg.expertR.on > 0) {
+        if (!this._erProf) this._erProf = expertRFor(cfg.id);
+        const st = droneSkillState(this._v[2], vFwd, yawRate, Math.abs(pitch) + Math.abs(roll));
+        const er = expertRouterReward({
+          state: st, route: this._routeW, names: this.expertNames,
+          prevUp: this._erPrevUp, upz, vFwd, yawRate,
+          speed: Math.hypot(this._v[0], this._v[1]),
+          cmdVx: this.softCmd.vx, cmdYaw: this.softCmd.wz,
+        }, this._erProf);
+        r += er.r;
+        this._erPrevUp = upz;
+        r += -HOVER_R.route * this._routePen;
+      }
+      // ── v2.23.0 Pfad-LEHRER (Imitation NUR als Reward — nie Obs) ──
+      if (this.teacher && this.teacherW > 0) {
+        const once = this._tOnce >= 0;
+        let clip = once ? (this._tOnceClip || this.teacher.once) : null;
+        if (!once) {
+          const lp = this.teacher.loop;
+          if (typeof lp === 'function') {
+            let di = 0; for (let e2 = 1; e2 < this._routeW.length; e2++) if (this._routeW[e2] > this._routeW[di]) di = e2;
+            clip = lp(this.expertNames[di] || 'hover') || null;
+          } else clip = lp;
+        }
+        if (clip && clip.n > 1) {
+          const fr = once ? Math.min(clip.n - 1, this._tOnce) : this._tPhase;
+          const i = Math.floor(fr), u = fr - i, j = Math.min(clip.n - 1, i + 1);
+          const wI = 1 - u;
+          const rx = (clip.root[2 * i] * wI + clip.root[2 * j] * u) - this._p[0];
+          const ry = (clip.root[2 * i + 1] * wI + clip.root[2 * j + 1] * u) - this._p[1];
+          const pos = Math.exp(-(rx * rx + ry * ry) / 0.35);
+          const href = clip.h[i] * wI + clip.h[j] * u;
+          const hh = Math.exp(-((this._p[2] - href) * (this._p[2] - href)) / 0.06);
+          const dyaw = (clip.yaw[i] * wI + clip.yaw[j] * u) - yaw;
+          const yw = Math.exp(-(dyaw * dyaw) / 0.3);
+          r += (HOVER_R.imit !== undefined ? HOVER_R.imit : 0.6) * this.teacherW * (0.45 * pos + 0.4 * hh + 0.15 * yw);
+        }
+      }
       const done = this._p[2] < HOVER_R.zMin || upz < HOVER_R.upMin || Math.abs(this._p[0]) > HOVER_R.xyMax || Math.abs(this._p[1]) > HOVER_R.xyMax;
       return { r, done };
     },
@@ -522,6 +652,19 @@ const DUCK_MOE_LEVELS = [
 ];
 
 export function makeDuckMoeTask(cfg) {
+  // v2.23.0: verallgemeinert auf ALLE Beiner (G1 + MicroDuck) — makeMoeTask.
+  // Stufen multiplizieren relativ zu speedMax/yawMax/actSpan → MicroDuck
+  // bekommt exakt die alten DUCK_MOE_LEVELS-Werte, G1 skaliert automatisch.
+  const MOE_LV = [
+    { name: 'L1 flach',     dr: { level: 'aus',    mass: 0,    motor: 0,    friction: 0,   damping: 0,   gravity: 0,    pose: 0,    vel: 0,    sensor: 0,    delay: 0, pushEvery: [0, 0] },     mx: 0.4,  mw: 0.3,  ms: 0.45 },
+    { name: 'L2 Tempo',     dr: { level: 'leicht', mass: 0.05, motor: 0.05, friction: 0.1, damping: 0,   gravity: 0,    pose: 0.02, vel: 0,    sensor: 0,    delay: 0, pushEvery: [0, 0] },     mx: 0.6,  mw: 0.5,  ms: 0.62 },
+    { name: 'L3 Lenken',    dr: { level: 'leicht', mass: 0.08, motor: 0.08, friction: 0.2, damping: 0,   gravity: 0,    pose: 0.03, vel: 0,    sensor: 0.005, delay: 0, pushEvery: [700, 1400] }, mx: 0.8,  mw: 0.8,  ms: 0.8 },
+    { name: 'L4 Störungen', dr: { level: 'mittel', mass: 0.12, motor: 0.12, friction: 0.3, damping: 0.1, gravity: 0.03, pose: 0.05, vel: 0.02, sensor: 0.01, delay: 1, pushEvery: [500, 1000] }, mx: 1.0,  mw: 1.0,  ms: 0.92 },
+    { name: 'L5 kombiniert',dr: { level: 'stark',  mass: 0.2,  motor: 0.2,  friction: 0.4, damping: 0.2, gravity: 0.06, pose: 0.08, vel: 0.04, sensor: 0.02, delay: 2, pushEvery: [350, 800] },  mx: 1.2,  mw: 1.0,  ms: 1.0 },
+  ];
+  const moeLevels = MOE_LV.map((L) => ({ name: L.name, dr: L.dr,
+    vxMax: L.mx * cfg.speedMax, wzMax: L.mw * cfg.yawMax, span: L.ms * cfg.actSpan }));
+  const lvlKey = 'tr_moe_lvl_' + cfg.id;
   const nu = cfg.nu;
   const J = cfg.jointResidual;
   const nFeet = Array.isArray(cfg.footBodies) ? cfg.footBodies.length : 0;
@@ -560,7 +703,7 @@ export function makeDuckMoeTask(cfg) {
 
     // ── Curriculum (§18) ──
     _applyLevel(lvl) {
-      const L = DUCK_MOE_LEVELS[Math.max(0, Math.min(4, lvl - 1))];
+      const L = moeLevels[Math.max(0, Math.min(4, lvl - 1))];
       this.drSpec = sanitizeDr(L.dr);
       // Alias: dr.js-Helfer (drDelayedAct/drPushDue) lesen task._dr
       this._dr = this.drSpec;
@@ -571,7 +714,7 @@ export function makeDuckMoeTask(cfg) {
     setLevel(l, silent = false) {
       this.level = Math.max(1, Math.min(5, Math.round(l)));
       this._applyLevel(this.level);
-      try { localStorage.setItem('tr_duck_lvl', String(this.level)); } catch (e) { /* ok */ }
+      try { localStorage.setItem(lvlKey, String(this.level)); } catch (e) { /* ok */ }
       if (!silent && this.onLevelUp) this.onLevelUp(this.level);
     },
 
@@ -590,7 +733,10 @@ export function makeDuckMoeTask(cfg) {
     // Dieselben 13 Kommando-Kanäle wie im Training, aber vom Stick; der
     // Zufalls-Scheduler pausiert, solange der Nutzer steuert. Wird auf das
     // Level-Kommandoband geklemmt (in-Verteilung zur trainierten Policy).
-    setUserCmd(vx, vy, wz) {
+    // v2.23.0: 4. Parameter btns = Gamepad-Buttons [bA,bB,bC,bD]
+    //   bA Hüpfen/Sprung · bB Hinlegen · bC Aufstehen · bD Stopp — steuern
+    //   den LEHRER (Once-Clip) + geben dem Router einen Skill-Hinweis.
+    setUserCmd(vx, vy, wz, btns) {
       this._userCmd = true;
       const vmax = this.vxMax || 0.1, wmax = this.wzMax || 0.3;
       const cvx = Math.max(0, Math.min(vmax, vx || 0)); // Rückwärts kennt das Training nicht
@@ -600,6 +746,66 @@ export function makeDuckMoeTask(cfg) {
       else if (cvx >= 0.05) w = [0.08, 0.88, 0.04, 0];                  // gehen
       else w = [1, 0, 0, 0];                                             // balance
       this._tgt.vx = cvx; this._tgt.vy = vy || 0; this._tgt.wz = cwz; this._tgt.w = w;
+      if (Array.isArray(btns)) {
+        if (!this._btnPrev) this._btnPrev = [0, 0, 0, 0];
+        const HINT = [[0.08, 0.88, 0.04, 0], [0, 0.1, 0.05, 0.85], [0, 0.05, 0.05, 0.9], [1, 0, 0, 0]];
+        for (let i = 0; i < 4; i++) {
+          if (btns[i] && !this._btnPrev[i]) {
+            this.triggerTeacherSkill(['huepfen', 'liegen', 'aufstehen', 'stopp'][i]);
+            this._setCmd(i === 3 ? 0 : cvx, this._tgt.vy, i === 3 ? 0 : cwz, HINT[i]);
+          }
+          this._btnPrev[i] = btns[i] ? 1 : 0;
+        }
+      }
+    },
+
+    // ── v2.23.0 LEHRER (BELohnungs-Referenz, NIE Policy-Input) ──
+    // loopClip = zyklische Grundbewegung (idle/walk/turn …), onceClip =
+    // getriggerte Aktion (Hüpfen/Liegen/Aufstehen). Das Lehrer-Gewicht
+    // (teacherW) ist live fadbar: 0 = exakt das Reward-System OHNE
+    // Animation — und da die Obs die Animation NIE enthalten, bleibt das
+    // Verhalten beim Wegfaden stabil (gewünschtes Nutzer-Ziel).
+    teacher: null, teacherW: 0, _tPhase: 0, _tOnce: -1, _tOnceHold: 0, _tOnceClip: null,
+    /** loop = Motion ODER pick(expertName)→Motion; once = Motion ODER Map {skill: Motion}. */
+    setTeacher(loopClip, onceClip) {
+      this.teacher = { loop: loopClip || null, once: onceClip || null };
+      this._tPhase = 0; this._tOnce = -1; this._tOnceHold = 0; this._tOnceClip = null;
+    },
+    setTeacherW(w) { this.teacherW = Math.max(0, Math.min(1, +w || 0)); },
+    /** Once-Skill per Namen abspielen (true = Clip gefunden). */
+    triggerTeacherSkill(name) {
+      const once = this.teacher && this.teacher.once;
+      if (!once || !name) return false;
+      const want = String(name).toLowerCase();
+      const wantN = want.replace('ue', 'u');
+      let c = null;
+      if (once.q) { // Einzel-Motion
+        const sk = (once.skill || '').toLowerCase();
+        if (sk === want || sk.replace('ue', 'u') === wantN) c = once;
+      } else { // Map {skillName: Motion}
+        for (const k of Object.keys(once)) {
+          const kn = k.toLowerCase();
+          if (kn === want || kn.replace('ue', 'u') === wantN || (want === 'sprung' && kn === 'huepfen')) { c = once[k]; break; }
+        }
+      }
+      if (!c) return false;
+      this._tOnceClip = c; this._tOnce = 0; this._tOnceHold = 0;
+      return true;
+    },
+    /** Phase je Regeltakt (0,02 s) — Tempo passt sich der Fahrt an. */
+    _teacherTick() {
+      if (!this.teacher) return;
+      if (this._tOnce >= 0) {
+        const c = this._tOnceClip || this.teacher.once;
+        if (c && this._tOnce < c.n - 1) this._tOnce += Math.max(1, Math.round(c.fps * 0.02));
+        else { this._tOnceHold += 1; if (this._tOnceHold > 40) { this._tOnce = -1; this._tOnceHold = 0; this._tOnceClip = null; } }
+        return;
+      }
+      const c = this.teacher.loop;
+      const clip = (typeof c === 'function') ? null : c;
+      if (!clip || clip.n < 2) return;
+      const rate = clip.meanSpeed > 0.05 ? Math.max(0.4, Math.min(2.5, Math.abs(this.softCmd.vx) / clip.meanSpeed)) : 1;
+      this._tPhase = (this._tPhase + 0.02 * clip.fps * rate) % (clip.n - 1);
     },
 
     reset(rng, sim, keepPose = false) {
@@ -620,7 +826,11 @@ export function makeDuckMoeTask(cfg) {
       // Curriculum-Level restaurieren + DR anwenden (v2.11.0-Helfer)
       if (this._levelLoaded === undefined) {
         let l = 1;
-        try { l = parseInt(localStorage.getItem('tr_duck_lvl') || '1', 10) || 1; } catch (e) { /* ok */ }
+        try {
+          l = parseInt(localStorage.getItem(lvlKey) || '', 10) || 0;
+          if (!l && cfg.id === 'duck') l = parseInt(localStorage.getItem('tr_duck_lvl') || '1', 10) || 1; // Migration
+          if (!l) l = 1;
+        } catch (e) { /* ok */ }
         this.level = Math.max(1, Math.min(5, l));
         this._levelLoaded = true;
       }
@@ -711,6 +921,7 @@ export function makeDuckMoeTask(cfg) {
       // trainCtrlStep: observe → act → actionToCtrl → stepN → reward → afterAct)
       if (act) for (let i = 0; i < nu; i++) this.lastAct[i] = act[i];
       this._advanceCmd();
+      this._teacherTick(); // v2.23.0: Lehrer-Phase (reward-only)
       if (this._userCmd) return; // v2.12.1: Stick-Modus — KEINE Zufalls-Segmente
       if (this.stepsLeft > 0) this.stepsLeft--;
       if (this.stepsLeft <= 0 && !this._recoverMode && this._rng) this._nextSeg(this._rng);
@@ -847,7 +1058,7 @@ export function makeDuckMoeTask(cfg) {
         r += rW.recover * (upz * upz + 4 * rise);
         this._prevUp = upz;
         this._recSteps--;
-        if (upz > 0.85 && gz > 0.065) {
+        if (upz > 0.85 && gz > cfg.done.zMin + 0.02) {
           // Wieder steht → normal weiterlaufen (Kommandos neu)
           this._recoverMode = false;
           this._pushContacts(sim);
@@ -863,15 +1074,53 @@ export function makeDuckMoeTask(cfg) {
       // turn = echte Drehung, recover = echter Aufwärts-Fortschritt).
       // KI-tunbar über expertR (KI-Trainer, applyConfig).
       if (cfg.expertR && cfg.expertR.on > 0) {
+        // v2.23.0: PROFIIL PRO ROBOTER (UI/KI-tunbar, localStorage) — Cache
+        // mit refreshExpertR() invalidierbar
+        if (!this._erProf) this._erProf = expertRFor(cfg.id);
         const st = leggedSkillState(upz, vFwd, yawRate);
         const er = expertRouterReward({
           state: st, route: this._routeW, names: this.expertNames,
           prevUp: this._erPrevUp, upz, vFwd, yawRate,
           speed: Math.hypot(this._bv[0], this._bv[1]),
           cmdVx: this.softCmd.vx, cmdYaw: this.softCmd.wz,
-        });
+        }, this._erProf);
         r += er.r;
         this._erPrevUp = upz;
+      }
+      // ── v2.23.0 LEHRER-BELohnung (Imitation, NUR Reward — nie Obs) ──
+      // Pose-RMS + Höhe + Kommando-Übereinstimmung gegen den Referenz-Clip.
+      // Gewichtung: rW.imit (Roboter-Config) × teacherW (0…1, live fadbar).
+      if (this.teacher && this.teacherW > 0) {
+        const once = this._tOnce >= 0;
+        let clip = once ? (this._tOnceClip || this.teacher.once) : null;
+        if (!once) {
+          const lp = this.teacher.loop;
+          if (typeof lp === 'function') {
+            // Loop-Clip folgt dem DOMINANTEN Experten (Router entscheidet)
+            let di = 0; for (let e2 = 1; e2 < this._routeW.length; e2++) if (this._routeW[e2] > this._routeW[di]) di = e2;
+            clip = lp(this.expertNames[di] || 'stand') || null;
+          } else clip = lp;
+        }
+        if (clip && clip.n > 1 && clip.nu === nu) {
+          const fr = once ? Math.min(clip.n - 1, this._tOnce) : this._tPhase;
+          const i = Math.floor(fr), u = fr - i, j = Math.min(clip.n - 1, i + 1);
+          const wI = 1 - u;
+          if (!this._jq2) this._jq2 = new Float64Array(nu);
+          sim.jointPositions(this._jq2);
+          let se = 0;
+          for (let a = 0; a < nu; a++) {
+            const d = this._jq2[a] - (clip.q[i * nu + a] * wI + clip.q[j * nu + a] * u);
+            se += d * d;
+          }
+          const pose = Math.exp(-se / (nu * 0.10));
+          const href = clip.h[i] * wI + clip.h[j] * u;
+          const hh = Math.exp(-((gz - href) * (gz - href)) / 0.02);
+          const ci = Math.min(clip.n - 1, i);
+          const cvx = clip.cmd[ci * 7], cvz = clip.cmd[ci * 7 + 2];
+          const vm = Math.exp(-((vFwd - cvx) * (vFwd - cvx) + (yawRate - cvz) * (yawRate - cvz)) / 0.25);
+          const wIm = (rW.imit !== undefined) ? rW.imit : 0.6;
+          r += wIm * this.teacherW * (0.6 * pose + 0.25 * hh + 0.15 * vm);
+        }
       }
       // DR-Schübe (v2.11.0)
       if (this.drSpec && this.drSpec.pushEvery[1] > 0) {
@@ -938,6 +1187,8 @@ export function makeDuckMoeTask(cfg) {
       this._routePen = pen;
       this._routeW.set(w4);
     },
+    /** v2.23.0: Profil-Cache invalidieren (nach setExpertR aus UI/KI). */
+    refreshExpertR() { this._erProf = null; },
 
     actionToCtrl(sim, act) {
       // v2.11.0 DR-Aktionsverzögerung
@@ -953,6 +1204,9 @@ export function makeDuckMoeTask(cfg) {
 
 // ── Die drei Roboter (v2.14.0: MicroDuck + G1 + Drohne) ────────────────────────────────────────
 // Alle gleichberechtigt (ungebunden) — dieselbe Stick-Steuerung.
+// v2.23.0: makeMoeTask = verallgemeinerter Soft-MoE-Task — ALLE Roboter
+// können Soft-MoE (Router + Experten) mit individuellen Rewards pro Roboter.
+export const makeMoeTask = makeDuckMoeTask; // Alias VOR der Nutzung (TDZ)
 
 const ROBOTS = {
   g1: {
@@ -972,10 +1226,12 @@ const ROBOTS = {
       },
     },
     gait: makeMarch,
-    task: makeTrackTask,
+    task: makeMoeTask, // v2.23.0: Soft-MoE (Router + Experten) statt reiner Track-Task
+    moe: true, h0: 0.75, // v2.23.0: Soft-MoE + Soll-Basishöhe (stand-Keyframe)
     nu: 29, actSpan: 0.4, jointResidual: 1.0,
     cmd: { vx: [-0.3, 0.5], yaw: [-0.8, 0.8] },
-    rW: { vel: 0.2, yaw: 0.05, up: 0.15, alive: 0.05, energy: 0.00012, smooth: 0.01, jlimit: 0.05, fall: 0 },
+    rW: { vel: 0.2, yaw: 0.05, up: 0.15, alive: 0.05, energy: 0.00012, smooth: 0.01, jlimit: 0.05, fall: 0.3, height: 0.4, foot: 0.015, route: 0.15, recover: 0.1, imit: 0.6 },
+    expertR: { on: 1 }, // v2.23.0: Experten-/Router-Belohnungen (Profil pro Roboter: skill.js expertRFor)
     dr: null,
     done: { upMin: 0.6, zMin: 0.35, zMax: 1.6 },
   },
@@ -985,6 +1241,8 @@ const ROBOTS = {
     color: '#b6f09c', dist: 3.2, zTarget: 0.6,
     speedMax: 2.5, yawMax: 2.0, timestep: 0.01, ctrlDt: 0.01,
     nActuators: 4, drone: true,
+    moe: true, // v2.23.0: Soft-MoE auch für die Drohne (Soft-Kommandoblock im Hover-Task)
+    expertR: { on: 1 }, // v2.23.0: Experten-/Router-Belohnungen (hover/move/turn/descend)
     flight: { vzMax: 1.4, kZ: 1.2, kVz: 1.8, kVx: 0.22, tiltMax: 0.24, kPitch: 0.05, kRoll: 0.05, kYaw: 0.15, kD: 0.012, tqMax: 0.012, mix: 1.0, mixY: 0.6 },
     gait: makeFlight,
     task: makeHoverTask,
@@ -1010,7 +1268,7 @@ const ROBOTS = {
     nu: 14, actSpan: 0.35, jointResidual: 1.0,
     h0: 0.12, // Soll-Basishöhe (STAND-Keyframe)
     cmd: { vx: [-0.15, 0.3], yaw: [-0.8, 0.8] },
-    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0.5, height: 0.5, foot: 0.02, route: 0.15, recover: 0.1 },
+    rW: { vel: 0.25, yaw: 0.05, up: 0.12, alive: 0.06, energy: 0.0002, smooth: 0.01, jlimit: 0.05, fall: 0.5, height: 0.5, foot: 0.02, route: 0.15, recover: 0.1, imit: 0.6 },
     expertR: { on: 1 }, // v2.13.0: Experten-/Router-Belohnungen aktiv (Gewichte: skill.js EXPERT_R, KI-tunbar)
     dr: null, // v2.12.0: Curriculum des MoE-Tasks steckt die DR-Stufen (§18) — Störungs-Chips gelten hier nicht
     done: { upMin: 0.45, zMin: 0.045, zMax: 0.45 },
@@ -1018,4 +1276,5 @@ const ROBOTS = {
 };
 
 export const ROBOT_ORDER = ['g1', 'duck', 'x2'];
+
 export function getRobot(id) { return ROBOTS[id]; }

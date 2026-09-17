@@ -195,7 +195,9 @@ WERKZEUGE (Feld „tool" + „args"; entweder tool ODER patch, nicht beides):
 12. tool="setAppearance" — AUSSEHEN ändern (nur Rendering — Physik bleibt). ERST args={list:true} rufen, um gültige Teil-Namen zu sehen (Material-/Body-Namen). Dann args = {parts:[{part:"jaw_material", color:"#ff6600", shine:0.8, metal:0.2}…], all:{color,shine,metal}}. color="#rrggbb", shine = Glanz 0–1, metal = Metallik 0–1; Felder optional (nur geänderte setzen). args={reset:true} = Original. Änderungen bleiben gespeichert.
 13. tool="setWorld" — WELT bauen. args = {preset:"testfeld"|"flach"|"parkour"|"treppen"|"huegel"} schaltet um. Eigene Objekte: args = {objects:[{type:"box"|"ball"|"cyl"|"ramp"|"tilt"|"gate"|"stair", x, y, w,l,h (bzw. r für ball/cyl), color:"#rrggbb", euler:[rx,ry,rz]}…], replace:<bool>} — replace:true = WELT NEU bauen (nur die gelisteten Objekte), replace:false = Objekte HINZUFÜGEN. Regeln: max 40 Objekte, Spawn (0,0) bleibt frei (min 0,9 m), x/y −12…12. LIES doc "WORLD" bei Unsicherheit.
 14. tool="setUI" — APP-LOOK anpassen. args = {theme:"standard"|"neon"|"amber"|"ice"|"wald", suggestions:[{label:"≤20 Zeichen", q:"Chat-Nachricht"}…max 6]} — theme ist das Farbschema der App, suggestions ersetzt die Vorschlags-Buttons im KI-Chat (sinnvolle Kurzbefehle vorschlagen!). Beide Felder optional.
-15. tool="setMoE" — Soft-MoE-EXPERTENANZAHL ändern (NUR MicroDuck). args = {experts:2…8}. Die Policy wird neu aufgesetzt (Training startet von Null — vorher fragen/warnen!). 4 = Standard (Balance/Walk/Turn/Recover).
+15. tool="setMoE" — Soft-MoE-EXPERTENANZAHL ändern (ALLE Roboter seit v2.23.0: MicroDuck · G1 · Drohne). args = {experts:2…8}. Die Policy wird neu aufgesetzt (Training startet von Null — vorher fragen/warnen!). 4 = Standard (Balance/Walk/Turn/Recover).
+22. tool="setTeacher" — ⭐ LEHRER-BELOHNUNG (v2.23.0): Basis-Motion-Datensatz (41 Clips, HuggingFace-Auto-Download: idle/gehen/laufen/hüpfen/Sprung/Weitsprung/liegen/aufstehen/drehen … + Drohnen-Pfade) als IMITATIONS-Belohnung — die Animation ist NIE Policy-Eingang und bleibt beim Wegfaden weg vom Verhalten. args = {on:<bool>, weight:0…1}. weight 0 = Lehrer aus (gleiches Verhalten, Animation "weg") — Curriculum-Tipp: hoch starten, dann schrittweise Richtung 0 faden. Die Datensatz-Clips tragen je Frame eine Kommando-Spur [vx,vy,wz,Buttons] (= Joystick-/Button-Stellung) — Roboter mit setTeacher Tasks bekommen die Clips automatisch.
+23. tool="setExpertR" — EXPERTEN-/ROUTER-REWARDS PRO ROBOTER (v2.23.0): Router und jeder Experte individuell. args = {routerBonus:0…2, wrongPenalty:0…1, stand:{up,quiet}, walk:{speed}, turn:{rate}, recover:{rise,uprightOnce}} — nur geänderte Felder setzen. Wirkt sofort (Cache wird refreshed). Für die Drohne gelten hover/move/turn/descend analog (walk→move, stand→hover).
 16. tool="canvasGraph" — NETZ-CANVAS bauen/lesen (v2.17.0). args = {cmd:"state"|"add"|"link"|"linkMany"|"unlink"|"remove"|"config"|"clear"|"import", …}. state = kompletter Graph als JSON — JEDER Knoten mit JEDERM Port: io/out liefern portsList:[{port,name,used}] (jeder Sensor/Aktuator einzeln mit frei/belegt), Karten liefern freeIn/freeOut (freie Port-Indices). add = {type:"policy", nIn, nOut, hidden:[64,64]} oder {type:"logic", op:"add"|"sub"|"mul"|"div"|"min"|"max"|"abs"|"neg", nIn, nOut} (KEIN Netz — reiner Verbinder, verarbeitet Signale direkt) oder {type:"ui", kind, io, label} oder {type:"const", values:[…]}. link = {from:{node,port}, to:{node,port}} — node ist "io" (alle Sensoren einzeln + Stick X/Y), "out" (alle Aktuatoren einzeln) oder Karten-ID/-Name. linkMany = {links:[{from,to},…]} — VIELE Kabel in EINEM Aufruf (Reparatur/Ausbau; Fehler pro Kabel im Ergebnis). config = {node, name?, op?, nIn?, nOut?, hidden?, trainable?, lr?, T?} (Architekturwechsel = frisches Netz!) oder Senke {node:"out", sink:"residual"|"direct"}. import = {node} lädt die AKTUELLE App-Policy (64×64) in die Karte. LIES doc "CANVAS", bevor du baust.
 17. tool="canvasReward" — Belohnung JE KARTE. args = {card:"<id|name>"|"alle", mode:"global"|"custom", scale:0…3, w:{alive,up,vel,turn,energy,fall}}. global = Aufgaben-Belohnung × scale. custom = eigene Formel: alive (Grundbetrag), up·(upz−0,7), vel·min(1,|vfwd|), turn·min(1,|yawRate|), −energy·Σact², −fall bei Sturz.
 18. tool="canvasRun" — Canvas ausführen/trainieren. args = {run:<bool>} = Graph fährt den Roboter (Modus CANVAS) oder zurück zu MANUELL; {train:<bool>} = Canvas-TRAINING an/aus (PPO je trainierbarer Karte; impliziert run).
@@ -241,7 +243,7 @@ BEDEUTUNG DER KONFIG-FELDER
 ANTWORTFORMAT — NUR dieses JSON (keine Markdown-Fences, kein Text außerhalb):
 {
   "antwort": "<kurze Erklärung auf Deutsch, max. 4 Sätze, konkret und ehrlich>",
-  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|runCode|writePlugin|canvasGraph|canvasReward|canvasRun|canvasUI|canvasBuild|motionKi   (optional — nur wenn du handeln willst)",
+  "tool": "addButton|removeButton|mapJoystick|observe|applyConfig|setScenario|setFallMode|readDoc|setCamera|setAppearance|setWorld|setUI|setMoE|setTeacher|setExpertR|runCode|writePlugin|canvasGraph|canvasReward|canvasRun|canvasUI|canvasBuild|motionKi   (optional — nur wenn du handeln willst)",
   "args": { … zum Tool passend … },
   "resetTraining": <nur ohne tool: true, wenn die Policy neu lernen sollte>,
   "patch": { … nur ohne tool … }
@@ -349,7 +351,7 @@ export function validatePatch(raw) {
 // canvasGraph/canvasReward/canvasRun/canvasUI fehlten hier → validateToolCall lieferte
 // null → der Aufruf wurde STUMM verworfen — Gemini schien „nichts zu machen").
 // NEU: canvasBuild (Ein-Schritt-Architekturbauer für Router/Experten-Pläne).
-const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera', 'setAppearance', 'setWorld', 'setUI', 'setMoE',
+const TOOLS = ['applyConfig', 'addButton', 'removeButton', 'mapJoystick', 'observe', 'setScenario', 'setFallMode', 'runCode', 'writePlugin', 'readDoc', 'setCamera', 'setAppearance', 'setWorld', 'setUI', 'setMoE', 'setTeacher', 'setExpertR',
   'canvasGraph', 'canvasReward', 'canvasRun', 'canvasUI', 'canvasBuild', 'motionKi'];
 const _intOrUndef = (v, lo, hi) => {
   if (v === undefined) return undefined;
@@ -446,6 +448,23 @@ export function validateToolCall(parsed) {
   // v2.14.0: SOFT-MOE — {experts: 2–8}
   if (tool === 'setMoE') {
     return { tool, args: { experts: Number.isFinite(parseFloat(args.experts)) ? parseFloat(args.experts) : null } };
+  }
+  // v2.23.0: LEHRER-BELOHNUNG — {on, weight 0…1}
+  if (tool === 'setTeacher') {
+    const w = Number.isFinite(parseFloat(args.weight)) ? Math.max(0, Math.min(1, parseFloat(args.weight))) : undefined;
+    return { tool, args: { on: typeof args.on === 'boolean' ? args.on : undefined, weight: w } };
+  }
+  // v2.23.0: EXPERTEN-/ROUTER-REWARDS pro Roboter — Teilobjekt
+  if (tool === 'setExpertR') {
+    const p = args; const out = {};
+    for (const k of ['routerBonus', 'wrongPenalty']) if (Number.isFinite(parseFloat(p[k]))) out[k] = parseFloat(p[k]);
+    for (const k of ['stand', 'hover', 'walk', 'move', 'turn', 'recover', 'descend', 'climb']) {
+      if (p[k] && typeof p[k] === 'object') {
+        out[k] = {};
+        for (const kk of Object.keys(p[k])) if (Number.isFinite(parseFloat(p[k][kk]))) out[k][kk] = parseFloat(p[k][kk]);
+      }
+    }
+    return { tool, args: out };
   }
   // ── v2.17.0/2.19.0/2.20.0: CANVAS-WERKZEUGE (mit harter Validierung) ──
   const LOGIC_OPS = ['add', 'sub', 'mul', 'div', 'min', 'max', 'abs', 'neg'];

@@ -200,8 +200,8 @@ console.log('\n■ 5) X2-Flugbahn (Root-only-Profil + Lehrpfad-Task)');
   task.setPath(m, 'folgt');
   task.ghostAnchor(0, [2, 3, 0.8], 0.7, g1);
   ok(Math.abs(g1[0] - 2) < 1e-6 && Math.abs(g1[1] - 3) < 1e-6, 'folgt: Geist-Anker = Drohnenposition');
-  // Bei PROFI (Policy) bleibt obs-Dim unverändert
-  ok(task.obsDim === 15, 'Hover-Task obsDim unverändert (15)');
+  // v2.23.0: Hover-Task bekommt den Soft-Kommandoblock (Soft-MoE für die Drohne)
+  ok(task.obsDim === 28, 'Hover-Task obsDim = 28 (v2.23.0: 15 + 13 Soft-Kommandos)', String(task.obsDim));
 }
 
 console.log('\n■ 6) packMotion/unpackMotion robotId');

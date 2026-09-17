@@ -659,3 +659,34 @@ Stage Summary:
 - v2.22.0: ARDY-BRÜCKE lebt — eigene TEXTE werden Bewegungen: ARDY auf kostenloser Cloud-GPU (Notebook im Repo), CSV-Import per „.csv (ARDY)“ (G1), 1:1-Skelett-Mapping, vollwertiger Lehrer (Geist/BC/PPO/MOTION-KI). Kein eigenes CUDA nötig — genau wie gewünscht.
 - APK lokal gebaut + verifiziert: download/Trainrobot.apk (versionCode 34, Signatur 1c0422b9…)
 - Push/Release wartet auf GitHub-Token vom Nutzer
+
+---
+Task ID: 45
+Agent: Super Z (Hauptagent)
+Task: v2.23.0 — LEHRER-DATENSATZ (Kaggle+HF, Auto-Download), Alternative zu ARDY, Soft-MoE für ALLE, individuelle Experten-/Router-Rewards, Joystick+Buttons (Gamepad), Kommando-Spur-Antwort
+
+Work Log:
+- NUTZERWUNSCH: Alternative zu ARDY gesucht + Datensatz (idle, gehen, hüpfen, Weitsprung, liegen, aufstehen, mehr) auf Kaggle erstellen + auf HuggingFace hochladen + Auto-Download in App; Soft-MoE für jeden Roboter; Belohnungssystem für Router + jeden Experten individuell; Joystick+Buttons wie bei Games; Frage: weiß der Datensatz wo der Joystick zeigt/welcher Button? Animation NUR als Belohnung (nie Input), später komplett entfernbar ohne Verhaltensänderung.
+- ALTERNATIVE ZU ARDY (Design-Entscheidung, kein CUDA nötig): eigener prozeduraler Basis-Motion-Datensatz als Belohnungs-Lehrer — ARDY-G1-QPOS-kompatibel (36 Spalten), im App-Format für alle 3 Roboter; echte ARDY-Clips optional über Kaggle-Notebook (kaggle_notebook_ardy.ipynb, kostenlose Kaggle-GPU) ergänzbar.
+- DATENSATZ (scripts/gen_motion_dataset.py → dataset/, 41 Clips, 30 fps, CC0-1.0, deterministisch prozedural):
+  * G1 (17): idle, walk, walk_back, walk_side, turn_l/r, laufen, huepfen, sprung, weitsprung, liegen, aufstehen, ducken, winken, fusskick, stopp, balance
+  * Duck (12): idle, walk (watscheln), walk_back, turn_l/r, sitzen, liegen, aufstehen, huepfen, flattern, stopp, balance
+  * X2 (12): starten, schweben, vorwaerts, rueckwaerts, seitwaerts, kreisen, steigen, sinken, rolle, salto, landen, notstopp
+  * KOMMANDO-SPUR je Frame [vx, vy, wz, bA, bB, bC, bD] = Joystick-/Button-Stellung beim Generieren (bA Hüpfen · bB Hinlegen · bC Aufstehen · bD Stopp) → Antwort auf die Joystick-Frage: JA, beim Generieren bekannt; späteres Mappen = gleicher Kommando-Vektor (Gamepad) → nächstes Kommando/Skill-Auslöser.
+  * ardy_g1/*.csv = exaktes NVIDIA-ARDY-QPOS-Format (root xyz + quat wxyz + 29 G1-DoF, z hoch, x vorwärts) → mit dem v2.22-Button „.csv (ARDY)" direkt importierbar; *.cmd.csv = Spur-Seitendatei.
+- UPLOADS (öffentlich, ohne Token abrufbar): HuggingFace huggingface.co/datasets/KillerBoss/trainrobot-motionclips (whoami: KillerBoss) · Kaggle kaggle.com/datasets/rudolfbewer/trainrobot-motionclips (create + version v1.0.1 + dataset_metadata_update → isPrivate false, HTTP 200 ohne Login verifiziert) · dataset/ auch ins Repo committet.
+- APP v2.23.0 (www/js):
+  * motionset.js NEU: ensureMotionSet() = Cache-API → HF-Fetch → parseMotionSet → clipToMotion (App-Motion-Format inkl. cmd-Spur) · clipForSkill (Umlaut-/lue-Normalisierung) · clipForExpert (Expertenname → Clip) · BTN_SKILLS.
+  * robots.js: makeDuckMoeTask → makeMoeTask verallgemeinert (Level relativ zu speedMax/yawMax/actSpan — Duck-Werte exakt erhalten; Level-Key tr_moe_lvl_<id> mit Duck-Migration; Recover-Schwelle aus done.zMin) · G1: task=makeMoeTask + moe:true + h0:0.75 + rW erweitert (route/recover/height/foot/imit) · Hover-Task (X2): +13 SOFT-KOMMANDO-Kanäle (obsDim 15→28), softCmd/skillW/styleW/setRouting/setUserCmd/expertR (droneSkillState), HOVER_R.route/imit · LEHRER in beiden: setTeacher(loop|pick(name), once|Map) + setTeacherW + triggerTeacherSkill + _teacherTick + Imitations-Reward (Pose-exp + Höhe-exp + Kommando-Übereinstimmung) × rW.imit × teacherW — REWARD-ONLY, NIE in obs · setUserCmd(…, btns) mit Edge-Erkennung: Buttons triggern Once-Clips + Skill-Hinweise.
+  * skill.js: expertRFor/setExpertR/expertROverride (pro Roboter, localStorage tr_expertR_<id>, Klemmen) · expertRouterReward(o, er) mit Profil-Parameter.
+  * controls.js: GAMEPAD — setPad/_setupPad (2 Stick-Zonen + A/B/C/D, Pointer Events), _pollGamepad (Gamepad-API: Axes 0–3, Buttons 0–3, Deadzone), command() mischt Gamepad (vy quer + rx Drehen, Drohne ry = climb).
+  * main.js: VERSION 2.23.0 · HF-Auto-Download bei Boot (downloadMotionSetBg, Toast/Log) · wireTeacher() an allen Task-Erzeugungen (Loop-Clip folgt DOMINANTEM Experten, Once-Map, teacherW persistiert je Roboter) · LEHRER-Panel (Chip AN/AUS + Gewicht-Slider + ⟳ NEU LADEN + Quelle) · EXPERTEN-Editor (buildExpertRPanel: Router-Bonus/Fehler + je Experte live, applyER → setExpertR + refreshExpertR) · btnPad-Toggle · setUserCmd mit vy + controls.padBtn · setMoE-duck-Gate entfernt (alle Roboter, defaultExpertNames) · setTeacher/setExpertR-Executors.
+  * ai.js: Werkzeuge setTeacher {on, weight} + setExpertR (Teilobjekt, Klemmen) + Doku (Nr. 22/23) + setMoE-Text „ALLE Roboter" + Whitelist.
+  * index.html/style.css: GAMEPAD-Overlay (padSide/padZone/padStick/padBtns, touch-action:none), LEHRER-Zeile, EXPERTEN-Zeile + expertRPanel, btnPad-Icon-Button.
+  * canvas.js: obsPortNames hover um 13 Soft-Ports erweitert (69/69).
+- TESTS: scripts/motionset_v2230_test.mjs NEU 49/49 (Datensatz echt geladen, ARDY-Format, cmd-Spur, Umlaute, Experten-Mapping, expertR-Klemmen/Persistenz/Profilwirkung, duck 74 obs, G1 119 obs, Hover 28 obs, Curriculum-Skalierung, Lehrer addiert + teacherW=0 ⇒ EXAKT alter Reward, Once-Trigger/Ablauf, Button-Edges, Gamepad-Merge, KI-Validierung, Verdrahtung/Versionen). REGRESSIONEN: duck_sync 24/24 · test_v2140 53/53 · test_v2141 32/32 · motion_v2150 41/41 (Pin Hover 15→28 dokumentiert) · motion_v2160 33/33 · motion_v2210 35/35 · motion_ctrl ✓ · dr 41/41 · duck ✓ · canvas_v2170 69/69 · canvas_v2200 84/84 · ui_v2210 (Browser, echte App) 11/11 KEINE Seitenfehler.
+- DOKU: mcp/README.md (v2.23.0-Kurzstand: LEHRER-DATENSATZ, SOFT-MOE FÜR ALLE, setExpertR, GAMEPAD), mcp/CONTROL.md (Lehrer + Gamepad + Kommando-Spur), mcp/REWARDS.md (Experten-/Router-Profile pro Roboter), README.md Bullet, dataset/README.md (komplette Skill-Liste + Formate + Nutzung).
+- RELEASE: versionCode 35 / versionName 2.23.0; Commit + Push → CI baut APK + Release; Signaturprüfung + download/Trainrobot.apk nachziehen.
+
+Stage Summary:
+- v2.23.0: Der LEHRER lebt — 41 Basis-Motionen (Kaggle + HuggingFace, Auto-Download) formen NUR die Belohnung, nie die Eingänge: Gewicht 0 = Animation weg, Verhalten bleibt. Soft-MoE + individuelle Router-/Experten-Rewards für ALLE 3 Roboter. Gamepad-Overlay mit A/B/C/D triggert Lehrer-Skills. Die Joystick-Frage ist beantwortet: die Kommando-Spur steckt in JEDEM Datensatz-Frame.

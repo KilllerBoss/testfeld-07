@@ -21,6 +21,8 @@ import { ParallelTrainer, suggestWorkerCount } from './parallel.js';
 import { DR_LEVELS, drFromLevel, restoreDrModel } from './dr.js';
 import { putClip, listClips, deleteClip, packMotion, unpackMotion } from './glbstore.js';
 import { parseQposCsv, ARDY_G1_NQ } from './qpos.js'; // v2.22.0: ARDY-Brücke (Lehrer ohne CUDA)
+import { ensureMotionSet, clearMotionSet, clipForExpert, clipForSkill } from './motionset.js'; // v2.23.0: HF-Lehrer-Datensatz (Auto-Download)
+import { setExpertR, expertRSummary, defaultExpertNames } from './skill.js'; // v2.23.0: Experten-/Router-Rewards pro Roboter
 import { buildGlbScene } from './glbscene.js';
 import { initAITransport, ensureModels, askAI, validatePatch, loadHistory, saveHistory, getApiKey, setApiKey, isCustomKey, AI_DOCS } from './ai.js';
 import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJoyMap, loadPushStrength, savePushStrength } from './agent.js';
@@ -30,7 +32,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.22.0';
+const VERSION = '2.23.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -229,6 +231,7 @@ async function loadRobot(id, first = false) {
       S.task = makeMotionTask(cfg, S.motionClip, sim);
       S.task.animOn = S.animTraining;
       S.task.refMode = S.refMode;
+      wireTeacher(S.task); // v2.23.0: Lehrer-Belohnung (falls Datensatz da)
       // Steuerungs-Wahl des aktiven Clips restaurieren (v2.5.0, 'btn' v2.6.0)
       const rec = S.activeRecId ? S.clips.find(r => r.id === S.activeRecId) : null;
       if (rec && (rec.ctrl === 'joy' || rec.ctrl === 'btn')) S.task.ctrlMode = rec.ctrl;
@@ -373,11 +376,16 @@ function makeTaskFor(id, cfg, sim) {
   // v2.15.0: GLB-Motion-Tracking für ALLE Roboter mit Gelenken — der Clip
   // muss zum Roboter passen (nu-Vergleich; eine G1-Variante am MicroDuck
   // wäre Müll). Die Drohne bekommt stattdessen den Lehrpfad injiziert.
-  if (S.motionClip && !cfg.drone && S.motionClip.nu === cfg.nu) return makeMotionTask(cfg, S.motionClip, sim);
+  if (S.motionClip && !cfg.drone && S.motionClip.nu === cfg.nu) {
+    const mt = makeMotionTask(cfg, S.motionClip, sim);
+    wireTeacher(mt); // v2.23.0: Lehrer-Belohnung (falls Datensatz da)
+    return mt;
+  }
   const scn = scenarioOf(id);
   if (!cfg.drone && (scn === 'getup' || scn === 'drop')) return makeRecoveryTask(cfg, scn);
   const t = cfg.task(cfg);
   if (cfg.drone && S.motionClip && S.motionClip.nu === cfg.nu && t.setPath) t.setPath(S.motionClip, S.refMode);
+  wireTeacher(t); // v2.23.0: Lehrer-Belohnung (falls Datensatz da)
   return t;
 }
 
@@ -998,9 +1006,9 @@ async function execTool(tool, args) {
       }
       return done.length ? 'UI angepasst: ' + done.join(', ') : 'Fehler: nichts angegeben (theme und/oder suggestions)';
     }
-    // ── v2.14.0: SOFT-MOE-EXPERTEN (Anzahl 2–8, braucht Policy-Neustart) ──
+    // ── v2.14.0: SOFT-MOE-EXPERTEN (Anzahl 2–8, braucht Policy-Neustart)
+    // v2.23.0: für ALLE Roboter (MicroDuck · G1 · Drohne — Soft-MoE überall)
     if (tool === 'setMoE') {
-      if (S.robotId !== 'duck') return 'Fehler: Soft-MoE gibt es nur beim MicroDuck (aktiver Roboter: ' + S.robotId + ')';
       const E = Math.round(parseFloat(args.experts));
       if (!Number.isFinite(E) || E < 2 || E > 8) return 'Fehler: experts muss 2–8 sein';
       stopTraining(true);
@@ -1014,7 +1022,28 @@ async function execTool(tool, args) {
       ui.$('tStart').classList.remove('btn-stop');
       ui.trainStats({ reward: '–', episodes: 0, steps: 0, rate: 0 });
       ui.drawChart();
-      return 'Soft-MoE auf ' + E + ' Experten gesetzt. Die alte Policy wurde verworfen (Architektur-Änderung) — starte das Training neu. Experten-Namen: ' + ['balance', 'walk', 'turn', 'recover'].slice(0, E).join(', ') + (E > 4 ? ' + ' + (E - 4) + ' weitere (experte5…)' : '');
+      return 'Soft-MoE auf ' + E + ' Experten gesetzt (' + S.robotId + '). Die alte Policy wurde verworfen (Architektur-Änderung) — starte das Training neu. Experten-Namen: ' + defaultExpertNames(!!(S.sim && S.sim.cfg.drone)).slice(0, E).join(', ') + (E > 4 ? ' + ' + (E - 4) + ' weitere (experte5…)' : '');
+    }
+    // ── v2.23.0: LEHRER-BELOHNUNG (Datensatz als Imitations-Reward, reward-only)
+    if (tool === 'setTeacher') {
+      if (typeof args.on === 'boolean') {
+        try { localStorage.setItem('tr_teacher_on', args.on ? '1' : '0'); } catch (e) { /* voll */ }
+      }
+      if (Number.isFinite(args.weight)) {
+        try { localStorage.setItem('tr_teacherW_' + S.robotId, String(Math.max(0, Math.min(1, args.weight)))); } catch (e) { /* voll */ }
+      }
+      wireTeacher();
+      const on = teacherOn(); const w = teacherDefaultWeight();
+      if (!on) return 'Lehrer-Belohnung AUS — reine Task-Belohnung. Die Obs enthielten die Animation nie, das Verhalten bleibt stabil.';
+      if (!S.motionSet) return 'Lehrer AN, aber der Datensatz lädt noch (HuggingFace-Auto-Download läuft) — er greift, sobald er da ist.';
+      return 'Lehrer AN: ' + S.motionSet.clips.length + ' Clips, Gewicht ' + Math.round(w * 100) + ' %. Die Animation wirkt NUR in der Belohnung — bei Gewicht 0 ist sie „weg", ohne dass das Verhalten springt.';
+    }
+    // ── v2.23.0: EXPERTEN-/ROUTER-REWARDS pro Roboter
+    if (tool === 'setExpertR') {
+      const prof = setExpertR(S.robotId, args);
+      if (!prof) return 'Fehler: leeres/ungültiges Reward-Patch';
+      if (S.task && S.task.refreshExpertR) S.task.refreshExpertR();
+      return 'Experten-Rewards (' + S.robotId + ') gesetzt: routerBonus ' + prof.routerBonus + ' · wrongPenalty ' + prof.wrongPenalty + ' · walk.speed ' + prof.walk.speed + ' · turn.rate ' + prof.turn.rate + ' · recover.rise ' + prof.recover.rise + '. Wirkt ab dem nächsten Schritt.';
     }
     if (tool === 'runCode') {
       if (!args.code || !args.code.trim()) return 'Fehler: code ist leer';
@@ -1585,7 +1614,8 @@ function policyCtrlStep() {
   // Schieben statt Antwort auf den Stick).
   if (task.setUserCmd) {
     const c = controls.command(S.sim.cfg);
-    task.setUserCmd(c.vx, 0, c.yaw); // Soft-MoE: vx/wz + Skill-Form, Scheduler aus
+    // v2.23.0: quer (vy) + Gamepad-Buttons (bA Hüpfen · bB Hinlegen · bC Aufstehen · bD Stopp)
+    task.setUserCmd(c.vx, c.vy || 0, c.yaw, controls.padBtn.slice());
   } else if (task.kind === 'speed' && task.cmd) {
     const c = controls.command(S.sim.cfg);
     const R = S.sim.cfg.cmd || { vx: [-1, 1], yaw: [-1, 1] };
@@ -1661,6 +1691,141 @@ function checkFall() {
 }
 
 // ── Boot ────────────────────────────────────────────────────
+// ═══════════════ v2.23.0: LEHRER-DATENSATZ (HF-Auto-Download) · GAMEPAD · EXPERTEN-REWARDS ═══════════════
+// Grundsat (Nutzer): Die Animation ist NUR Belohnung — NIE Policy-Input.
+// Gewalt 0 = exakt das Reward-System ohne Animation; die Obs enthielten
+// sie nie → das Verhalten bleibt beim Wegfaden stabil.
+
+async function downloadMotionSetBg(force = false) {
+  if (S.teacherLoading) return;
+  S.teacherLoading = true;
+  try {
+    if (force) await clearMotionSet();
+    S.motionSet = await ensureMotionSet(log);
+    wireTeacher();
+    ui.toast('Lehrer-Datensatz bereit (' + S.motionSet.clips.length + ' Clips)');
+  } catch (e) {
+    log('Lehrer-Datensatz: ' + e.message + ' — Training läuft OHNE Lehrer weiter', 'warn');
+  } finally { S.teacherLoading = false; }
+}
+
+function teacherOn() { try { return localStorage.getItem('tr_teacher_on') === '1'; } catch (e) { return false; } }
+function teacherDefaultWeight() {
+  try { const w = parseFloat(localStorage.getItem('tr_teacherW_' + S.robotId)); if (Number.isFinite(w)) return Math.max(0, Math.min(1, w)); } catch (e) { /* egal */ }
+  return 0.6;
+}
+
+/** Clips aus dem Datensatz an die aktuelle Aufgabe hängen (reward-only). */
+function wireTeacher(task) {
+  const t = task || S.task;
+  if (!t || !t.setTeacher) return;
+  if (!S.motionSet) { t.setTeacher(null); return; }
+  const rid = S.robotId;
+  const pick = (name) => clipForExpert(S.motionSet, rid, name) || clipForSkill(S.motionSet, rid, 'idle');
+  const once = {};
+  for (const sk of ['huepfen', 'sprung', 'liegen', 'aufstehen', 'stopp', 'starten', 'landen', 'rolle', 'salto']) {
+    const c = clipForSkill(S.motionSet, rid, sk);
+    if (c) once[sk] = c;
+  }
+  t.setTeacher(pick, once);
+  t.setTeacherW(teacherOn() ? teacherDefaultWeight() : 0);
+  syncTeacherUI();
+}
+
+function syncTeacherUI() {
+  const chip = document.getElementById('teacherChip');
+  const src = document.getElementById('teacherSrc');
+  if (chip) {
+    const on = teacherOn();
+    chip.textContent = on ? 'AN' : 'AUS';
+    chip.classList.toggle('active', on);
+  }
+  const wv = document.getElementById('teacherWVal');
+  if (wv) wv.textContent = Math.round(teacherDefaultWeight() * 100) + ' %';
+  if (src) src.textContent = S.motionSet ? (S.motionSet.clips.length + ' Clips · ' + (S.motionSet.fromCache ? 'Cache' : 'HF')) : 'lädt…';
+}
+
+function initTeacherUI() {
+  const chip = document.getElementById('teacherChip');
+  if (chip) chip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { localStorage.setItem('tr_teacher_on', teacherOn() ? '0' : '1'); } catch (e2) { /* voll */ }
+    wireTeacher();
+    log('Lehrer-Belohnung: ' + (teacherOn()
+      ? 'AN — Basis-Motionen (HuggingFace-Datensatz) formen NUR die Belohnung, nie die Eingänge'
+      : 'AUS — reine Task-Belohnung; Verhalten bleibt (Obs enthielten die Animation nie)'), 'ok');
+  });
+  const w = document.getElementById('teacherW');
+  if (w) w.addEventListener('input', () => {
+    const v = Math.max(0, Math.min(1, +w.value || 0));
+    try { localStorage.setItem('tr_teacherW_' + S.robotId, String(v)); } catch (e) { /* voll */ }
+    if (S.task && S.task.setTeacherW) S.task.setTeacherW(teacherOn() ? v : 0);
+    const wv = document.getElementById('teacherWVal'); if (wv) wv.textContent = Math.round(v * 100) + ' %';
+  });
+  const rl = document.getElementById('teacherReload');
+  if (rl) rl.addEventListener('pointerdown', (e) => { e.preventDefault(); ui.toast('Datensatz wird neu geladen…'); downloadMotionSetBg(true); });
+  const padBtn = document.getElementById('btnPad');
+  if (padBtn) padBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const on = controls.setPad(!controls.padOn);
+    controls.buzz(18);
+    log('Gamepad ' + (on ? 'AN — links vor/seit, rechts drehen, A Hüpfen · B Hinlegen · C Aufstehen · D Stopp (physisches Gamepad wird automatisch erkannt)' : 'AUS'), 'ok');
+  });
+  const erT = document.getElementById('erToggle');
+  if (erT) erT.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    buildExpertRPanel();
+    const p = document.getElementById('expertRPanel');
+    if (p) p.classList.toggle('hidden');
+  });
+}
+
+// EXPERTEN-REWARDS-Editor: Router + jeder Experte individuell pro Roboter
+function applyER(patch) {
+  setExpertR(S.robotId, patch);
+  if (S.task && S.task.refreshExpertR) S.task.refreshExpertR();
+  log('Experten-Rewards (' + S.robotId + '): ' + JSON.stringify(patch), 'ok');
+}
+function buildExpertRPanel() {
+  const panel = document.getElementById('expertRPanel');
+  if (!panel) return;
+  const prof = expertRSummary(S.robotId);
+  const names = (S.task && S.task.expertNames) || ['stand', 'walk', 'turn', 'recover'];
+  panel.innerHTML = '';
+  const mkNum = (val, cb, min, max) => {
+    const i = document.createElement('input');
+    i.type = 'number'; i.step = '0.05'; i.value = String(val);
+    i.addEventListener('change', () => { cb(Math.max(min, Math.min(max, parseFloat(i.value) || 0))); });
+    return i;
+  };
+  const line = (label, fill) => {
+    const d = document.createElement('div'); d.className = 'er-line';
+    const s = document.createElement('span'); s.className = 'er-name'; s.textContent = label;
+    d.appendChild(s); fill(d); panel.appendChild(d);
+  };
+  // ROUTER: Bonus für passenden Experten + Strafe für klaren Fehlgriff
+  line('ROUTER', (d) => {
+    let b = document.createElement('span'); b.className = 'er-hint'; b.textContent = 'Bonus'; d.appendChild(b);
+    d.appendChild(mkNum(prof.routerBonus, (v) => applyER({ routerBonus: v }), 0, 2));
+    b = document.createElement('span'); b.className = 'er-hint'; b.textContent = 'Fehler'; d.appendChild(b);
+    d.appendChild(mkNum(prof.wrongPenalty, (v) => applyER({ wrongPenalty: v }), 0, 1));
+  });
+  const KEYS = { stand: ['up', 'quiet'], hover: ['up', 'quiet'], walk: ['speed'], move: ['speed'], turn: ['rate'], recover: ['rise', 'uprightOnce'], descend: ['rate'], climb: ['rate'] };
+  for (const nm of names) {
+    const key = prof[nm] !== undefined && typeof prof[nm] === 'object' ? nm : null;
+    if (!key) continue;
+    line(nm.toUpperCase(), (d) => {
+      for (const kk of Object.keys(prof[key])) {
+        const lb = document.createElement('span'); lb.className = 'er-hint'; lb.textContent = kk; d.appendChild(lb);
+        d.appendChild(mkNum(prof[key][kk], (v) => applyER({ [key]: { [kk]: v } }), 0, 3));
+      }
+    });
+  }
+  const hint = document.createElement('div'); hint.className = 'er-hint';
+  hint.textContent = 'Pro Roboter gespeichert (tr_expertR_' + S.robotId + ') · KI-Trainer: setExpertR';
+  panel.appendChild(hint);
+}
+
 async function boot() {
   try {
     log(`TRAINROBOT v${VERSION} · Testfeld·07 · ${new Date().toLocaleString('de-DE')}`);
@@ -1728,6 +1893,9 @@ async function boot() {
     log(`WebGL: ${glInfo}`, 'ok');
 
     controls.attach(ui, document.getElementById('gl'), r3d);
+    // v2.23.0: Gamepad-Overlay + Lehrer-Datensatz (HF-Auto-Download) + Experten-UI
+    initTeacherUI();
+    downloadMotionSetBg();
     // ── v2.13.0: FPV-KAMERA (Rechteck oben rechts, NUR Anzeige — die Policy
     // bekommt das Bild NIEMALS; Vision-Modell-Kanal bleibt bewusst frei) ──
     try {
@@ -3187,6 +3355,7 @@ async function activateClip(rec) {
     return;
   }
   S.task = makeMotionTask(S.sim.cfg, S.motionClip, S.sim);
+  wireTeacher(S.task); // v2.23.0: Lehrer-Belohnung (falls Datensatz da)
   // Steuerung + Animation-Status je Clip (v2.5.0, Buttons v2.6.0)
   S.task.ctrlMode = rec.ctrl === 'joy' || rec.ctrl === 'btn' ? rec.ctrl : 'none';
   S.task.buttons = Array.isArray(rec.buttons) ? rec.buttons.slice(0, 4) : [];

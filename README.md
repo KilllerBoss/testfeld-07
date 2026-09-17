@@ -5,6 +5,7 @@ Smartphone (CPU, ohne CUDA)**.
 
 ## Inhalt
 
+- **v2.23.0 — LEHRER-DATENSATZ + SOFT-MOE FÜR ALLE + GAMEPAD**: Basis-Motion-Datensatz (41 Clips, HuggingFace/Kaggle, ARDY-G1-QPOS-kompatibel, Kommando-Spur je Frame) als Belohnungs-Lehrer per Auto-Download (nie Policy-Input, fadbar auf 0 ohne Verhaltenssprung) · Soft-MoE mit individuellen Router-/Experten-Rewards jetzt für MicroDuck, G1 UND Drohne · Gamepad-Overlay (2 Sticks + A/B/C/D, physische Gamepads automatisch) · KI-Werkzeuge setTeacher/setExpertR
 - **Drei Roboter** (v2.14.0 — A1/Spot/Go2 wurden entfernt, APK deutlich kleiner),
   alle gleichberechtigt (ungebunden) mit einheitlicher Stick-Steuerung:
   - **MicroDuck** (Pollen Robotics · Hugging Face, Biped, 14 Servos, Soft-MoE-Politik

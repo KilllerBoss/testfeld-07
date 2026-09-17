@@ -783,3 +783,41 @@ body.cv-open #canvasUIBar {
 .cv-light { width: 14px; height: 14px; border-radius: 50%; background: rgba(148, 180, 220, 0.2); border: 1.4px solid rgba(148, 180, 220, 0.4); display: inline-block; }
 .cv-light.lit { background: #7fdc84; border-color: #7fdc84; box-shadow: 0 0 10px rgba(127, 220, 132, 0.8); }
 .cv-uicode { font-size: 10px; color: #b48cff; font-family: monospace; }
+
+/* ── v2.23.0: GAMEPAD-Overlay (Controller-Layout) ───────── */
+#padOverlay {
+  position: fixed; inset: 0; pointer-events: none; z-index: 30;
+  display: none; justify-content: space-between; align-items: flex-end;
+  padding: 0 calc(var(--sa-r) + 10px) calc(var(--sa-b) + 46px) calc(var(--sa-l) + 10px);
+}
+#padOverlay.on { display: flex; }
+.padSide { pointer-events: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.padSideL { margin-left: 4px; }
+.padSideR { margin-right: 4px; }
+.padZone {
+  position: relative; width: 128px; height: 128px; border-radius: 50%;
+  border: 1.5px solid rgba(148, 180, 220, 0.2); touch-action: none;
+  background: radial-gradient(circle at 50% 50%, rgba(13, 18, 26, 0.5), rgba(13, 18, 26, 0.3));
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.padStick {
+  position: absolute; left: 50%; top: 50%; width: 54px; height: 54px;
+  margin: -27px 0 0 -27px; border-radius: 50%; touch-action: none;
+  background: radial-gradient(circle at 35% 30%, #9fd8ff, #38a8e0 60%, #14608c);
+  box-shadow: 0 5px 18px rgba(56, 168, 224, 0.35), inset 0 -3px 8px rgba(0,0,0,0.35);
+  transition: transform .05s linear;
+}
+.padLbl { font-size: 9px; letter-spacing: 0.14em; color: rgba(148, 180, 220, 0.55); }
+.padBtns { display: grid; grid-template-columns: repeat(2, 52px); gap: 8px; margin-bottom: 2px; }
+.padBtn {
+  width: 52px; height: 52px; border-radius: 50%; border: 1.4px solid rgba(148, 180, 220, 0.3);
+  font-weight: 700; font-size: 15px; color: #e8eef5; touch-action: none;
+  background: radial-gradient(circle at 35% 30%, rgba(30, 40, 56, 0.9), rgba(14, 18, 26, 0.85));
+}
+.padBtn.hold { transform: scale(0.92); filter: brightness(1.5); }
+.padA { color: #ffb3b3; } .padB { color: #b3e2ff; } .padC { color: #b8ffb3; } .padD { color: #ffe8b3; }
+/* Experten-/Reward-Editor (pro Roboter) */
+#expertRPanel .er-line { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+#expertRPanel .er-name { min-width: 64px; color: var(--amber); letter-spacing: 0.06em; }
+#expertRPanel input { width: 58px; background: rgba(13,18,26,0.6); border: 1px solid rgba(148,180,220,0.25); color: #e8eef5; border-radius: 4px; padding: 2px 4px; font-size: 10.5px; }
+#expertRPanel .er-hint { font-size: 9.5px; color: rgba(148,180,220,0.5); }
