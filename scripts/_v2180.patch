@@ -1,0 +1,614 @@
+diff --git a/README.md b/README.md
+index b7136351..0a88f979 100755
+--- a/README.md
++++ b/README.md
+@@ -19,6 +19,14 @@ Smartphone (CPU, ohne CUDA)**.
+   (KI-Welt mit eigenen Objekten bauen), **setUI** (App-Designs + Vorschlags-Chips),
+   **setMoE** (Expertenanzahl), **rWx-Zielterme** (goTo/stayNear/Höhenband/…),
+   Plugins (Werkstatt), Art-MCP-Wissbasis (mcp/*.md).
++- **Netz-Canvas (v2.18.0, Vollbild + Multi-Touch)**: Node-Editor — links alle
++  Sensor-Eingänge einzeln, rechts alle Aktuatoren einzeln, dazwischen Policy-Karten
++  (nIn/nOut/Hidden-Schichten/Neuronen frei) mit Kabeln verbinden, Belohnung je
++  Karten-ID (global oder eigene Formel), Router über trainierten Policies, eigene
++  UI-Elemente (Buttons/Slider/Joystick/Code) als Ein-/Ausgänge, Graph läuft live im
++  Modus CANVAS und trainiert PPO pro Karte; Gemini steuert alles über
++  canvasGraph/canvasReward/canvasRun/canvasUI. Bedienung: 1 Finger ziehen/verbinden,
++  2 Finger zoomen + verschieben, Zoom-Buttons/⤢/Mausrad.
+ - **GLB-Animations-Training (G1)**: eigene `.glb`-Clips (Mixamo-ähnlich)
+   importieren → automatisches Retargeting auf die G1-Kinematik
+   (Quaternion-Weltdelta → Gelenkachse, Fuß-Boden-Anpassung) →
+diff --git a/app/build.gradle b/app/build.gradle
+index cb7312a4..a4452dd7 100755
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -10,8 +10,8 @@ android {
+         applicationId "com.trainrobot.app"
+         minSdk 30
+         targetSdk 34
+-        versionCode 29
+-        versionName "2.17.0"
++        versionCode 30
++        versionName "2.18.0"
+     }
+ 
+     signingConfigs {
+diff --git a/app/src/main/assets/www/index.html b/app/src/main/assets/www/index.html
+index 71f11fd6..2804fd4e 100755
+--- a/app/src/main/assets/www/index.html
++++ b/app/src/main/assets/www/index.html
+@@ -218,9 +218,8 @@
+     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
+   </section>
+ 
+-  <!-- ── v2.17.0: NETZ-CANVAS ────────────────────────────────── -->
++  <!-- ── v2.17.0: NETZ-CANVAS (v2.18.0: VOLLBILD + Multi-Touch) ── -->
+   <section id="canvasSheet" class="sheet cv-sheet hidden">
+-    <div class="sheet-grab"></div>
+     <div class="sheet-head">
+       <span class="sheet-title">NETZ-CANVAS</span>
+       <span id="cvInfo" class="sheet-sub">Policies bauen, verbinden, ausführen</span>
+@@ -247,9 +246,10 @@
+       <div id="cvWorld" class="cv-world">
+         <svg id="cvWires" class="cv-wires" width="6000" height="4000"></svg>
+       </div>
++      <div id="cvGesture" class="cv-gesture">2 FINGER: ZOOMEN · VERSCHIEBEN&nbsp;&nbsp;|&nbsp;&nbsp;1 FINGER: ZIEHEN · VERBINDEN</div>
+     </div>
+     <div id="cvEdit" class="cv-edit hidden"></div>
+-    <div class="train-note">LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
++    <div class="train-note">VOLLBILD-CANVAS: 1 Finger zieht Karten/Kabel, 2 Finger zoomen und verschieben die Fläche (Zoom-Buttons unten + ⤢ passt alles ein). LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) mit frei wählbaren Ein-/Ausgängen und Hidden-Schichten. ANTIPPEN eines Ports und dann eines anderen verbindet (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel (Leben/Aufrecht/Vorwärts/Drehen/Energie/Sturz). „AUSFÜHREN" = Canvas fährt den Roboter (Modus CANVAS), „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (Werkzeuge canvasGraph / canvasReward / canvasRun / canvasUI).</div>
+   </section>
+ 
+   <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->
+diff --git a/app/src/main/assets/www/js/ai.js b/app/src/main/assets/www/js/ai.js
+index 02855c9a..c0e4df5a 100755
+--- a/app/src/main/assets/www/js/ai.js
++++ b/app/src/main/assets/www/js/ai.js
+@@ -153,13 +153,13 @@ export const AI_DOCS = [
+   { doc: 'WORLD', title: 'Welten: Presets + KI-WELT (setWorld — Objekte bauen, Farben, Regeln)' },
+   { doc: 'CONTROL', title: 'Steuerung: Joystick→Policy, Buttons, Makros, Szenarien, Schubsen, Kamera, AUSSEHEN (setAppearance), UI (setUI)' },
+   { doc: 'TRAINING', title: 'PPO-Ablauf, Tempo-Slider, Domain Randomization, Curriculum, Grenzen' },
+-  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.17.0): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasGraph/canvasReward/canvasRun/canvasUI)' },
++  { doc: 'CANVAS', title: 'NETZ-CANVAS (v2.18.0 VOLLBILD + 2-Finger-Zoom): Karten bauen, verbinden, Router-Architekturen, eigene Belohnungen je Karte, UI-Elemente als Ein-/Ausgänge (canvasGraph/canvasReward/canvasRun/canvasUI)' },
+ ];
+ 
+ // ── System-Prompt ───────────────────────────────────────────
+ export function buildSystemPrompt(ctx) {
+   const cfgJson = JSON.stringify(ctx.current, null, 1);
+-  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren).
++  return `Du bist der KI-TRAINER-AGENT der App TRAINROBOT (Testfeld·07): eine Offline-MuJoCo-Simulation mit PPO-Policy-Training auf dem Smartphone. Drei Roboter: Microduck (Pollen Robotics · Hugging Face — kleiner Biped, 14 Servos, ~25 cm, Soft-MoE-Politik), Unitree G1 (Humanoid, 29 Gelenke, GLB-Motion-Tracking), Skydio X2 (Drohne). v2.15.0: GLB-Animationen für ALLE Roboter (G1 Beine+Arme, MicroDuck Beine, X2 Flugbahn); Referenz-Modi STELLE/FREI/FOLGT. v2.16.0: „OHNE ANIM WEITER“ trainiert eine GLB-Policy als KOMMANDOGANG ohne Animation weiter (Netz/Norm/Slot bleiben — nichts wird neu angefangen); der Aktions-Anker ist animations-unabhängig (immer Keyframe-Pose), ANIM-DROPOUT (MOTION_R.dropP=0.2) lässt Trainings-Episoden ohne Animation laufen, damit die Policy NICHT an die Animation gebunden ist. v2.17.0: NETZ-CANVAS — ein Node-Editor, in dem DU (und der Nutzer) Architekturen bauen: links alle Sensor-Eingänge des Roboters einzeln, rechts alle Aktuator-Ausgänge einzeln, dazwischen Policy-Karten mit frei wählbaren Ein-/Ausgängen, Hidden-Schichten und Neuronen — alles mit Kabeln verbindbar, JEDE Karte mit eigener Belohnung (global oder eigene Formel), und eigene UI-Elemente (Buttons/Slider/Joystick/Code) als Eingänge/Ausgänge. Was im Canvas gebaut ist, läuft LIVE auf dem Roboter (Modus CANVAS) und kann pro Karte trainieren — z. B. ein ROUTER über bereits trainierten Policies (Policies einfrieren, nur den Router trainieren). v2.18.0: Das Canvas ist ein VOLLBILD-Editor mit Multi-Touch (1 Finger = Karten/Kabel ziehen, 2 Finger = Zoomen + Verschieben, Zoom-Buttons + ⤢); UI-Elemente, die du über canvasUI anlegst, erscheinen als Leiste ÜBER dem Vollbild-Canvas.
+ AKTIVER ROBOTER: ${ctx.robotName} (id=${ctx.robot}, Aufgabe: ${ctx.taskKind}).
+ Aktuelle Trainingskonfiguration (Werte, die du ändern kannst):
+ ${cfgJson}
+diff --git a/app/src/main/assets/www/js/canvas.js b/app/src/main/assets/www/js/canvas.js
+index afc5f88a..1156482d 100644
+--- a/app/src/main/assets/www/js/canvas.js
++++ b/app/src/main/assets/www/js/canvas.js
+@@ -1145,8 +1145,15 @@ export class CanvasBoard {
+     this.dom = els;
+     this._codeFn = {};
+     this._zoom(els);
+-    // Pan auf dem Hintergrund
++    // Pan/Pinch auf dem Hintergrund (v2.18.0: Zwei-Finger-Zoom + -Verschieben)
+     els.world.addEventListener('pointerdown', (e) => this._worldDown(e));
++    // v2.18.0: Mausrad-Zoom um die Cursor-Position (Desktop/Tests)
++    if (els.viewport) {
++      els.viewport.addEventListener('wheel', (e) => {
++        e.preventDefault();
++        this.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
++      }, { passive: false });
++    }
+     // Buttons
+     if (els.runBtn) els.runBtn.addEventListener('click', () => { this.hooks.buzz(); this.hooks.toggleRun(); });
+     if (els.trainBtn) els.trainBtn.addEventListener('click', () => { this.hooks.buzz(); if (this.training) this.stopTraining(); else this.startTraining(); });
+@@ -1155,6 +1162,8 @@ export class CanvasBoard {
+ 
+   _zoom(els) {
+     this._vz = this.graph.view.z || 0.85;
++    this._zmin = 0.22;  // v2.18.0: Vollbild → weiter rauszoomen (IO-Karten sind hoch)
++    this._zmax = 2.4;
+     const apply = () => {
+       els.world.style.transform = 'translate(' + this.graph.view.x + 'px,' + this.graph.view.y + 'px) scale(' + this._vz + ')';
+       this.graph.view.z = this._vz;
+@@ -1164,24 +1173,49 @@ export class CanvasBoard {
+   }
+   _viewApply() { if (this._applyView) this._applyView(); }
+ 
++  /** Hintergrund: 1 Finger = verschieben · 2 Finger = Pinch-ZOOM um Finger-Mitte + Verschieben (v2.18.0). */
+   _worldDown(e) {
+     if (e.target.closest('.cv-node') || e.target.closest('button') || e.target.closest('input')) return;
+     const el = this.dom.world;
+     const pointers = this._pan = this._pan || new Map();
+     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+-    el.setPointerCapture(e.pointerId);
++    try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetische Events (Tests) ohne echte Pointer-Id */ }
++    this._pinch = null; // Baseline bei jedem Finger-Wechsel neu aufbauen
++    this._vpRect = null; // Anker-Rect frisch messen
+     const move = (ev) => {
+       if (!pointers.has(ev.pointerId)) return;
++      const prev = pointers.get(ev.pointerId); // v2.18.0 FIX: alte Position VOR dem Überschreiben lesen (v2.17.0-Bug: Delta war immer 0 — Pan ging nicht)
+       pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+       if (pointers.size === 1) {
+-        const p = pointers.get(ev.pointerId);
+-        this.graph.view.x += (ev.clientX - p.x);
+-        this.graph.view.y += (ev.clientY - p.y);
++        this.graph.view.x += ev.clientX - prev.x;
++        this.graph.view.y += ev.clientY - prev.y;
++        this._viewApply();
++      } else if (pointers.size >= 2) {
++        // Pinch: Zoom um den MITTELPUNKT der beiden Finger + Verschieben mit der Mitte
++        // v2.18.0: Mitte von CLIENT-Koordinaten in viewport-relative umrechnen
++        // (view.x/y ist relativ zum Viewport — ohne Abzug springt der Anker um den Rand-Offset)
++        if (!this._vpRect) this._vpRect = this.dom.viewport.getBoundingClientRect();
++        const pts = [...pointers.values()].slice(0, 2);
++        const cx = (pts[0].x + pts[1].x) / 2 - this._vpRect.left;
++        const cy = (pts[0].y + pts[1].y) / 2 - this._vpRect.top;
++        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
++        if (!this._pinch || this._pinch.n !== pointers.size) {
++          this._pinch = { d: dist || 1, cx, cy, n: pointers.size, z: this._vz, vx: this.graph.view.x, vy: this.graph.view.y };
++          return;
++        }
++        const target = this._pinch.z * Math.max(0.2, Math.min(8, dist / this._pinch.d));
++        const z1 = Math.max(this._zmin, Math.min(this._zmax, target));
++        const wx = (this._pinch.cx - this._pinch.vx) / this._pinch.z;
++        const wy = (this._pinch.cy - this._pinch.vy) / this._pinch.z;
++        this._vz = z1;
++        this.graph.view.x = cx - wx * z1;
++        this.graph.view.y = cy - wy * z1;
+         this._viewApply();
+       }
+     };
+     const up = (ev) => {
+       pointers.delete(ev.pointerId);
++      this._pinch = null; // Rest-Finger pannt weiter OHNE Sprung (Delta-basiert)
+       if (!pointers.size) {
+         el.removeEventListener('pointermove', move);
+         el.removeEventListener('pointerup', up);
+@@ -1195,8 +1229,22 @@ export class CanvasBoard {
+     el.addEventListener('pointercancel', up);
+   }
+ 
+-  zoomBy(f) {
+-    this._vz = Math.max(0.35, Math.min(1.6, this._vz * f));
++  /** Zoom um einen Bildschirmpunkt (px/py = clientX/clientY; ohne Angabe = Viewport-Mitte). */
++  zoomBy(f, px, py) {
++    const vp = this.dom.viewport;
++    if (!vp) { this._vz = Math.max(this._zmin, Math.min(this._zmax, this._vz * f)); this._viewApply(); this.scheduleSave(); return; }
++    const r = vp.getBoundingClientRect();
++    const cx = px != null ? px - r.left : r.width / 2;
++    const cy = py != null ? py - r.top : r.height / 2;
++    const z0 = this._vz;
++    const z1 = Math.max(this._zmin, Math.min(this._zmax, z0 * f));
++    if (z1 === z0) return;
++    // Weltpunkt unter dem Anker halten → geometrisch sauberer Zoom
++    const wx = (cx - this.graph.view.x) / z0;
++    const wy = (cy - this.graph.view.y) / z0;
++    this._vz = z1;
++    this.graph.view.x = cx - wx * z1;
++    this.graph.view.y = cy - wy * z1;
+     this._viewApply();
+     this.scheduleSave();
+   }
+@@ -1209,7 +1257,7 @@ export class CanvasBoard {
+       maxX = Math.max(maxX, nd.x + 200); maxY = Math.max(maxY, nd.y + 160);
+     }
+     if (minX > maxX) return;
+-    const z = Math.min(1.2, Math.max(0.35, Math.min(vp.clientWidth / (maxX - minX + 80), vp.clientHeight / (maxY - minY + 80))));
++    const z = Math.min(1.2, Math.max(this._zmin, Math.min(vp.clientWidth / (maxX - minX + 80), vp.clientHeight / (maxY - minY + 80))));
+     this._vz = z;
+     this.graph.view.x = 20 - minX * z;
+     this.graph.view.y = 20 - minY * z;
+@@ -1318,19 +1366,24 @@ export class CanvasBoard {
+       foot.textContent = 'R – · 0 Schritte';
+       el.append(foot);
+     }
+-    // Ziehen am Kopf
++    // Ziehen am Kopf (v2.18.0: Drag-Lock — ein Zeiger pro Karte, zweiter Finger startet keinen Zweitzug)
+     head.addEventListener('pointerdown', (e) => {
+       if (e.target.closest('.cv-nbtn')) return;
++      if (this._dragPtr != null) return;
+       e.stopPropagation();
++      this._dragPtr = e.pointerId;
+       const startX = e.clientX, startY = e.clientY, ox = nd.x, oy = nd.y;
+-      el.setPointerCapture(e.pointerId);
++      try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetische Events */ }
+       const move = (ev) => {
++        if (this._dragPtr !== ev.pointerId) return;
+         nd.x = Math.round(ox + (ev.clientX - startX) / this._vz);
+         nd.y = Math.round(oy + (ev.clientY - startY) / this._vz);
+         el.style.left = nd.x + 'px'; el.style.top = nd.y + 'px';
+         this._drawWires();
+       };
+-      const up = () => {
++      const up = (ev) => {
++        if (ev && ev.pointerId !== undefined && this._dragPtr !== ev.pointerId) return;
++        this._dragPtr = null;
+         el.removeEventListener('pointermove', move);
+         el.removeEventListener('pointerup', up);
+         el.removeEventListener('pointercancel', up);
+diff --git a/app/src/main/assets/www/js/main.js b/app/src/main/assets/www/js/main.js
+index 21cff8a3..e163915e 100755
+--- a/app/src/main/assets/www/js/main.js
++++ b/app/src/main/assets/www/js/main.js
+@@ -29,7 +29,7 @@ import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, pa
+ import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
+ import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy } from './canvas.js'; // v2.17.0: NETZ-CANVAS
+ 
+-const VERSION = '2.17.0';
++const VERSION = '2.18.0';
+ const CTRL_DT = 0.02; // 50 Hz Regelrate
+ 
+ // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
+@@ -2036,6 +2036,7 @@ function toggleCanvasSheet(force) {
+   if (!sheet) return;
+   const show = force !== undefined ? force : sheet.classList.contains('hidden');
+   sheet.classList.toggle('hidden', !show);
++  document.body.classList.toggle('cv-open', !!show); // v2.18.0: UI-Leiste über Vollbild-Canvas
+   const btn = document.getElementById('btnCanvas');
+   if (btn) btn.classList.toggle('lit', show);
+   if (show) {
+diff --git a/app/src/main/assets/www/mcp/CANVAS.md b/app/src/main/assets/www/mcp/CANVAS.md
+index 16b3adf0..a4fdd891 100644
+--- a/app/src/main/assets/www/mcp/CANVAS.md
++++ b/app/src/main/assets/www/mcp/CANVAS.md
+@@ -1,4 +1,4 @@
+-# CANVAS.md — NETZ-CANVAS (v2.17.0)
++# CANVAS.md — NETZ-CANVAS (v2.18.0 · VOLLBILD + MULTI-TOUCH)
+ 
+ Der **Netz-Canvas** ist ein Node-Editor im Trainrobot: Architekturen aus Policy-Karten
+ bauen, mit Kabeln verdrahten, **live auf dem Roboter ausführen** und **je Karte
+@@ -15,6 +15,21 @@ trainieren**. Du (Gemini) hast vollen Zugriff über 4 Werkzeuge:
+ 
+ ---
+ 
++## 0) Bedienung (v2.18.0: VOLLBILD + Multi-Touch)
++
++Das Canvas öffnet als **VOLLBILD-Overlay** (drei Punkte, ⛶-los — die App läuft nativ
++im Immersive Mode, das Overlay füllt also den ganzen Bildschirm):
++
++- **1 Finger** auf leerer Fläche = Fläche verschieben · auf Kartenkopf = Karte ziehen ·
++  auf Port = Kabel antippen/z ziehen
++- **2 Finger** = **Pinch-Zoomen** (um den Finger-Mittelpunkt, 0,22×–2,4×) und
++  **gleichzeitig Verschieben** — der Welt-Punkt unter den Fingern bleibt unter den Fingern
++- **Zoom-Buttons** `−` / `+` zoomen um die Fläche-Mitte, `⤢` passt alle Karten ein,
++  Mausrad zoomt um den Cursor (Desktop/Emulator)
++- Die **UI-Elemente** (canvasUI: Buttons/Slider/Joystick/Gauge) schweben als Leiste
++  ÜBER dem Vollbild-Canvas und bleiben dort immer bedienbar — auch im CANVAS-Modus
++- Schließen: `×` oben rechts (Graph bleibt je Roboter gespeichert)
++
+ ## 1) Aufbau des Graphen
+ 
+ Der Canvas hat pro Roboter EIGENEN Stand (G1/MicroDuck/Drohne trennen ihre Graphen).
+diff --git a/app/src/main/assets/www/style.css b/app/src/main/assets/www/style.css
+index d81a1d97..c4e0af5a 100755
+--- a/app/src/main/assets/www/style.css
++++ b/app/src/main/assets/www/style.css
+@@ -632,19 +632,46 @@ html, body {
+ /* ═══════════════════════════════════════════════════════════
+    v2.17.0 — NETZ-CANVAS
+    ═══════════════════════════════════════════════════════════ */
+-.cv-sheet { display: flex; flex-direction: column; max-height: 88vh; }
++/* v2.18.0: Canvas = VOLLBILD-Overlay (WebView hat keine Fullscreen-API —
++   Full-Viewport-Fixed-Overlay + nativer Immersive Mode = effektiv Vollbild) */
++.cv-sheet {
++  display: flex; flex-direction: column;
++  top: 0; left: 0; right: 0; bottom: 0;
++  height: 100vh; height: 100dvh;
++  max-height: none;
++  border-radius: 0; border-top: none;
++  padding: 10px 12px calc(var(--sa-b) + 10px);
++  z-index: 46;
++  overscroll-behavior: contain;
++}
+ .cv-sheet .cv-toolbar { display: flex; gap: 6px; align-items: center; padding: 4px 12px 0; flex-wrap: wrap; }
+ .cv-toolbar .cv-sep { width: 1px; height: 20px; background: rgba(148, 180, 220, 0.25); margin: 0 2px; }
+ #cvStat { margin-left: auto; font-size: 10px; color: rgba(147, 164, 184, 0.8); }
+ .cv-viewport {
+-  position: relative; flex: 1; min-height: 260px; margin: 8px 10px;
++  position: relative; flex: 1 1 auto; min-height: 0; margin: 8px 4px 4px;
+   overflow: hidden; border: 1px solid rgba(148, 180, 220, 0.16);
+   border-radius: 10px; background:
+     radial-gradient(rgba(148, 180, 220, 0.10) 1px, transparent 1.4px);
+   background-size: 22px 22px; background-position: 0 0;
+-  touch-action: none; cursor: grab;
++  touch-action: none; overscroll-behavior: contain; cursor: grab;
++}
++.cv-world { position: absolute; left: 0; top: 0; width: 6000px; height: 4000px; transform-origin: 0 0; touch-action: none; }
++/* v2.18.0: Multi-Touch-Hinweis (dezent, blockiert nichts) */
++.cv-gesture {
++  position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%);
++  font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.12em;
++  color: rgba(147, 164, 184, 0.55); background: rgba(10, 15, 23, 0.6);
++  border: 1px solid rgba(148, 180, 220, 0.14); border-radius: 999px;
++  padding: 3px 10px; pointer-events: none; white-space: nowrap; z-index: 5;
++}
++/* v2.18.0: Canvas-UI-Leiste ÜBER dem Vollbild-Canvas sichtbar */
++body.cv-open #canvasUIBar {
++  z-index: 50;
++  bottom: calc(var(--sa-b) + 44px);
++  left: calc(var(--sa-l) + 12px);
++  right: calc(var(--sa-r) + 12px);
++  max-height: 120px;
+ }
+-.cv-world { position: absolute; left: 0; top: 0; width: 6000px; height: 4000px; transform-origin: 0 0; }
+ .cv-wires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+ .cv-wire { fill: none; stroke: #38d6e0; stroke-width: 2; opacity: 0.75; }
+ .cv-wire.cv-wsink { stroke: #ff9d21; }
+diff --git a/scripts/ui_v2180_test.mjs b/scripts/ui_v2180_test.mjs
+new file mode 100644
+index 00000000..d9c73a98
+--- /dev/null
++++ b/scripts/ui_v2180_test.mjs
+@@ -0,0 +1,273 @@
++// ui_v2180_test.mjs — v2.18.0 Canvas VOLLBILD + MULTI-TOUCH (Playwright + CDP-Touch):
++//   1) Vollbild: #canvasSheet füllt den ganzen Viewport (kein Bottom-Sheet), kein sheet-grab
++//   2) Gesten-Hinweis #cvGesture sichtbar
++//   3) Pinch-ZOOM: 2 Finger auseinander/zusammen → Zoom um Finger-MITTE (Weltpunkt unter Mitte bleibt)
++//   4) Zwei-Finger-PAN: beide Finger bewegen → Translate folgt exakt
++//   5) Finger-Wechsel: nach touchEnd eines Fingers pannt der Restfinger SPRUNGWEI frei
++//   6) Wheel-Zoom um Cursor + Zoom-Buttons um Fläche-Mitte
++//   7) fitView zeigt alle Karten wieder
++//   8) Karten-Drag mit 1 Finger + Drag-Lock (zweiter Finger startet keinen Zweitzug)
++//   9) cvClose schließt + body.cv-open Flag sauber
++//  10) Keine Seitenfehler
++// Usage: node scripts/ui_v2180_test.mjs
++import http from 'node:http';
++import path from 'node:path';
++import fs from 'node:fs';
++import { fileURLToPath } from 'url';
++import { chromium } from 'playwright';
++
++const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
++const WWW = path.join(ROOT, 'app/src/main/assets/www');
++const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.xml': 'model/xml', '.stl': 'model/stl', '.obj': 'text/plain', '.png': 'image/png', '.md': 'text/markdown', '.json': 'application/json' };
++const server = http.createServer(async (req, res) => {
++  const url = (req.url || '/').split('?')[0];
++  const p = path.join(WWW, url === '/' ? 'index.html' : url);
++  if (!p.startsWith(WWW)) { res.writeHead(403); res.end(); return; }
++  try {
++    const buf = fs.readFileSync(p);
++    res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' });
++    res.end(buf);
++  } catch (e) { res.writeHead(404); res.end('nf'); }
++});
++await new Promise(r => server.listen(0, '127.0.0.1', r));
++const BASE = `http://127.0.0.1:${server.address().port}`;
++
++let pass = 0, fail = 0;
++const ok = (cond, name, extra = '') => {
++  if (cond) { pass++; console.log('  ✓', name, extra); }
++  else { fail++; console.log('  ✗', name, extra); }
++};
++const near = (a, b, eps = 2.5) => Math.abs(a - b) <= eps;
++
++const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--disable-web-security'] });
++const context = await browser.newContext({ viewport: { width: 420, height: 860 }, hasTouch: true });
++const page = await context.newPage();
++const errs = [];
++page.on('pageerror', (e) => errs.push('pageerror: ' + e.message));
++page.on('console', (m) => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
++
++await page.goto(BASE, { waitUntil: 'domcontentloaded' });
++try {
++  await page.waitForFunction(() => {
++    const s = document.getElementById('splash');
++    return !s || s.classList.contains('gone');
++  }, null, { timeout: 120000 });
++  ok(true, 'Boot abgeschlossen');
++} catch (e) {
++  ok(false, 'Boot abgeschlossen', '— Timeout');
++}
++await page.waitForFunction(() => !!(window.__trainrobot && window.__trainrobot.canvas), null, { timeout: 60000 }).catch(() => {});
++
++// Pointer-Event-Helfer (synthetische PointerEvents mit pointerId — Multi-Touch-Kette,
++// identische Handler-Logik wie im echten WebView-Touch; untrusted, aber Handler prüfen das nicht)
++async function pev(type, x, y, id, sel) {
++  await page.evaluate(([type, x, y, id, sel]) => {
++    const el = sel ? document.querySelector(sel) : document.getElementById('cvWorld');
++    if (!el) return;
++    el.dispatchEvent(new PointerEvent(type, {
++      pointerId: id, pointerType: 'touch', isPrimary: id === 1,
++      clientX: x, clientY: y, bubbles: true, cancelable: true,
++      buttons: (type === 'pointerup' || type === 'pointercancel') ? 0 : 1,
++      width: 1, height: 1, pressure: (type === 'pointerup' || type === 'pointercancel') ? 0 : 0.5,
++    }));
++  }, [type, x, y, id, sel]);
++  await page.waitForTimeout(25);
++}
++const view = () => page.evaluate(() => { const v = window.__trainrobot.canvas.graph.view; return { x: v.x, y: v.y, z: v.z }; });
++const worldPt = (sx, sy, v, r) => ({ x: (sx - r.left - v.x) / v.z, y: (sy - r.top - v.y) / v.z });
++
++// ── 1) Vollbild-Geometrie ───────────────────────────────────
++console.log('\n[1] VOLLBILD');
++await page.click('#btnCanvas');
++await page.waitForTimeout(350);
++const geo = await page.evaluate(() => {
++  const sheet = document.getElementById('canvasSheet');
++  const vp = document.getElementById('cvPort');
++  const r = sheet.getBoundingClientRect(), vr = vp.getBoundingClientRect();
++  return {
++    w: r.width, h: r.height, left: r.left, top: r.top,
++    iw: innerWidth, ih: innerHeight,
++    grab: !!sheet.querySelector('.sheet-grab'),
++    vh: vr.height, vhFrac: vr.height / innerHeight,
++    gesture: (() => { const g = document.getElementById('cvGesture'); return g ? g.offsetHeight > 0 : false; })(),
++    touchAction: getComputedStyle(vp).touchAction,
++    dvh: sheet.style.height,
++  };
++});
++ok(near(geo.w, geo.iw) && near(geo.h, geo.ih) && geo.left === 0 && geo.top === 0, 'Sheet füllt GANZEN Viewport', `${geo.w}×${geo.h} @(${geo.left},${geo.top}) vs ${geo.iw}×${geo.ih}`);
++ok(!geo.grab, 'Kein sheet-grab mehr (kein Bottom-Sheet)');
++ok(geo.vhFrac > 0.5, 'Viewport-Fläche > 50 % der Höhe', (geo.vhFrac * 100).toFixed(0) + ' %');
++ok(geo.gesture, 'Gesten-Hinweis #cvGesture sichtbar');
++ok(geo.touchAction === 'none', 'touch-action:none auf Viewport (keine Browser-Gesten)', geo.touchAction);
++
++// ── 2) Pinch-ZOOM um Finger-Mitte ───────────────────────────
++console.log('\n[2] PINCH-ZOOM (2 Finger)');
++const vpR = await page.evaluate(() => document.getElementById('cvPort').getBoundingClientRect());
++const CX = Math.round(vpR.left + vpR.width / 2), CY = Math.round(vpR.top + vpR.height * 0.45);
++const bg = await page.evaluate(([x, y]) => {
++  const el = document.elementFromPoint(x, y);
++  return el ? (el.id + ' ' + el.className) : 'null';
++}, [CX, CY]);
++ok(/cv-world|cv-viewport|cv-wires|cv-gesture|cvWorld/.test(String(bg)), 'Testpunkt liegt auf leerer Fläche', String(bg));
++const v0 = await view();
++const wA = worldPt(CX, CY, v0, vpR);
++// Pinch: Finger auseinander (60 → 120 px), Mitte bleibt EXAKT (CX,CY)
++await pev('pointerdown', CX - 30, CY, 1);
++await pev('pointerdown', CX + 30, CY, 2);
++await pev('pointermove', CX - 30, CY, 1);
++await pev('pointermove', CX + 30, CY, 2); // Leer-Move → Baseline: Mitte CX, dist 60
++await pev('pointermove', CX - 60, CY, 1);
++await pev('pointermove', CX + 60, CY, 2); // dist 120 → Faktor 2,0
++const v1 = await view();
++ok(v1.z > v0.z * 1.8, 'Auseinanderziehen zoomt HEREin', `z ${v0.z.toFixed(3)} → ${v1.z.toFixed(3)}`);
++const wB = worldPt(CX, CY, v1, vpR);
++ok(near(wA.x, wB.x, 1.5) && near(wA.y, wB.y, 1.5), 'Weltpunkt unter Finger-Mitte bleibt fix', `Δ(${(wB.x - wA.x).toFixed(2)},${(wB.y - wA.y).toFixed(2)})`);
++// Zusammenziehen → raus
++await pev('pointermove', CX - 20, CY, 1);
++await pev('pointermove', CX + 20, CY, 2);
++const v2 = await view();
++ok(v2.z < v1.z && v2.z >= 0.22, 'Zusammenziehen zoomt RAUS (Klemme 0,22)', `z=${v2.z.toFixed(3)}`);
++await pev('pointerup', CX + 20, CY, 1);
++await pev('pointerup', CX + 20, CY, 2);
++const v2b = await view();
++ok(near(v2b.z, v2.z, 0.001) && near(v2b.x, v2.x, 0.001), 'pointerup ändert View nicht mehr');
++
++// ── 3) Zwei-Finger-PAN ───────────────────────────────────────
++console.log('\n[3] ZWEI-FINGER-PAN');
++const v3 = await view();
++const wC = worldPt(CX, CY, v3, vpR);
++await pev('pointerdown', CX - 25, CY + 10, 11);
++await pev('pointerdown', CX + 25, CY + 10, 12);
++await pev('pointermove', CX - 25, CY + 10, 11);
++await pev('pointermove', CX + 25, CY + 10, 12); // Baseline
++await pev('pointermove', CX - 45, CY - 20, 11);
++await pev('pointermove', CX + 5, CY - 20, 12); // Mitte: (-20,-30)
++const v4 = await view();
++ok(near(v4.x - v3.x, -20, 1.5) && near(v4.y - v3.y, -30, 1.5), 'Translate folgt Finger-MITTE exakt', `Δ(${(v4.x - v3.x).toFixed(1)},${(v4.y - v3.y).toFixed(1)}) erwartet (-20,-30)`);
++const wD = worldPt(CX - 20, CY - 30, v4, vpR);
++ok(near(wC.x, wD.x, 1.5) && near(wC.y, wD.y, 1.5), 'Zoom unverändert beim reinen Pan', `z ${v3.z.toFixed(3)}→${v4.z.toFixed(3)}`);
++
++// ── 4) Finger-Wechsel: Restfinger pannt sprungfrei ──────────
++console.log('\n[4] FINGER-WECHSEL');
++await pev('pointerup', CX - 45, CY - 20, 11); // Finger 1 hoch — F2 bleibt
++await page.waitForTimeout(60);
++const v5 = await view();
++await pev('pointermove', CX + 45, CY - 20, 12); // Restfinger +40/+0
++const v6 = await view();
++ok(near(v6.x - v5.x, 40, 1.5) && near(v6.y - v5.y, 0, 1.5), 'Rest-Finger pannt OHNE Sprung', `Δ(${(v6.x - v5.x).toFixed(1)},${(v6.y - v5.y).toFixed(1)})`);
++await pev('pointerup', CX + 45, CY - 20, 12);
++
++// ── 5) Wheel-Zoom + Buttons ─────────────────────────────────
++console.log('\n[5] WHEEL + BUTTONS');
++await page.mouse.move(CX, CY);
++const v7 = await view();
++const wE = worldPt(CX, CY, v7, vpR);
++await page.mouse.wheel(0, -240); // hoch = rein
++const v8 = await view();
++ok(v8.z > v7.z * 1.05, 'Wheel hoch zoomt rein', `${v7.z.toFixed(3)} → ${v8.z.toFixed(3)}`);
++const wF = worldPt(CX, CY, v8, vpR);
++ok(near(wE.x, wF.x, 1.5) && near(wE.y, wF.y, 1.5), 'Wheel zoomt um Cursor (Punkt fix)');
++await page.click('#cvZoomIn');
++const v9 = await view();
++ok(v9.z > v8.z * 1.1, 'Button + zoomt', `${v8.z.toFixed(3)} → ${v9.z.toFixed(3)}`);
++const midPt0 = worldPt(Math.round(vpR.left + vpR.width / 2), Math.round(vpR.top + vpR.height / 2), v8, vpR);
++const midPt1 = worldPt(Math.round(vpR.left + vpR.width / 2), Math.round(vpR.top + vpR.height / 2), v9, vpR);
++ok(near(midPt0.x, midPt1.x, 1.5) && near(midPt0.y, midPt1.y, 1.5), 'Button zoomt um Fläche-MITTE');
++await page.click('#cvZoomOut');
++await page.click('#cvZoomOut');
++const v10 = await view();
++ok(v10.z < v9.z, 'Button − zoomt raus');
++
++// ── 6) fitView ──────────────────────────────────────────────
++console.log('\n[6] FIT');
++await page.evaluate(() => window.__trainrobot.canvas.zoomBy(0.4)); // weit raus
++await page.click('#cvFit');
++await page.waitForTimeout(120);
++const fit = await page.evaluate(() => {
++  const vp = document.getElementById('cvPort').getBoundingClientRect();
++  const ids = ['io', 'out'];
++  let inside = 0, total = 0;
++  for (const el of document.querySelectorAll('#cvWorld .cv-node')) {
++    total++;
++    const r = el.getBoundingClientRect();
++    const over = Math.min(r.right, vp.right) - Math.max(r.left, vp.left);
++    const overY = Math.min(r.bottom, vp.bottom) - Math.max(r.top, vp.top);
++    if (over > 10 && overY > 10) inside++;
++  }
++  return { inside, total, z: window.__trainrobot.canvas.graph.view.z };
++});
++ok(fit.inside === fit.total && fit.total >= 2, '⤢ zeigt ALLE Karten (' + fit.total + ') im Viewport', `${fit.inside}/${fit.total}, z=${fit.z.toFixed(2)}`);
++
++// ── 7) Karten-Drag + Drag-Lock ──────────────────────────────
++console.log('\n[7] KARTEN-DRAG + LOCK');
++const card = await page.evaluate(() => {
++  const T = window.__trainrobot;
++  const b = T.canvas;
++  let nd = b.graph.nodes.find(n => n.type === 'policy');
++  if (!nd) {
++    const res = T.execTool('canvasGraph', { cmd: 'add', type: 'policy', nIn: 2, nOut: 2, hidden: [16], name: 'DragTest' });
++    nd = b.graph.nodes.find(n => n.type === 'policy');
++  }
++  if (nd) { b.fitView(); b.render(); }
++  return nd ? { id: nd.id, x: nd.x, y: nd.y } : null;
++});
++await page.waitForTimeout(200);
++if (!card) { ok(false, 'Karte vorhanden', '— keine policy-Karte im Graph'); }
++else {
++  await page.evaluate(() => { const b = window.__trainrobot.canvas; b.render(); });
++  await page.waitForTimeout(120);
++  const headP = await page.evaluate((id) => {
++    const el = document.querySelector('.cv-node[data-id="' + id + '"] .cv-nhead');
++    const r = el.getBoundingClientRect();
++    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), z: window.__trainrobot.canvas.graph.view.z };
++  }, card.id);
++  // 1 Finger: Karte ziehen (+30, +20 in Screen → /z in Welt)
++  const headSel = '.cv-node[data-id="' + card.id + '"] .cv-nhead';
++  const nodeSel = '.cv-node[data-id="' + card.id + '"]';
++  await pev('pointerdown', headP.x, headP.y, 21, headSel);
++  await pev('pointermove', headP.x + 30, headP.y + 20, 21, nodeSel);
++  await pev('pointerup', headP.x + 30, headP.y + 20, 21, nodeSel);
++  const dragged = await page.evaluate((id) => {
++    const nd = window.__trainrobot.canvas.graph.nodes.find(n => n.id === id);
++    return { x: nd.x, y: nd.y };
++  }, card.id);
++  ok(near(dragged.x - card.x, Math.round(30 / headP.z), 2) && near(dragged.y - card.y, Math.round(20 / headP.z), 2), '1-Finger zieht Karte (durch z geteilt)', `Δ(${(dragged.x - card.x).toFixed(1)},${(dragged.y - card.y).toFixed(1)}) @z=${headP.z.toFixed(2)}`);
++  // Drag-Lock: zweiter Finger auf Kopf startet KEINEN Zweitzug
++  const before = dragged;
++  await pev('pointerdown', headP.x + 30, headP.y + 20, 21, headSel);
++  await pev('pointerdown', headP.x + 30, headP.y + 20, 22, headSel);
++  await pev('pointermove', headP.x + 80, headP.y + 60, 22, nodeSel); // nur F2 bewegt
++  const mid = await page.evaluate((id) => {
++    const nd = window.__trainrobot.canvas.graph.nodes.find(n => n.id === id);
++    return { x: nd.x, y: nd.y };
++  }, card.id);
++  ok(near(mid.x, before.x, 0.01) && near(mid.y, before.y, 0.01), 'Zweiter Finger auf Kopf startet keinen Zweitzug (Lock)', `Δ(${(mid.x - before.x).toFixed(2)},${(mid.y - before.y).toFixed(2)})`);
++  await pev('pointermove', headP.x + 30 + 20, headP.y + 20 + 10, 21, nodeSel); // F1 zieht weiter
++  await pev('pointerup', headP.x + 30 + 20, headP.y + 20 + 10, 21, nodeSel);
++  await pev('pointerup', headP.x + 80, headP.y + 60, 22, nodeSel);
++  const after = await page.evaluate((id) => {
++    const nd = window.__trainrobot.canvas.graph.nodes.find(n => n.id === id);
++    return { x: nd.x, y: nd.y };
++  }, card.id);
++  ok(near(after.x - mid.x, Math.round(20 / headP.z), 2) && near(after.y - mid.y, Math.round(10 / headP.z), 2), 'Original-Finger zieht weiter (Lock räumt sauber auf)', `Δ(${(after.x - mid.x).toFixed(1)},${(after.y - mid.y).toFixed(1)})`);
++}
++
++// ── 8) Schließen + cv-open Flag ─────────────────────────────
++console.log('\n[8] SCHLIESSEN');
++ok(await page.evaluate(() => document.body.classList.contains('cv-open')), 'body.cv-open gesetzt bei offenem Canvas');
++await page.click('#cvClose');
++await page.waitForTimeout(350);
++ok(await page.evaluate(() => !document.body.classList.contains('cv-open')), 'body.cv-open entfernt nach Schließen');
++ok(await page.evaluate(() => document.getElementById('canvasSheet').classList.contains('hidden')), 'Sheet versteckt nach Schließen');
++// Graph überlebt Schließen
++ok(await page.evaluate(() => window.__trainrobot.canvas.graph.nodes.length >= 2), 'Graph bleibt je Roboter erhalten');
++
++// ── 9) Seitenfehler ─────────────────────────────────────────
++console.log('\n[9] FEHLER');
++const realErrs = errs.filter(e => !/favicon|Slow network|GPU|swiftshader|GroupMarkerNotSet/i.test(e));
++ok(realErrs.length === 0, 'Keine Seitenfehler', realErrs.slice(0, 3).join(' | '));
++
++console.log(`\n═══ ERGEBNIS: ${pass} bestanden · ${fail} fehlgeschlagen ═══`);
++await browser.close();
++server.close();
++process.exit(fail ? 1 : 0);
