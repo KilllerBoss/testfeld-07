@@ -730,3 +730,23 @@ Work Log:
 Stage Summary:
 - v2.25.0 / versionCode 37 live: ARDY Mini (HF-Space intsuc/ardy-mini) läuft AUF DEM GERÄT (WebGPU, sonst CPU) — Text→Motion ohne Cloud/Notebook, Ergebnis = normaler Lehrer-Clip (G1, Reward-only). App heißt jetzt LERTRAIN, APK heißt lertrain.apk — gleiche Signatur 1c0422b9…, gleiche Package, überschreibt die alte App per Update.
 - Alle 4 ARDY-Testsuiten grün (52 Checks + 3 echte ONNX-Inferenzen); lokales Artefakt geprüft und abgelegt.
+
+---
+Task ID: 48
+Agent: Super Z (Hauptagent)
+Task: v2.26.0 — LerTrain als EIGENE App + ARDY Mini separates Panel (Steuerung/Prompting/Download/Live-%/Trainings-%)
+
+Work Log:
+- NUTZER-REPORT: „Es hat als original meine alte app aktualisiert und nicht als separaten app installiert“ → applicationId von com.trainrobot.app auf com.lertrain.app geändert (app/build.gradle) → lertrain.apk installiert sich JETZT NEBEN Trainrobot (altes App-Icon bleibt unverändert). Manifest-package/namespace bleibt com.trainrobot.app (MainActivity/R-Deklarationen unangetastet), Signatur 1c0422b9… IDENTISCH.
+- ARDY MINI EIGENES PANEL („mache ardy mini Steuerung und prompting seperat“): ardy-section aus dem Trainings-/GLB-Sheet ENTFERNT → neues <section id="ardySheet"> mit eigenem Topbar-Button btnArdy (👤-SVG) + ardyClose. Drei getrennte Bereiche: MODELL (ardyDl Download-Button + ardyDlPct + ardyCacheClear), PROMPTING (16 Chips + ardyPrompt + Dauer/Seed/CFG), LIVE (ardyPct groß + ardyGen + ardyStop), TRAINING (ardyTrainPct + ardyTrainFill + ardyTrainGoal Ziel-Input).
+- MODELL-DOWNLOAD-BUTTON („dort sollte ein Button sein um es herunterladen zu können“): ardyDl ruft ensureRuntime('dl') — Gesamt-Prozent über gewichtete Stufen (ort 3 · manifest 0.2 · tokenizer 1.5 · text_encoder 22 · denoiser 56 · decoder 38), Status „Download N % — denoiser X MB / Y MB“, danach „✓ Modell bereit“ (disabled). Cache-löschen setzt den Button zurück. Generation nutzt denselben Runtime-Cache.
+- LIVE-STEUERUNG („Man sollte es live steuern können“): ardy.js generate() akzeptiert opts.getLivePrompt — an jedem Folgefester-Anfang wird das Prompt-Feld neu gelesen; geänderter Prompt → sofortige Re-Kodierung (nur textConditions, History/Seed bleiben), Bewegung lenkt während der Generierung um. Live-% = Denoising-Fortschritt (monoton über alle Fenster). ardyStop bricht per AbortController ab (Modell bleibt geladen). out.promptsLive dokumentiert den finalen Prompt (Bugfix: promptsLive war im out-Literal VOR der Schleife ausgewertet → immer undefined).
+- TRAININGS-PROZENT („Prozent wärend mein Roboter trainiert“): im 0,35-s-Raster der Hauptschleife: ardyTrainPct = trainer.stepCount / Ziel (ardyTrainGoal, localStorage tr_tgoal, default 1.000.000, Eingabe ab 10k Schritte). Anzeige „12,3 %“ + blauer Balken + „N / Ziel · trainiert/pausiert“. __trainrobot-Handle um ardyTrainGoal erweitert.
+- CROSS-CLOSE: toggleArdy (ui.js) schließt Training/KI/Konsole; toggleTrain/toggleAI schließen jetzt AUCH ARDY (bidirektional, kein verdeckter Close-Knopf).
+- BUGS IM PROZESS GEFUNDEN+GEFIXT: (1) promptsLive-Zeitpunkt (s.o.) — ardy_live-Test Deckung; (2) Test-Erwartung getLivePrompt-Aufrufe = WINDOWS-1 (Fenster 0 nutzt Start-Prompt); (3) motionset_v2230-Pins 2.24.0/36 → 2.26.0/38.
+- TESTS: scripts/ardy_live_v2260_test.mjs NEU (Mock-Runtime: Live-Wechsel genau 1 Re-Kodierung, Reihenfolge, promptsLive, unveränderter/leerer Prompt ignoriert, ohne getLivePrompt unverändert, Seed-Determinismus) GRÜN · scripts/ui_v2260_test.mjs NEU (22 Checks im echten Browser: eigenes Sheet getrennt, btnArdy öffnen/schließen, bidirektionaler Cross-Close, Download-Zeile, Live-Zeile, Chips/Prompting, Trainings-% + Ziel-Persistenz, Pins applicationId/38/2.26.0/LerTrain/toggleArdy) GRÜN · ui_v2250 15/15 (Check 1 aufs eigene Sheet umgeschrieben) · ardy_math 17/17 · ardy_runtime 15/15 · ardy_real_onnx 3/3 (echte Inferenz) · motionset_v2230 49/49.
+- BUILD+VERIFIKATION: app-release.apk 28.110.765 bytes — aapt: package com.lertrain.app · versionCode 38 · 2.26.0 · application-label 'LerTrain' · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH. Ablage: download/lertrain.apk (sha256 0b51fc9a7c9d1e56636804828c7d44b3375a3341a2c24318308e09e739dfaf45). README + mcp/README Kurzstand ergänzt.
+- RELEASE: main d526907→28de968 + Tag v2.26.0 gepusht → CI baut Release mit lertrain.apk.
+
+Stage Summary:
+- v2.26.0: LerTrain ist eine EIGENE App (com.lertrain.app) — die alte Trainrobot-App bleibt unangetastet auf dem Gerät. ARDY Mini hat ein komplett getrenntes Panel: Modell-Download-Button mit Prozent, Prompting getrennt von der Steuerung, LIVE-Umlenken des Prompts während der Generierung (+ Stop), und der Trainings-Fortschritt läuft als Live-Prozent (eigenes Ziel einstellbar) mit, während der Roboter trainiert.
