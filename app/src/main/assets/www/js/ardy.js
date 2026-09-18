@@ -393,9 +393,15 @@ async function fetchModelFile(path, { onProgress, signal, label } = {}) {
   // sie wird NICHT zusätzlich in den Cache Storage dupliziert (Platz sparen).
   const imp = importByName(path);
   if (imp) {
-    try {
-      const res = await fetch('/ardymodel/' + encodeURIComponent(imp.name), { signal });
-      if (res.ok) {
+    // v2.27.1: res==null → Bridge/Handling fehlt (altes APK) → unten weiter;
+    // Antwort da, aber nicht ok → Datei defekt/wegGEPUTZT → KLARE Meldung
+    // statt stummem Weiterlaufen in einen missverständlichen HF-Fehler.
+    const res = await fetch('/ardymodel/' + encodeURIComponent(imp.name), { signal }).catch(() => null);
+    if (res && !res.ok) {
+      throw new Error('Importierte Datei unlesbar: ' + imp.name + ' — bitte im ARDY-Panel löschen und erneut vom Gerät wählen');
+    }
+    if (res && res.ok) {
+      try {
         const total = Number(res.headers.get('content-length') || imp.size || 0);
         let data;
         if (res.body && total > 0) {
@@ -418,8 +424,11 @@ async function fetchModelFile(path, { onProgress, signal, label } = {}) {
         const out = path.endsWith('.gz') ? await gunzip(data) : data;
         onProgress && onProgress({ stage: label || path, completed: 1, total: 1, cached: true });
         return out;
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw e;
+        throw new Error('Importierte Datei kaputt: ' + imp.name + ' (' + (e && e.message ? e.message : e) + ') — bitte im ARDY-Panel löschen und erneut vom Gerät wählen');
       }
-    } catch (e) { /* Import unlesbar → unten Cache/HF versuchen */ }
+    }
   }
   const url = HF_URL(path);
   const cached = await cacheGet(url);
@@ -428,7 +437,7 @@ async function fetchModelFile(path, { onProgress, signal, label } = {}) {
     return cached;
   }
   const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error('HF-Download fehlgeschlagen (' + res.status + '): ' + path);
+  if (!res.ok) throw new Error('HF-Download fehlgeschlagen (' + res.status + '): ' + path + ' — Tipp: Datei über 📁 Vom Gerät wählen importieren');
   const total = Number(res.headers.get('content-length') || 0);
   let data;
   if (res.body && total > 0) {
@@ -534,11 +543,19 @@ export class ArdyRuntime {
   get parents() { return this.manifest.skeleton.parents.slice(); }
   get fps() { return this.dims.fps; }
 
+  /** v2.27.1: Session mit KLARER Meldung holen statt „undefined (reading 'run')“. */
+  _session(name) {
+    if (!this.sessions || !this.sessions[name]) {
+      throw new Error('ARDY-Modell nicht geladen (' + name + ' fehlt) — bitte zuerst Modell laden oder importieren');
+    }
+    return this.sessions[name];
+  }
+
   /** Text → [1,1,2048] textConditions. */
   async _encodeText(prompt, signal) {
     const enc = this.tokenizer.encode(prompt);
     const g = this.manifest.graphs.text_encoder.inputs;
-    const out = await this.sessions.textEncoder.run({
+    const out = await this._session('textEncoder').run({
       [g.inputIds]: new OrtTensor('int64', enc.inputIds, [1, enc.sequenceLength]),
       [g.attentionMask]: new OrtTensor('int64', enc.attentionMask, [1, enc.sequenceLength]),
       [g.tokenTypeIds]: new OrtTensor('int64', enc.tokenTypeIds, [1, enc.sequenceLength]),
@@ -572,7 +589,7 @@ export class ArdyRuntime {
       if (signal && signal.aborted) throw new DOMException('Generation abgebrochen', 'AbortError');
       const step = ddimStep(d.timesteps, d.alphas_cumprod, d.alphas_cumprod_prev, r);
       timestepBuf[0] = BigInt(step.timestep);
-      const res = await this.sessions.denoiser.run(feeds);
+      const res = await this._session('denoiser').run(feeds);
       const pred = res[outName];
       if (!pred || !(pred.data instanceof Float32Array)) throw new Error('Denoiser lieferte predX0 nicht');
       const p = win.generationTokenOffset * dims.hybrid_dim;
@@ -586,7 +603,7 @@ export class ArdyRuntime {
   async _decode(h, validTokens, globalTranslation, signal) {
     const dims = this.dims;
     const g = this.manifest.graphs.decoder.inputs;
-    const res = await this.sessions.decoder.run({
+    const res = await this._session('decoder').run({
       [g.hybridTokens]: new OrtTensor('float32', h, [1, dims.max_tokens, dims.hybrid_dim]),
       [g.motionPadMask]: new OrtTensor('float32', padMask(dims, validTokens), [1, dims.max_frames]),
       [g.globalTranslation]: new OrtTensor('float32', globalTranslation, [1, 3]),
@@ -721,6 +738,14 @@ export function setOrtTensorClass(cls) { OrtTensor = cls; }
 // ═══════════════════════════════════════════════════════════
 let _runtimePromise = null;
 
+// v2.27.1: EIN Schlüsselvertrag für Session-Namen — loadArdyRuntime
+// schreibt unter diesen Keys, ArdyRuntime liest sie (_encodeText/
+// _denoiseWindow/_decode). Graf-Dateinamen bleiben mit Unterstrich.
+export const SESSION_KEYS = ['textEncoder', 'denoiser', 'decoder'];
+export function sessionKey(graph) {
+  return graph === 'text_encoder' ? 'textEncoder' : graph;
+}
+
 export function ardyCachedInfo() {
   // grober Stand: Cache vorhanden? (Details erst beim Laden)
   return _runtimePromise ? 'geladen' : null;
@@ -753,6 +778,10 @@ export async function loadArdyRuntime(opts = {}) {
     const tokBytes = await fetchModelFile(precision + '/tokenizer/tokenizer.json.gz', { onProgress, signal: opts.signal });
     const tokenizer = await BertWordPiece.fromTokenizerJson(JSON.parse(new TextDecoder().decode(tokBytes)));
     // 5) Sessions (webgpu mit wasm-Fallback innerhalb von ORT)
+    // v2.27.1 FIX: Sessions werden unter den Keys gespeichert, die die
+    // ArdyRuntime-Klasse liest (textEncoder statt text_encoder) — vorher
+    // crashte die erste Generierung mit "Cannot read properties of
+    // undefined (reading 'run')", weil der Key nicht passte.
     const sessionOpts = {
       executionProviders: caps.webgpu ? ['webgpu', 'wasm'] : ['wasm'],
     };
@@ -760,7 +789,10 @@ export async function loadArdyRuntime(opts = {}) {
     for (const graph of ['text_encoder', 'denoiser', 'decoder']) {
       const bytes = await fetchModelFile(precision + '/' + graph + '.onnx.gz', { onProgress, signal: opts.signal });
       onProgress && onProgress({ stage: graph, completed: 1, total: 1, message: 'Session erstellen …' });
-      sessions[graph] = await ort.InferenceSession.create(bytes, sessionOpts);
+      sessions[sessionKey(graph)] = await ort.InferenceSession.create(bytes, sessionOpts);
+    }
+    for (const k of SESSION_KEYS) {
+      if (!sessions[k]) throw new Error('ARDY: Session „' + k + '“ fehlt nach dem Laden — bitte Modell neu laden oder importieren');
     }
     return new ArdyRuntime(manifest, tokenizer, sessions, epName);
   })();

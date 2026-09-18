@@ -9,7 +9,7 @@ import { gunzipSync } from 'node:zlib';
 import {
   ArdyRuntime, setOrtTensorClass, PortableRandom,
   ddimStep, ddimUpdate, buildWindow, prepareWindow, recenterWindow,
-  padMask, extractGeneratedTokens,
+  padMask, extractGeneratedTokens, sessionKey, SESSION_KEYS,
 } from '/home/z/my-project/app/src/main/assets/www/js/ardy.js';
 import { BertWordPiece } from '/home/z/my-project/app/src/main/assets/www/js/ardytoken.js';
 import { ArdyClip } from '/home/z/my-project/app/src/main/assets/www/js/ardyclip.js';
@@ -295,6 +295,37 @@ await ok('Dauer wird auf Token-Grenzen gerundet und geklemmt (1 s → 40 Frames)
 await ok('Leerer Prompt wirft', async () => {
   const rt = new ArdyRuntime(manifest, new BertWordPiece(new Map()), sessions, 'wasm');
   await assert.rejects(() => rt.generate({ prompt: '  ', seconds: 2 }));
+});
+
+// ── 3b) Session-Key-Vertrag (v2.27.1-Regression) ───────────
+// Der echte Ladepfad (loadArdyRuntime) baute die Sessions unter dem
+// Graf-Namen „text_encoder“, die Klasse las „textEncoder" → die erste
+// Generierung auf dem Gerät crashte mit „Cannot read properties of
+// undefined (reading 'run')". Diese Sektion sperrt den Vertrag:
+console.log('■ Session-Key-Vertrag (loadArdyRuntime ↔ ArdyRuntime)');
+await ok('sessionKey(): text_encoder→textEncoder, denoiser/decoder unverändert', async () => {
+  assert.equal(sessionKey('text_encoder'), 'textEncoder');
+  assert.equal(sessionKey('denoiser'), 'denoiser');
+  assert.equal(sessionKey('decoder'), 'decoder');
+  assert.deepEqual(SESSION_KEYS.slice().sort(), ['decoder', 'denoiser', 'textEncoder']);
+});
+await ok('generate() mit Sessions im loadArdyRuntime-Format (sessionKey-Bau) läuft durch', async () => {
+  // Genau so, wie loadArdyRuntime die Keys jetzt schreibt:
+  const byGraph = { text_encoder: sessions.textEncoder, denoiser: sessions.denoiser, decoder: sessions.decoder };
+  const loaderStyle = {};
+  for (const graph of ['text_encoder', 'denoiser', 'decoder']) loaderStyle[sessionKey(graph)] = byGraph[graph];
+  assert.ok(loaderStyle.textEncoder && loaderStyle.denoiser && loaderStyle.decoder, 'Keys vorhanden');
+  const rt2 = new ArdyRuntime(manifest, new BertWordPiece(new Map([['[UNK]', 100], ['[CLS]', 101], ['[SEP]', 102], ['a', 32]])), loaderStyle, 'wasm');
+  const out2 = await rt2.generate({ prompt: 'a person walks', seconds: 0.6, seed: 4242 });
+  assert.equal(out2.frameCount, manifest.generation.min_frames); // 0.6 s → auf min_frames hochgeklemmt
+  assert.ok(out2.joints.length >= 12 * dims.num_joints * 3);
+});
+await ok('fehlende Session → klare deutsche Meldung statt undefined.run', async () => {
+  const rt3 = new ArdyRuntime(manifest, new BertWordPiece(new Map()), {}, 'wasm');
+  await assert.rejects(
+    () => rt3.generate({ prompt: 'a person walks', seconds: 0.6 }),
+    (e) => /ARDY-Modell nicht geladen \(textEncoder fehlt\)/.test(e.message),
+  );
 });
 
 // ── 4) ArdyClip-Adapter ────────────────────────────────────

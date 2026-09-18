@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.27.0'; // v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
+const VERSION = '2.27.1'; // v2.27.1: Fix „Cannot read properties of undefined (reading 'run')“ — Session-Key text_encoder→textEncoder + klare Fehlermeldungen. v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
