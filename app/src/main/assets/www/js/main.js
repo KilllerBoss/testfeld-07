@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, retargetToRobot, RT_ALG } from './retarget.js';
+import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms } from './retarget.js';
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.27.1'; // v2.27.1: Fix „Cannot read properties of undefined (reading 'run')“ — Session-Key text_encoder→textEncoder + klare Fehlermeldungen. v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
+const VERSION = '2.28.0'; // v2.28.0: GEIST LENKEN (Stick führt die Referenz in JEDEM Modus — Geist = Trainingsziel) + BODEN-GARANTIE (Geist/Skeleton werden auf den Boden gehoben, nie mehr im Boden). v2.27.1: Fix „Cannot read properties of undefined (reading 'run')“ — Session-Key text_encoder→textEncoder + klare Fehlermeldungen. v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -1483,6 +1483,16 @@ function trainCtrlStep() {
   const sim = S.sim, task = S.task, trainer = S.trainer;
   const substeps = Math.max(1, Math.round(CTRL_DT / sim.timestep));
   if (task.stepsLeft <= 0) task.sampleCmd(trainer.rng);
+  // v2.28.0 GEIST LENKEN: der Stick führt die REFERENZ — auch im Training.
+  // Vorher bekam der Stick die Referenz NIE ab (nur Zufalls-Kommandos),
+  // der Nutzer steuerte gefühlt „nur den Roboter“. Jetzt: cmd = Stick,
+  // advance() integriert _tx/_ty, die Bahn-Belohnung zieht den Roboter
+  // der gefahrenen Referenz nach. Animation bleibt NUR Reward (nie Input).
+  if (task.kind === 'motion' && (task.ctrlMode === 'joy' || task.ctrlMode === 'btn') && task.refMode === 'folgt') {
+    const c = controls.command(sim.cfg);
+    task.cmd.vx = c.vx; task.cmd.wz = c.yaw;
+    task._manualCmd = true; // advance darf NICHT hineinwürfeln
+  }
 
   const o = task.observe(sim, S.obsBuf);
   if (!finiteArr(S.obsBuf)) { sim.reset(); task.reset(trainer.rng, sim); pluginHost.fireReset(); return; }
@@ -2089,6 +2099,14 @@ function loop(now) {
       guard++;
       if (S.mode === 'policy' && S.trainer) policyCtrlStep();
       else {
+        // v2.28.0 GEIST LENKEN: auch OHNE Training führt der Stick die
+        // Referenz (joy/btn) — der Geist fährt neben dem Roboter her und
+        // zeigt die gefahrene Route, bevor der Nutzer Training startet.
+        if (S.task && S.task.kind === 'motion' && (S.task.ctrlMode === 'joy' || S.task.ctrlMode === 'btn') && S.task.refMode === 'folgt') {
+          const c = controls.command(S.sim.cfg);
+          S.task.cmd.vx = c.vx; S.task.cmd.wz = c.yaw;
+          S.task._manualCmd = true;
+        }
         applyGait(cdt);
         // Lehrer läuft auch im MANUELL-Modus weiter (Vorschau der Referenz)
         if (S.task && S.task.kind === 'motion') S.task.advance(cdt);
@@ -2152,6 +2170,13 @@ function loop(now) {
         // ABSOLUTE Lehrer-Pose an statt aufrecht daneben zu stehen
         const bq = clip.baseQ ? clip.baseQ.subarray(4 * fr, 4 * fr + 4) : null;
         S.sim.setGhostPose(gh, clip.q, fr * clip.nu, clip.h[fr], rr[0], rr[1], rr[2], bq);
+        // v2.28.0 BODEN-GARANTIE: hängt die Referenz-Pose (ARDY-Höhendrift)
+        // unter dem Boden, hebt die ANZEIGE den Geist an, bis der Fuß bei 0
+        // steht — der Geist steht wirklich AUF dem Boden, nie darin.
+        try {
+          const feet = S.sim.footGeoms || (S.sim.footGeoms = findFootGeoms(S.sim));
+          S.sim.groundGhost(gh, feet);
+        } catch (e) { /* fehlende Geom-API: Anzeige ohne Feinkorrektur */ }
         r3d.updateGhost(gh);
       }
     }
@@ -3494,17 +3519,37 @@ function wireArdyGhostDrive() {
       ui.toast('Erst eine Bewegung aktivieren — ARDY generieren oder Clip wählen', true);
       return;
     }
-    S.refMode = 'folgt';
-    t.refMode = 'folgt';
-    try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
-    syncRefChips();
-    if (t.ctrlMode !== 'joy' && t.ctrlMode !== 'btn') {
-      t.ctrlMode = 'joy';
-      syncCtrlChips();
+    // v2.28.0: TOGGLE — nochmal tippen schaltet zurück (frei + keine
+    // Stick-Führung der Referenz).
+    const on = !(t.refMode === 'folgt' && (t.ctrlMode === 'joy' || t.ctrlMode === 'btn'));
+    if (on) {
+      S.refMode = 'folgt';
+      t.refMode = 'folgt';
+      try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
+      syncRefChips();
+      if (t.ctrlMode !== 'joy' && t.ctrlMode !== 'btn') {
+        t.ctrlMode = 'joy';
+        syncCtrlChips();
+      }
+      // Referenz SOFORT an den Roboter legen (der Geist startet bei IHM,
+      // nicht bei der Clip-Bahn) — dann führt der Stick sie weiter.
+      try {
+        const p = [0, 0, 0]; S.sim.basePos(p);
+        t._tx = p[0]; t._ty = p[1];
+        const q4 = [0, 0, 0, 0]; S.sim.baseQuat(q4);
+        t._tyaw = Math.atan2(2 * (q4[0] * q4[3] + q4[1] * q4[2]), 1 - 2 * (q4[2] * q4[2] + q4[3] * q4[3]));
+      } catch (e) { /* egal */ }
+      if (!S.training) startTraining();
+      log('GEIST LENKEN: der Stick fährt jetzt die REFERENZ (der cyanfarbene Geist folgt dem Stick, steht auf dem Boden) — der Roboter lernt die gefahrene Route per Motion-Belohnung. Animation ist NIE Eingabe, nur Reward.', 'ok');
+      ui.toast('Geist folgt dem Stick — Roboter lernt die Route');
+    } else {
+      S.refMode = 'frei';
+      t.refMode = 'frei';
+      try { localStorage.setItem('tr_refmode_v1', 'frei'); } catch (e) { /* voll */ }
+      syncRefChips();
+      log('GEIST LENKEN aus — die Referenz läuft wieder die Clip-Bahn (frei).', 'warn');
+      ui.toast('Geist lenken aus');
     }
-    if (!S.training) startTraining();
-    log('GEIST LENKEN: der Geist hängt am Roboter (folgt) und der Stick führt die Referenz — der Roboter lernt die gefahrene Route per Motion-Belohnung. Animation ist NIE Eingabe, nur Reward.', 'ok');
-    ui.toast('Geist folgt dem Stick — Roboter lernt die Route');
     ui.toggleArdy(false);
   });
 }

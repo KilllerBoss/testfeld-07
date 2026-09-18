@@ -633,6 +633,30 @@ export function retargetToRobot(clip, sim, log = () => {}) {
       if (!p) { srcPos[o3] = srcPos[o3 + 1] = srcPos[o3 + 2] = NaN; continue; }
       srcPos[o3] = p[2] * scale; srcPos[o3 + 1] = p[0] * scale; srcPos[o3 + 2] = p[1] * scale;
     }
+    // v2.28.0 BODEN-GARANTIE für den Lehrer-Skeleton: ARDY-Höhendrift (oder
+    // sloppy GLB-Assets) darf die Figur NICHT unter den Boden hängen. Je
+    // Frame: tiefsten Fußpunkt messen (Fallback: alle Rollen) und den
+    // Skeleton ANHEBEN, bis der Fuß bei 0 steht. Sprünge bleiben unangetastet
+    // (beide Füße über 0 → kein Lift), Gehen bleibt unverändert (ein Fuß
+    // ist immer nahe 0 — der Lift ist dort ~0).
+    {
+      const nR = ghostRoles.length;
+      const probe = (gi) => {
+        const z = srcPos[(f * nR + gi) * 3 + 2];
+        return Number.isFinite(z) ? z : Infinity;
+      };
+      let minZ = Infinity;
+      const fiL = ghostRoles.indexOf('leftFoot'), fiR = ghostRoles.indexOf('rightFoot');
+      if (fiL >= 0) minZ = Math.min(minZ, probe(fiL));
+      if (fiR >= 0) minZ = Math.min(minZ, probe(fiR));
+      if (!Number.isFinite(minZ)) {
+        for (let gi = 0; gi < nR; gi++) minZ = Math.min(minZ, probe(gi));
+      }
+      if (Number.isFinite(minZ) && minZ < 0) {
+        const dz = -minZ;
+        for (let gi = 0; gi < nR; gi++) srcPos[(f * nR + gi) * 3 + 2] += dz;
+      }
+    }
   }
 
   // Lücken-Füllung (v2.5.0): Fehlt ein Zielrichtungs- oder Fußquat-Sample
@@ -1283,7 +1307,9 @@ function bridgeAngles(arr, n, maxStep) {
 
 // Fuß-Geoms mit ECHTER Tiefe: unterster Punkt je Geom im KÖRPER-Frame
 // (Meshes: unterste Vertebra inkl. geom_quat; Kugel/Kapsel/Zylinder/Box: Formel)
-function findFootGeoms(sim) {
+// v2.28.0: exportiert — auch die Geist-ANZEIGE (main.js Render-Loop) erdet
+// damit die Referenz-Pose (Boden-Garantie für ARDY-Höhendrift).
+export function findFootGeoms(sim) {
   const out = [];
   const m = sim.model;
   for (let g = 0; g < sim.ngeom; g++) {

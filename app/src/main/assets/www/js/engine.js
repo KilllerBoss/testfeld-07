@@ -457,6 +457,33 @@ export class RobotSim {
   }
 
   /**
+   * v2.28.0 BODEN-GARANTIE für die Geist-ANZEIGE: hängt die Referenz-Pose
+   * (z. B. ARDY-Höhendrift über Autoregressions-Fenster) mit Fußpunkten
+   * UNTER dem Boden, wird die Basis so weit angehoben, dass der tiefste
+   * Fuß bei 0 steht. Nur Anzeige/BC — die trainierte Höhe bleibt clip.h.
+   * @param ghost Ergebnis von makeGhostData() NACH setGhostPose
+   * @param footGeoms Ergebnis von findFootGeoms(sim) ({body, lowZ})
+   * @param tol Toleranz (m) — bis hierhin gilt „steht auf dem Boden“
+   * @returns Angehobene Höhe in m (0 = kein Eingriff)
+   */
+  groundGhost(ghost, footGeoms, tol = 0.015) {
+    if (!footGeoms || !footGeoms.length) return 0;
+    let lowest = 0;
+    for (const fg of footGeoms) {
+      const z = ghost.xpos[3 * fg.body + 2] + fg.lowZ;
+      if (Number.isFinite(z) && z < lowest) lowest = z;
+    }
+    if (lowest > -tol) return 0;
+    const adr = this._baseQposAdr || (this._baseQposAdr = (() => {
+      const m = this.model;
+      return m.jnt_qposadr[m.body_jntadr[this.baseBody]];
+    })());
+    ghost.qpos[adr + 2] -= lowest; // heben (lowest ist negativ)
+    this._mjApi.mj_forward(this.model, ghost);
+    return -lowest;
+  }
+
+  /**
    * Setzt die echte Basis (nach reset) horizontal auf (x, y) mit Blick yaw —
    * Höhe/Blick des Keyframes bleiben sonst erhalten. Der Roboter startet
    * damit AUF der Referenz-Bahn statt im Ursprung.

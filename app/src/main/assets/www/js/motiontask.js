@@ -173,9 +173,26 @@ export function makeMotionTask(cfg, clip, sim) {
       this._cmdHold = 0; // erzwingt sampleCmd beim ersten Trainingsschritt
       this.cmd.vx = 0; this.cmd.wz = 0;
       this._manualCmd = false;
+      // v2.28.0 GEIST LENKEN (joy/btn + 'folgt'): die Referenz startet AM
+      // ROBOTER (kein Teleport zur Clip-Bahn) — die gefahrene Route bleibt
+      // über Episoden-Grenzen hinweg bestehen, Geist und Roboter bleiben
+      // beieinander. Vorher sprang der Geist bei jedem Episoden-Ende zum
+      // Clip-Start zurück („sie sind auseinander“).
+      const joyDriven = this.ctrlMode === 'joy' || this.ctrlMode === 'btn';
+      if (sim2 && hasRoot && !off && this.refMode === 'folgt' && joyDriven) {
+        try {
+          sim2.basePos(this._p);
+          this._tx = this._p[0]; this._ty = this._p[1];
+          const bq4 = [0, 0, 0, 0];
+          sim2.baseQuat(bq4);
+          this._tyaw = Math.atan2(2 * (bq4[0] * bq4[3] + bq4[1] * bq4[2]), 1 - 2 * (bq4[2] * bq4[2] + bq4[3] * bq4[3]));
+        } catch (e) { this._tx = hasRoot ? clip.root[0] : 0; this._ty = hasRoot ? clip.root[1] : 0; this._tyaw = 0; }
+      }
       // Roboter AUF die Referenz-Bahn setzen (nicht in den Ursprung) —
-      // OHNE Animation bleibt die Roboter-eigene Startpose (Keyframe)
-      if (sim2 && hasRoot && !off) {
+      // OHNE Animation bleibt die Roboter-eigene Startpose (Keyframe).
+      // v2.28.0: im Geist-lenk-Modus NICHT (Roboter bleibt, wo er ist —
+      // die Referenz startet ja an IHM, siehe oben).
+      if (sim2 && hasRoot && !off && !(this.refMode === 'folgt' && joyDriven)) {
         try { sim2.placeBase(clip.root[0], clip.root[1], clip.yaw[0] || 0); } catch (e) { /* Basis ohne freies Gelenk */ }
       }
     },
@@ -238,7 +255,16 @@ export function makeMotionTask(cfg, clip, sim) {
     // out = [x, y, yaw]. robotPos/robotYaw = LEBENDE Roboter-Basis (nur in
     // 'folgt' relevant — der Geist hängt am Roboter und spielt die Bewegung
     // relativ zu ihm ab, ohne Loop-Offset).
+    // v2.28.0 GEIST LENKEN: Führen KOMMANDOS die Wurzel (Stick bei joy/btn,
+    // Geist-lenk-Modus), steht der Geist am INTEGRIERTEN Kommando-Ziel
+    // (_tx/_ty/_tyaw) — er zeigt die vom Stick GEFAHRENE Referenz, nicht
+    // die starre Clip-Bahn und nicht die Roboter-Position. Genau das, was
+    // der Roboter per Bahn-Belohnung folgen soll — Geist = Trainingsziel.
     ghostAnchor(phase, robotPos, robotYaw, out) {
+      if (this.cmdDriven()) {
+        out[0] = this._tx; out[1] = this._ty; out[2] = this._tyaw;
+        return out;
+      }
       if (this.refMode === 'folgt' && robotPos) {
         if (hasRoot) {
           const c = clip;
