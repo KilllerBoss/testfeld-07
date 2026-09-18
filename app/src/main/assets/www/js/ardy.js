@@ -30,6 +30,48 @@ const CACHE_NAME = 'ardy-models-v1';
 
 const HF_URL = (path) => 'https://huggingface.co/' + ARDY_REPO + '/resolve/' + ARDY_REV + '/' + path;
 
+// ═══════════════════════════════════════════════════════════
+// v2.27.0: Modell-Dateien VOM GERÄT (Dateimanager-Import)
+// ═══════════════════════════════════════════════════════════
+// Der HF-Download funktioniert nicht in jeder WebView (größe/CORS/Netz).
+// Deshalb kann der Nutzer die Modell-Dateien per Dateimanager wählen — die
+// native Brücke (TrainrobotBridge.ardyPickModel) kopiert sie nach
+// filesDir/ardy_import/ und die App dient sie unter /ardymodel/<Name> aus
+// dem GLEICHEN sicheren Ursprung aus. fetchModelFile prüft diese Liste
+// ZUERST — ARDY Mini läuft damit komplett ohne Hugging Face.
+let _imports = null;
+
+/** Import-Liste neu von der nativen Brücke lesen. */
+export function refreshArdyImports() {
+  try {
+    const raw = (typeof window !== 'undefined' && window.TrainrobotBridge &&
+      typeof window.TrainrobotBridge.ardyImportList === 'function')
+      ? window.TrainrobotBridge.ardyImportList() : '[]';
+    const arr = JSON.parse(raw || '[]');
+    _imports = Array.isArray(arr) ? arr : [];
+  } catch (e) { _imports = []; }
+  return _imports;
+}
+
+/** Gesamtkilobyte/Anzahl der Import-Dateien (für die Panel-Anzeige). */
+export function ardyImportSummary() {
+  if (_imports === null) refreshArdyImports();
+  let bytes = 0;
+  for (const it of _imports) bytes += Number(it.size || 0);
+  return { count: _imports.length, mib: Math.round(bytes / 1048576) };
+}
+
+/** Basename-Vergleich: passt eine importierte Datei zum angeforderten Pfad? */
+function importByName(path) {
+  if (_imports === null) refreshArdyImports();
+  if (!_imports || !_imports.length) return null;
+  const base = String(path).split('/').pop().toLowerCase();
+  for (const it of _imports) {
+    if (String(it.name || '').toLowerCase() === base) return it;
+  }
+  return null;
+}
+
 // ── Prompt-Presets: die Basis-Animationen (DE-Chip → EN-Prompt) ──
 export const BASIS_ANIMS = [
   { label: 'Idle',        prompt: 'a person stands still, relaxed idle pose' },
@@ -344,8 +386,41 @@ async function cachePut(key, bytes) {
   } catch (e) { /* Cache voll/privat — nur langsamer, kein Fehler */ }
 }
 
-/** Datei laden: Cache → HF-Download (mit Fortschritt) → entpackt cachen. */
+/** Datei laden: Import (Dateimanager) → Cache → HF-Download (mit Fortschritt) → entpackt cachen. */
 async function fetchModelFile(path, { onProgress, signal, label } = {}) {
+  // v2.27.0: 1) vom Gerät importierte Datei (Dateimanager) — kein HF nötig.
+  // Die Datei liegt als Kopie im App-Ordner und wird same-origin ausgeliefert;
+  // sie wird NICHT zusätzlich in den Cache Storage dupliziert (Platz sparen).
+  const imp = importByName(path);
+  if (imp) {
+    try {
+      const res = await fetch('/ardymodel/' + encodeURIComponent(imp.name), { signal });
+      if (res.ok) {
+        const total = Number(res.headers.get('content-length') || imp.size || 0);
+        let data;
+        if (res.body && total > 0) {
+          const reader = res.body.getReader();
+          const parts = [];
+          let got = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parts.push(value); got += value.length;
+            onProgress && onProgress({ stage: 'import ' + (label || path), completed: got, total, cached: true });
+          }
+          data = new Uint8Array(got);
+          let off = 0;
+          for (const p of parts) { data.set(p, off); off += p.length; }
+        } else {
+          data = new Uint8Array(await res.arrayBuffer());
+          onProgress && onProgress({ stage: 'import ' + (label || path), completed: 1, total: 1, cached: true });
+        }
+        const out = path.endsWith('.gz') ? await gunzip(data) : data;
+        onProgress && onProgress({ stage: label || path, completed: 1, total: 1, cached: true });
+        return out;
+      }
+    } catch (e) { /* Import unlesbar → unten Cache/HF versuchen */ }
+  }
   const url = HF_URL(path);
   const cached = await cacheGet(url);
   if (cached) {

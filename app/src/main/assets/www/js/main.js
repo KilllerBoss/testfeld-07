@@ -2100,6 +2100,16 @@ function loop(now) {
   }
 
   r3d.updateFrame(S.sim, dt);
+  // v2.27.0: Geist OHNE laufende Referenz = Spiegelbild des echten Roboters.
+  // Vorher blieben die Geist-Gruppen im Ruhesatz am Ursprung kleben (halb im
+  // Boden, Teile verstreut — „plötzlich blaue Objekte“). Jetzt steht der
+  // cyanfarbene Geist immer NORMAL neben dem echten Roboter, solange keine
+  // Motion-Task (oder keine brauchbare Referenz) ihn bespielt.
+  if (r3d.ghostGroups && S.ghostOn && S.sim) {
+    const refLive = S.task && (S.task.kind === 'motion' || S.task.pathOn) &&
+      (S.task.kind === 'motion' ? !!S.task.clip : !!S.task.pathClip);
+    if (!refLive) r3d.mirrorGhost(S.sim);
+  }
   // Geist: Referenzpose mitlaufen lassen — Lehrer (Original) + Roboter-Geist.
   // v2.15.0: der ANKER hängt vom Referenz-Modus ab (ghostAnchor):
   //   frei   → Lehrer wandert auf der Clip-Bahn durchs Feld (mit Loop-Offset)

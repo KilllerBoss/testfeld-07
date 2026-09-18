@@ -406,6 +406,18 @@ export class Renderer3D {
       if (!grp) { grp = new THREE.Group(); this.ghostGroups[body] = grp; this.world.add(grp); }
       grp.add(mesh);
     }
+    // v2.27.0: Geist SOFORT in die echte Roboter-Pose setzen — ohne diesen
+    // Aufruf klebten alle Körpergruppen am Ursprung im Lokal-Ruhesatz
+    // (halb im Boden, Teile verstreut = „plötzlich blaue Objekte“).
+    if (sim && sim._xpos && sim._xquat) this.updateGhost({ xpos: sim._xpos, xquat: sim._xquat });
+  }
+
+  // v2.27.0: Geist OHNE aktive Referenz live an den echten Roboter heften —
+  // er steht dann normal daneben (gleiche Pose, cyan), statt im Boden zu
+  // stecken. sim = Engine-Wrapper (_xpos/_xquat je Körper, MuJoCo-Welt).
+  mirrorGhost(sim) {
+    if (!this.ghostGroups || !sim || !sim._xpos || !sim._xquat) return;
+    this.updateGhost({ xpos: sim._xpos, xquat: sim._xquat });
   }
 
   removeGhost() {
