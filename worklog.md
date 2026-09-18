@@ -774,3 +774,19 @@ Stage Summary:
 - ARDY Mini funktioniert jetzt OHNE HF-Download: Dateimanager → Dateien wählen → Kopie mit Fortschritt → Laden von /ardymodel/ (same-origin)
 - Geist: immer saubere G1-Silhouette (Spiegel des echten Roboters ohne Referenz; Referenz-Pose mit Task) — „blaue Objekte“/Boden-Bug behoben
 - Geist lenken: Stick führt Referenz-Wurzel, Training läuft, Lernen rein per Motion-Belohnung (Animation NIE Input)
+
+---
+Task ID: 50
+Agent: Super Z (Hauptagent)
+Task: v2.27.1 HOTFIX — „ARDY Mini fehlgeschlagen: Cannot read properties of undefined (reading 'run')“ (Nutzer-Report auf v2.27.0)
+
+Work Log:
+- ROOT CAUSE: loadArdyRuntime speicherte die ORT-Sessions unter dem Graf-Namen „text_encoder“ (Unterstrich), die ArdyRuntime-Klasse las this.sessions.textEncoder (camelCase) → undefined.run(). Auf dem Gerät lief generate() NIE end-to-end (HF-Download schlug immer fehl) — der neue Import-Pfad (v2.27.0) lud das Modell erstmals erfolgreich und deckte den Bug auf. Tests hatten ihn verpasst, weil ardy_runtime_test die Sessions direkt camelCase baute (umgeht loadArdyRuntime) und ardy_real_onnx_test rohe ort-Sessions nutzte.
+- ardy.js: (1) sessionKey(graph)/SESSION_KEYS als EIN Schlüsselvertrag, Loop schreibt sessions[sessionKey(graph)]; (2) Lade-Guard nach Session-Erstellung („Session X fehlt nach dem Laden“); (3) _session(name)-Guard in der Klasse → klare dt. Meldung statt „reading 'run'“; (4) Import-Pfad: res.ok==false → „Importierte Datei unlesbar … erneut vom Gerät wählen“, gunzip-Fehler → „Importierte Datei kaputt …“ (AbortError bleibt unverändert durchreichend), HF-Fehler mit Tipp „Datei über 📁 Vom Gerät wählen importieren“.
+- Regressionstest NEU in ardy_runtime_test.mjs (Sektion „Session-Key-Vertrag“): sessionKey-Mapping, generate() mit Sessions im loadArdyRuntime-Format, fehlende Session → klare Meldung. ARDY-Tests: ardy_runtime 18/18, ardy_math 17/17, ardy_live grün.
+- Pins: ui_v2270 auf 2.27.1/40 umgezogen; ui_v2260/motionset gelockert (40). ui_v2270, ui_v2260, ui_v2250, motionset 49/49 ALLE GRÜN.
+- BUILD: Vordergrund-Lauf überschritt 10 min; Gradle-Daemon stellte die APK danach fertig. aapt: package com.lertrain.app · versionCode 40 · versionName 2.27.1 · Label LerTrain · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH. Fix nachweislich im APK (sessionKey/SESSION_KEYS/_session in assets/www/js/ardy.js, VERSION 2.27.1 in main.js).
+- RELEASE: main cbe0f81→98c1282 + Tag v2.27.1 gepusht → CI build-apk in_progress; download/lertrain.apk (sha256 ad32dba284272f868ea66dab3af7053d659066753b5af1eaca22958e316c9ae0).
+
+Stage Summary:
+- v2.27.1 / versionCode 40 fixt den ersten echten ARDY-Mini-Generierungs-Crash auf dem Gerät. Das Modell des Nutzers (Import) bleibt nutzbar — kein erneuter Import nötig, nur App-Update. Session-Vertrag ist jetzt durch Tests gesperrt.
