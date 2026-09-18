@@ -790,3 +790,22 @@ Work Log:
 
 Stage Summary:
 - v2.27.1 / versionCode 40 fixt den ersten echten ARDY-Mini-Generierungs-Crash auf dem Gerät. Das Modell des Nutzers (Import) bleibt nutzbar — kein erneuter Import nötig, nur App-Update. Session-Vertrag ist jetzt durch Tests gesperrt.
+
+---
+Task ID: 51
+Agent: Super Z (Hauptagent)
+Task: v2.28.0 — „Geist lenken" wirklich mit dem Stick + Boden-Garantie (Geist/Skeleton nie mehr im Boden) (Nutzer-Report: grünes Skeleton + Geist im Boden, auseinander, Stick steuert nur den Roboter)
+
+Work Log:
+- DIAGNOSE MIT ZAHLEN (neu: scripts/ardy/ardy_retarget_diag.mjs, echte Decoder-ONNX + echtes MuJoCo-wasm): ARDY-Ausgabe ist Y-up, Hüfte y=0,90 — Konvention korrekt; stehende Motion → h[]≈0,79, Skeleton erdet. Die Fehler lagen in der MODUS-VERDRAHTUNG, nicht in der Pipeline.
+- GEIST LENKEN (Kernfix): Der Stick erreichte die Referenz NUR im POLICY-Modus (policyCtrlStep); im Training würfelte sampleCmd(), im Manuell-Modus führte der Stick nur den Roboter (applyGait) → „Ich steuere nur den Roboter". Jetzt: trainCtrlStep UND manuell-Zweig schreiben bei Motion-Task + ctrlMode joy/btn + refMode 'folgt' task.cmd = Stick + _manualCmd (advance integriert _tx/_ty/_tyaw; Bahn-Belohnung zieht den Roboter nach; Animation bleibt NUR Reward).
+- ghostAnchor (motiontask.js): cmdDriven() hat jetzt VORRANG → Geist steht am integrierten Kommando-Ziel statt an der starren Clip-Bahn/am Roboter. Vorher zeigte die Anzeige die Clip-Bahn, während der Reward das Kommando-Ziel belohnte — genau „sie sind auseinander".
+- Reset (motiontask.js): joy/btn + 'folgt' startet die Referenz AM ROBOTER (basePos/baseQuat), KEIN placeBase-Teleport zum Bahn-Anfang — die gefahrene Route überlebt Episoden-Grenzen. 'frei' bleibt rückwärtskompatibel (Bahnstart + placeBase).
+- BODEN-GARANTIE: (1) engine.js groundGhost(ghost, footGeoms, tol) — misst tiefsten Fußpunkt (findFootGeoms, jetzt exportiert) und hebt die Geist-ANZEIGE exakt auf Fuß=0 (Test: −0,200 → 0,000); im Render-Loop nach setGhostPose. (2) retargetToG1 erdet das srcPos-SKELETT je Frame (Fuß-Rollen, Fallback alle Rollen; Sprünge bleiben unangetastet, Gehen unverändert).
+- wireArdyGhostDrive: jetzt TOGGLE (aus → 'frei'), setzt die Referenz beim Einschalten sofort an den Roboter, klarere Log/Toast-Texte.
+- Tests: ghost_drive_v2280_test.mjs NEU (17/17: Anker folgt Stick, Reset ohne Teleport, 'frei'-Kompatibilität, Integration, groundGhost −0,2→0,0, Skeleton-Erdung 0,3-Sinken→0) · qpos 52/52 (Pins >= 2.22 gelockert) · ardy_runtime 18/18 · ardy_math 17/17 · ardy_live grün · ui_v2270/2260/2250 grün · motionset 49/49.
+- BUILD+VERIFIKATION: APK 28.122.009 bytes — aapt com.lertrain.app v41 2.28.0 Label LerTrain · apksigner SHA-256 1c0422b9… IDENTISCH · GEIST LENKEN/groundGhost/VERSION 2.28.0 nachweislich im APK.
+- RELEASE: main 886321c→8e585a1 + Tag v2.28.0 → CI success, Release-Asset lertrain.apk; download/lertrain.apk sha256 f9d2406f21930376d1e052a216e753103632f486efd4726f99ae80b192736ae7.
+
+Stage Summary:
+- v2.28.0 / versionCode 41: Der Stick fährt jetzt WIRKLICH den Geist (die Referenz, die der Roboter per Reward lernt) — in Training UND Vorschau. Geist und grünes Skeleton werden garantiert AUF den Boden gehoben (auch bei ARDY-Höhendrift). Der Geist-lenk-Button ist ein Toggle. ARDY-Erzeugung (v2.27.1-Fix) bleibt unverändert.
