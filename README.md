@@ -5,6 +5,7 @@ Smartphone (CPU, ohne CUDA)**.
 
 ## Inhalt
 
+- **v2.26.0 — LERTRAIN + ARDY MINI EIGENES PANEL**: Eigene App-ID `com.lertrain.app` (LerTrain installiert sich NEBEN Trainrobot, kein Update der alten App mehr) · ARDY Mini (Text→Motion auf dem Gerät, wie im HF-Space intsuc/ardy-mini) hat jetzt ein EIGENES Panel (Topbar-Button 👤): getrennte Steuerung + Prompting, Modell-Download-Button mit %-Fortschritt (~650 MB, danach offline), LIVE-Steuerung während der Generierung (Prompt-Feld umlenken, Stop-Knopf, Live-%), Trainings-Prozent LIVE (Schritte/Ziel, Ziel einstellbar)
 - **v2.23.0 — LEHRER-DATENSATZ + SOFT-MOE FÜR ALLE + GAMEPAD**: Basis-Motion-Datensatz (41 Clips, HuggingFace/Kaggle, ARDY-G1-QPOS-kompatibel, Kommando-Spur je Frame) als Belohnungs-Lehrer per Auto-Download (nie Policy-Input, fadbar auf 0 ohne Verhaltenssprung) · Soft-MoE mit individuellen Router-/Experten-Rewards jetzt für MicroDuck, G1 UND Drohne · Gamepad-Overlay (2 Sticks + A/B/C/D, physische Gamepads automatisch) · KI-Werkzeuge setTeacher/setExpertR
 - **Drei Roboter** (v2.14.0 — A1/Spot/Go2 wurden entfernt, APK deutlich kleiner),
   alle gleichberechtigt (ungebunden) mit einheitlicher Stick-Steuerung:

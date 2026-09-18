@@ -118,12 +118,13 @@ export class UI {
     // DOM) den trainClose-Knopf: „die Tasten blockieren den Schließen-Button”.
     if (show) {
       this.toggleAI(false);
+      this.toggleArdy(false); // v2.26.0: ARDY weicht ebenso — kein verdeckter Close-Knopf
       const cp = this.consolePanel; if (cp) cp.classList.add('hidden');
       const bc = this.$('btnConsole'); if (bc) bc.classList.remove('lit');
     }
   }
 
-  // ── KI-Trainer ──────────────────────────────────────────
+  // KI-Trainer ──────────────────────────────────────────
   toggleAI(force) {
     const sheet = this.$('aiSheet');
     const show = force !== undefined ? force : sheet.classList.contains('hidden');
@@ -131,6 +132,24 @@ export class UI {
     this.$('btnAI').classList.toggle('lit', show);
     if (show) {
       this.toggleTrain(false);
+      this.toggleArdy(false); // v2.26.0: ARDY weicht ebenso
+      const cp = this.consolePanel; if (cp) cp.classList.add('hidden');
+      const bc = this.$('btnConsole'); if (bc) bc.classList.remove('lit');
+    }
+  }
+
+  // ── v2.26.0: ARDY Mini — eigenes Panel (getrennte Steuerung + Prompting).
+  // Cross-Close wie überall: öffnet ARDY → Training/KI/Konsole weichen,
+  // damit ardyClose nie verdeckt wird.
+  toggleArdy(force) {
+    const sheet = this.$('ardySheet');
+    if (!sheet) return;
+    const show = force !== undefined ? force : sheet.classList.contains('hidden');
+    sheet.classList.toggle('hidden', !show);
+    const btn = this.$('btnArdy'); if (btn) btn.classList.toggle('lit', show);
+    if (show) {
+      this.toggleTrain(false);
+      this.toggleAI(false);
       const cp = this.consolePanel; if (cp) cp.classList.add('hidden');
       const bc = this.$('btnConsole'); if (bc) bc.classList.remove('lit');
     }

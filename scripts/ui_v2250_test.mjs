@@ -128,7 +128,7 @@ await page.waitForTimeout(300);
 
 // ── 1) ARDY-Panel ──────────────────────────────────────────
 console.log('■ ARDY Mini (auf dem Gerät)');
-check('ARDY-Sektion in der GLB-Sektion', await page.evaluate(() => !!document.querySelector('.ardy-section')));
+check('ARDY-Sektion im EIGENEN Sheet (#ardySheet, seit v2.26.0 getrennt)', await page.evaluate(() => !!document.querySelector('#ardySheet .ardy-section') && !document.querySelector('#trainSheet #ardyChips')));
 check('16 Basis-Animations-Chips', await page.evaluate(() => document.querySelectorAll('#ardyChips .ardy-chip').length === 16));
 check('Chips decken die Basis-Animationen ab (Idle/Gehen/Hüpfen/Weitsprung/Liegen/Aufstehen/Kicken/Tanzen/Drehen)', await page.evaluate(() => {
   const labels = Array.from(document.querySelectorAll('#ardyChips .ardy-chip')).map(x => x.textContent);

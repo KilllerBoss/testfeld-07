@@ -13,7 +13,10 @@ Sie sind die EINZIGE verlässliche Quelle für Schnittstellen — rate nicht.
 | CONTROL | Trainings-Steuerung, Szenarien, Buttons/Makros, Kamera, Aussehen, WELT, UI, ⭐ MOTION-KI (motionKi), ★ ARDY-BRÜCKE (v2.22.0 — Text→Motion als Lehrer ohne eigenes CUDA) |
 | CANVAS | NETZ-CANVAS (v2.20.0): ⭐ canvasBuild (ganze Architektur in 1 Aufruf), LOGIK-Verbinder (+ − × ÷ min max abs neg), linkMany (viele Kabel in 1 Aufruf), JEDER Port sichtbar (frei/belegt), Karten bauen/verbinden, Router-Architekturen, Belohnung je Karte, UI-Elemente als Ein-/Ausgänge (canvasBuild/canvasGraph/canvasReward/canvasRun/canvasUI) |
 
-## App-Version v2.23.0 (Kurzstand)
+## App-Version v2.26.0 (Kurzstand)
+
+- **Neu v2.26.0 — LERTRAIN (eigene App) + ARDY MINI EIGENES PANEL**: applicationId `com.lertrain.app` (installiert NEBEN Trainrobot) · ARDY-Mini-Panel per Topbar-Button 👤: MODELL (Download-Button + %, Cache löschen), PROMPTING (16 Chips + Freitext DE/EN), LIVE (Live-% + Stop + Live-Prompt — das Prompt-Feld wird an jedem Fensteranfang neu gelesen), TRAINING (Prozent live, Ziel-Schritte einstellbar, Persistenz tr_tgoal).
+- **Neu v2.25.0 — ARDY MINI AUF DEM GERÄT**: Modell intsuc/Llama-3-ARDY-Mini-Core40-Browser (HF-Space intsuc/ardy-mini), Text→Motion ohne Cloud, Ergebnis = Lehrer-Clip (G1, Reward-only).
 
 - **Neu v2.23.0 — ⭐ LEHRER-DATENSATZ (setTeacher)**: Basis-Motion-Datensatz (41 Clips: idle, gehen, laufen, hüpfen, Sprung, Weitsprung, liegen, aufstehen, drehen, stopp, balance + Duck sitzen/flattern + Drohnen-Pfade) per AUTO-DOWNLOAD von HuggingFace (`KillerBoss/trainrobot-motionclips`, Spiegel auf Kaggle `rudolfbewer/trainrobot-motionclips`). GRUNDSATZ: Die Animation ist NUR Belohnung (Imitation-Reward), NIE Policy-Eingang — Gewicht 0 = Animation „weg", Verhalten bleibt stabil (Obs enthielten sie nie). Jeder Datensatz-Frame trägt eine KOMMANDO-SPUR [vx,vy,wz,Buttons] (= Joystick-/Button-Stellung beim Generieren — später 1:1 aufs Gamepad mappbar). ARDY-G1-QPOS-CSVs im Datensatz sind mit „.csv (ARDY)" importierbar.
 - **Neu v2.23.0 — SOFT-MOE FÜR ALLE**: Soft-MoE (Router + 2–8 Experten) jetzt für MicroDuck, G1 UND Skydio X2 (Hover-Task hat einen Soft-Kommandoblock, obsDim 15→28 — alte Drohnen-Policies werden verworfen). G1 nutzt den verallgemeinerten MoE-Task (obsDim 119) mit relativem Curriculum.

@@ -909,3 +909,23 @@ body.pad-on .ai-buttons { display: none !important; }
   background: linear-gradient(90deg, #59e0a8, #3fcf92);
   transition: width .2s linear;
 }
+/* ── v2.26.0: ARDY-eigenes Sheet — Live-%, Trainings-%, Stop ── */
+.ardy-live-row {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ardy-pct-big {
+  font: 700 17px/1 var(--mono); color: #59e0a8;
+  min-width: 64px; text-align: right;
+  letter-spacing: 0.5px;
+}
+.ardy-live-label {
+  display: inline-flex; gap: 6px; align-items: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.ardy-live-label input { accent-color: #59e0a8; width: 15px; height: 15px; }
+#ardyTrainFill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #7ab8ff, #59a0e8);
+  transition: width .3s linear;
+}

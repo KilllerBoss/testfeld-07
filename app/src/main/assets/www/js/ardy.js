@@ -558,8 +558,13 @@ export class ArdyRuntime {
 
     const onProgress = opts.onProgress;
     onProgress && onProgress({ stage: 'encoding-text', completed: 0, total: 1 });
-    const textCond = await this._encodeText(prompt, opts.signal);
+    let textCond = await this._encodeText(prompt, opts.signal);
     onProgress && onProgress({ stage: 'encoding-text', completed: 1, total: 1 });
+    // v2.26.0: LIVE-STEERUNG — opts.getLivePrompt() wird an JEDEM
+    // Fensteranfang befragt; ein geänderter Prompt wird sofort neu
+    // kodiert (nur der Text-Anteil, History/Seed bleiben) — so lässt
+    // sich die Bewegung WÄHREND der Generierung umlenken.
+    let curPrompt = prompt;
 
     // Session-Zustand (wie Ba-Klasse im Worker)
     const state = { tokens: new Float32Array(0), frameCount: 0, translation: [0, 0, 0], heading: 0 };
@@ -577,6 +582,15 @@ export class ArdyRuntime {
     let written = 0;
     for (let w = 0; w < windows; w++) {
       if (opts.signal && opts.signal.aborted) throw new DOMException('Generation abgebrochen', 'AbortError');
+      if (w > 0 && typeof opts.getLivePrompt === 'function') {
+        const lp = String(opts.getLivePrompt() || '').trim();
+        if (lp && lp !== curPrompt) {
+          curPrompt = lp;
+          onProgress && onProgress({ stage: 'encoding-text', completed: 0, total: 1 });
+          textCond = await this._encodeText(lp, opts.signal);
+          onProgress && onProgress({ stage: 'encoding-text', completed: 1, total: 1 });
+        }
+      }
       const win0 = prepareWindow(dims, this.recenter, state, historyFrames);
       const win = buildWindow(dims, rng, win0.history);
       await this._denoiseWindow(win, textCond, cfgWeight, win0.firstHeadingAngle, onProgress, opts.signal, w * this.manifest.diffusion.timesteps.length, stepTotal);
@@ -610,6 +624,7 @@ export class ArdyRuntime {
     }
     out.frameCount = written;
     out.duration = written / dims.fps;
+    out.promptsLive = curPrompt !== prompt ? curPrompt : undefined; // v2.26.0: tatsächlich verwendeter Live-Prompt
     return out;
   }
 

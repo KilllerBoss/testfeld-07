@@ -42,6 +42,9 @@
       <button id="btnCanvas" class="iconbtn" aria-label="Netz-Canvas" title="Netz-Canvas (Policies bauen und verbinden)">
         <svg viewBox="0 0 24 24"><circle cx="4.5" cy="6.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="4.5" cy="17.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="14.5" y="9" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 6.5h4a2 2 0 0 1 2 2V10M6.5 17.5h4a2 2 0 0 0 2-2V14" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
       </button>
+      <button id="btnArdy" class="iconbtn" aria-label="ARDY Mini" title="ARDY Mini: Text → Motion auf dem Gerät (eigene Steuerung + Prompting + Modell-Download + Live-%)">
+        <svg viewBox="0 0 24 24"><circle cx="13" cy="4.6" r="2" fill="currentColor"/><path d="M13 7.2l-3.4 1.6-2.2 3M13 7.2l3.2 1.4 1.2 3.2M13 7.2v4.4l-2.6 3-1.6 5M13 11.6l2.4 2.8.8 5.4M9.6 8.8l-3 .8-1.4 2.4M9.6 8.8l2 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button id="btnAI" class="iconbtn" aria-label="KI-Trainer" title="KI-Trainer (Gemini)">
         <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7zM18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9zM5.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" fill="currentColor"/></svg>
       </button>
@@ -264,38 +267,8 @@
         <button id="glbBtnAdd" class="btn small">+ Button</button>
         <span class="glb-ctrl-label glb-btn-hint">max. 4 · lang drücken = löschen</span>
       </div>
-      <div class="ardy-section">
-        <div class="glb-head ardy-head">
-          <span class="sheet-title" style="font-size:11px">ARDY MINI · TEXT → MOTION (AUF DEM GERÄT)</span>
-          <span id="ardyEp" class="glb-ctrl-label">—</span>
-        </div>
-        <div id="ardyChips" class="ardy-chips"></div>
-        <div class="glb-row">
-          <input id="ardyPrompt" class="ardy-prompt" type="text" placeholder="Was soll der Roboter tun? (dt. oder engl.)" autocomplete="off">
-          <button id="ardyGenerate" class="btn small btn-solid">Generieren</button>
-        </div>
-        <div class="glb-row ardy-opts">
-          <label class="glb-ctrl-label">Dauer
-            <select id="ardyDur" class="ardy-select">
-              <option value="2">2 s</option>
-              <option value="5" selected>5 s</option>
-              <option value="8">8 s</option>
-              <option value="10">10 s</option>
-            </select>
-          </label>
-          <label class="glb-ctrl-label">Seed
-            <input id="ardySeed" class="ardy-seed" type="text" placeholder="zufällig" inputmode="numeric" autocomplete="off">
-          </label>
-          <label class="glb-ctrl-label">CFG
-            <input id="ardyCfg" class="ardy-seed" type="number" value="2" min="1" max="4" step="0.5" inputmode="decimal">
-          </label>
-          <button id="ardyCacheClear" class="btn small">Cache löschen</button>
-        </div>
-        <div id="ardyBar" class="ardy-bar hidden"><div id="ardyBarFill"></div></div>
-        <div id="ardyStatus" class="train-note">Wie im Space intsuc/ardy-mini: das Modell (ca. 650 MB, Hugging Face) wird beim ERSTEN Einsatz geladen und gecacht — danach Text→Bewegung komplett auf dem Gerät, ohne Cloud. Ergebnis = normaler Lehrer-Clip (G1).</div>
-      </div>
       <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus. ⭐ MOTION-KI: fertige Motion-Policy abspielen — der Clip animiert (Stil/Phase), der Joystick führt bei Bedarf (STEUER-MIX: 0 % = nur Clip, 100 % = nur Stick, dazwischen gemischt); ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter. ★ ARDY-BRÜCKE (v2.22.0): eigene TEXTE als Bewegung — NVIDIA ARDY (Text→Motion) läuft auf einer KOSTENLOSEN Cloud-GPU (Notebook: ardy_colab.ipynb im GitHub-Repo, kein eigenes CUDA nötig); die erzeugte G1-QPOS-CSV per „.csv (ARDY)“ importieren → wird zum Lehrer wie ein GLB-Clip (Geist, BC, PPO, MOTION-KI). ★★ ARDY MINI (v2.25.0, AUF DEM GERÄT): dasselbe ARDY-Prinzip wie im HF-Space intsuc/ardy-mini — Text eingeben oder Chip tippen, das Modell (einmalig ~650 MB von Hugging Face) generiert die Bewegung DIREKT im Gerät (WebGPU, sonst CPU) und retargetet sie auf den G1. Kein Notebook, kein Upload.</div>
+      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus. ⭐ MOTION-KI: fertige Motion-Policy abspielen — der Clip animiert (Stil/Phase), der Joystick führt bei Bedarf (STEUER-MIX: 0 % = nur Clip, 100 % = nur Stick, dazwischen gemischt); ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter. ★ ARDY-BRÜCKE (v2.22.0): eigene TEXTE als Bewegung — NVIDIA ARDY (Text→Motion) läuft auf einer KOSTENLOSEN Cloud-GPU (Notebook: ardy_colab.ipynb im GitHub-Repo, kein eigenes CUDA nötig); die erzeugte G1-QPOS-CSV per „.csv (ARDY)“ importieren → wird zum Lehrer wie ein GLB-Clip (Geist, BC, PPO, MOTION-KI). ★★ ARDY MINI (v2.26.0): eigenes Panel — Button 👤 in der Top-Leiste (getrennte Steuerung + Prompting vom GLB-Bereich, Modell-Download-Button, Live-Steuerung während der Generierung, Trainings-Prozent live).</div>
     </div>
     <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
   </section>
@@ -338,6 +311,80 @@
 
   <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->
   <div id="canvasUIBar" class="ai-buttons hidden"></div>
+
+  <!-- ── v2.26.0: ARDY MINI — EIGENES PANEL (Steuerung + Prompting getrennt) ── -->
+  <section id="ardySheet" class="sheet hidden">
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <span class="sheet-title">ARDY MINI · TEXT → MOTION</span>
+      <span id="ardyEp" class="sheet-sub">—</span>
+      <button id="ardyClose" class="iconbtn" aria-label="ARDY Mini schließen">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="ardy-section">
+      <div class="glb-head ardy-head">
+        <span class="sheet-title" style="font-size:11px">MODELL (HUGGING FACE, EINMALIG ~650 MB)</span>
+        <span id="ardyDlPct" class="glb-ctrl-label">—</span>
+      </div>
+      <div class="glb-row ardy-opts">
+        <button id="ardyDl" class="btn small btn-solid">⬇ Modell herunterladen</button>
+        <button id="ardyCacheClear" class="btn small">Cache löschen</button>
+      </div>
+      <div id="ardyBar" class="ardy-bar hidden"><div id="ardyBarFill"></div></div>
+      <div class="glb-row ardy-live-row">
+        <span class="sheet-title" style="font-size:11px">LIVE</span>
+        <span id="ardyPct" class="ardy-pct-big">—</span>
+        <span id="ardyGen" class="glb-ctrl-label">bereit</span>
+        <button id="ardyStop" class="btn small" disabled>⏹ Stop</button>
+      </div>
+    </div>
+
+    <div class="ardy-section">
+      <div class="glb-head ardy-head">
+        <span class="sheet-title" style="font-size:11px">PROMPTING (DEUTSCH ODER ENGLISCH)</span>
+      </div>
+      <div id="ardyChips" class="ardy-chips"></div>
+      <div class="glb-row">
+        <input id="ardyPrompt" class="ardy-prompt" type="text" placeholder="Was soll der Roboter tun? (dt. oder engl.)" autocomplete="off">
+        <button id="ardyGenerate" class="btn small btn-solid">Generieren</button>
+      </div>
+      <div class="glb-row ardy-opts">
+        <label class="glb-ctrl-label">Dauer
+          <select id="ardyDur" class="ardy-select">
+            <option value="2">2 s</option>
+            <option value="5" selected>5 s</option>
+            <option value="8">8 s</option>
+            <option value="10">10 s</option>
+          </select>
+        </label>
+        <label class="glb-ctrl-label">Seed
+          <input id="ardySeed" class="ardy-seed" type="text" placeholder="zufällig" inputmode="numeric" autocomplete="off">
+        </label>
+        <label class="glb-ctrl-label">CFG
+          <input id="ardyCfg" class="ardy-seed" type="number" value="2" min="1" max="4" step="0.5" inputmode="decimal">
+        </label>
+        <label class="glb-ctrl-label ardy-live-label"><input id="ardyLive" type="checkbox" checked> Live-Prompt</label>
+      </div>
+    </div>
+
+    <div class="ardy-section">
+      <div class="glb-head ardy-head">
+        <span class="sheet-title" style="font-size:11px">TRAINING (PROZENT LIVE, WÄHREND DER ROBOTER TRAINIERT)</span>
+        <span id="ardyTrainPct" class="ardy-pct-big">0 %</span>
+      </div>
+      <div class="ardy-bar"><div id="ardyTrainFill" style="width:0%"></div></div>
+      <div class="glb-row ardy-opts">
+        <label class="glb-ctrl-label">Ziel (Schritte)
+          <input id="ardyTrainGoal" class="ardy-seed" type="number" min="10000" step="100000" inputmode="numeric">
+        </label>
+        <span id="ardyTrainInfo" class="glb-ctrl-label">—</span>
+      </div>
+    </div>
+
+    <div id="ardyStatus" class="train-note">Wie im Space intsuc/ardy-mini: Modell (ca. 650 MB, Hugging Face) einmalig per „⬇ Modell herunterladen“ laden (danach offline gecacht) — Text→Bewegung läuft komplett auf dem Gerät (WebGPU, sonst CPU). Ergebnis = normaler Lehrer-Clip (G1, nur Belohnung). LIVE-PROMPT: während der Generierung neuen Text eingeben — das nächste Fenster läuft schon auf dem neuen Prompt. STOP bricht ab.</div>
+  </section>
 
   <!-- KI-Trainer (Gemini) -->
   <section id="aiSheet" class="sheet hidden">
