@@ -500,6 +500,33 @@ export class Renderer3D {
     this._upVec = new THREE.Vector3(0, 1, 0);
     this._vA = new THREE.Vector3(); this._vB = new THREE.Vector3();
     this._vD = new THREE.Vector3();
+    // v2.28.1 OVERLAY-Basis: Frame-0-Hüfte (srcJoints[0] = 'hips') als
+    // Ursprung der RELATIVEN Darstellung + Flag (Standard: absolut, damit
+    // der GLB-Original-Mesh-Pfad unverändert bleibt).
+    this._srcOrigin = [motion.srcPos[0], motion.srcPos[1]];
+    this._srcRelative = false;
+  }
+
+  // v2.28.1: Relative Darstellung (Frame-0-Hüfte = Ursprung) an/aus.
+  setSourceGhostRelative(on) {
+    this._srcRelative = !!on;
+  }
+
+  // v2.28.1 ARDY-OVERLAY: das grüne Skeleton reitet EXAKT auf dem
+  // Geist-Anker (x, y) — keine Parallelbahn mehr, kein „auseinander“.
+  // Die gerenderte (relative) Hüfte landet per Gruppen-Offset exakt auf
+  // dem Anker; die Posen spielen wie gehabt. Ruft setSourceGhostRelative(true).
+  placeSourceGhostAt(frame, x, y) {
+    const motion = this._srcMotion;
+    if (!this.sourceGhost || !motion || !motion.srcPos || !this._srcOrigin) return;
+    this._srcRelative = true;
+    const J = motion.srcJoints.length;
+    const hi = this._srcIdx && this._srcIdx.hips !== undefined ? this._srcIdx.hips : 0;
+    const o = frame * J * 3 + hi * 3;
+    const hx = motion.srcPos[o] - this._srcOrigin[0];
+    const hy = motion.srcPos[o + 1] - this._srcOrigin[1];
+    if (!Number.isFinite(hx) || !Number.isFinite(hy)) return;
+    this.sourceGhost.position.set(x - hx, y - hy, 0);
   }
 
   // Schleifen-Rebase: lässt den Lehrer (Skelett UND Original-Mesh) nach
@@ -515,9 +542,13 @@ export class Renderer3D {
     if (!this.sourceGhost || !motion || !motion.srcPos) return;
     if (this._srcJointMeshes && this._srcJointMeshes.length) {
     const J = motion.srcJoints.length;
+    // v2.28.1: im Overlay-/Relativ-Modus wird die Frame-0-Hüfte als
+    // Ursprung abgezogen (x/y) — z (Höhe, geerdet) bleibt absolut.
+    const REL = this._srcRelative && this._srcOrigin;
+    const OX = REL ? this._srcOrigin[0] : 0, OY = REL ? this._srcOrigin[1] : 0;
     const P = (idx) => {
       const o = frame * J * 3 + idx * 3;
-      return [motion.srcPos[o], motion.srcPos[o + 1], motion.srcPos[o + 2]];
+      return [motion.srcPos[o] - OX, motion.srcPos[o + 1] - OY, motion.srcPos[o + 2]];
     };
     for (const { role, mesh } of this._srcJointMeshes) {
       const i = this._srcIdx[role];
@@ -552,6 +583,8 @@ export class Renderer3D {
     this.sourceGhost = null;
     this._srcMotion = null;
     this._srcScene = null;
+    this._srcOrigin = null;
+    this._srcRelative = false;
   }
 
   updateGhost(sim2) {

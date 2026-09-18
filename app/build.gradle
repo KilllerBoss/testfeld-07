@@ -10,8 +10,8 @@ android {
         applicationId "com.lertrain.app"  // v2.26.0: EIGENE App (installiert sich NICHT mehr über Trainrobot drüber)
         minSdk 30
         targetSdk 34
-        versionCode 41
-        versionName "2.28.0"
+        versionCode 42
+        versionName "2.28.1"
     }
 
     signingConfigs {

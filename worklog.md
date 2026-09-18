@@ -809,3 +809,23 @@ Work Log:
 
 Stage Summary:
 - v2.28.0 / versionCode 41: Der Stick fährt jetzt WIRKLICH den Geist (die Referenz, die der Roboter per Reward lernt) — in Training UND Vorschau. Geist und grünes Skeleton werden garantiert AUF den Boden gehoben (auch bei ARDY-Höhendrift). Der Geist-lenk-Button ist ein Toggle. ARDY-Erzeugung (v2.27.1-Fix) bleibt unverändert.
+
+---
+Task ID: 52
+Agent: Super Z (Hauptagent)
+Task: v2.28.1 — Boden-Reparatur für gespeicherte Clips + ARDY-Geist-lenk-Standard + Skeleton-Overlay (Nutzer-Screenshot 14:03 zeigte weiterhin Skeleton/Geist im Boden & auseinander, Stick steuert nur den Roboter)
+
+Work Log:
+- LAGE-ANALYSE: v2.28.0 war released (11:36 UTC), Nutzer-Screenshot 27 min später zeigte UNVERÄNDERTES Bruchbild. Wurzel: (a) der alte v2.27.1-ARDY-Clip liegt WEITERHIN in IndexedDB (App-Update löscht IndexedDB NICHT) und trägt ungeerdete srcPos — die v2.28.0-Erdung griff nur bei NEU generierten Clips; (b) nach ARDY-Generierung galt ctrlMode 'none' + refMode 'frei' → der Stick fuhr nur den Roboter (Geist-lenk musste der Nutzer selbst im Panel aktivieren); (c) das grüne Skeleton läuft auf einer PARALLELBAHN 1,1 m seitlich (Design) — der Nutzer wertet das als „auseinander"; Demo-Referenz (VRM-Avatar) = EINE Figur spielt die Motion.
+- retarget.js: Erdungslogik in exportierte Helfer extrahiert — groundSrcPosFrame (Einzelframe, NaN-sicher, Fuß-Fallback, Sprünge unangetastet) + groundSrcPosTrack (ganze Spur, liefert Anzahl gehobener Frames). retargetToG1 nutzt denselben Helfer (Verhalten identisch, Diagnose erneut bestätigt: srcPos z [0, 1.625]).
+- main.js activateClip BODEN-REPARATUR (Migration): beim Aktivieren JEDER Clips mit srcPos wird groundSrcPosTrack ausgeführt; > 0 gehobene Frames → repack + putClip (PERSISTENT) + Log „Boden-Reparatur … für beste Posen-Qualität den Clip neu generieren". Alte Bestände sind danach dauerhaft gefixt — ohne Modell, ohne Re-Retarget (nur srcPos-Visual; Posen-Qualität alt: Hinweis auf Neu-Generierung).
+- main.js activateClip GEIST-LENK-STANDARD für ARDY: rec.ctrl ohne Wahl → 'joy' (persistiert) + S.refMode = 'folgt' (+localStorage) — der Stick fährt SOFORT die ARDY-Referenz (Training/POLICY/Manuell-Zweige aus v2.28.0 greifen damit ohne Bedienung des Panel-Buttons). Explizite Chip-Wahlen (joy/btn/none) bleiben erhalten. runArdy setzt rec.ctrl='joy' direkt am Record.
+- main.js Render-Loop ARDY-OVERLAY: clip.srcOverlay (rec.src==='ardy') → placeSourceGhostAt(fr, rr.x, rr.y): das grüne Skeleton reitet EXAKT auf dem Geist-Anker (relative Darstellung ab Frame-0-Hüfte + Gruppen-Kompensation der Hüfte-Bahn je Frame) — „zusammen" statt „auseinander", auch beim Stick-Lenken. GLB-Pfade (frei/folgt/stelle) UNVERÄNDERT absolut (Mesh-konsistent), updateSourceGhost jetzt NACH der Anker-Wahl (Relativ-Flag vor dem Rendern!).
+- render3d.js: _srcOrigin (Frame-0-Hüfte) + _srcRelative-Flag; setSourceGhostRelative(on); placeSourceGhostAt(frame,x,y); updateSourceGhost zieht OX/OY ab wenn relativ (z bleibt absolut/geerdet); removeSourceGhost räumt Flags auf.
+- main.js runArdy KOLLAPS-WARNUNG: kollabierte Generierung (ARDY autoregressiv — Hüftenhöhe hMax < 0,55 m oder hMin < 0,32 m) → klare Log-/Toast-Meldung „Bewegung kollabiert — anderen Prompt/Seed probieren" (trennt Modell-Ausreißer von App-Fehlern).
+- Tests: ghost_ground_v281_test.mjs NEU 30/30 (groundSrcPosFrame Einzelframe/Fallback/Sprung, Track-Zählung, Migration end-to-end retarget→sinken→pack/unpack→Reparatur → min Fuß-z 0,0000, Overlay-Mathematik millimetergenau am Anker, Pins, groundGhost-Interaktion). Regression ALLE GRÜN: ghost_drive_v2280 17/17 · qpos 52/52 · ardy_math 17/17 · ardy_runtime 18/18 · ardy_live grün · ui_v2270/2260/2250 grün · motionset 49/49. Pins auf 2.28.1/42 (ui_v2270) bzw. gelockert (ui_v2260/motionset/qpos).
+- BUILD+VERIFIKATION: APK 28.124.265 bytes — aapt com.lertrain.app versionCode 42 versionName 2.28.1 Label LerTrain · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH (CN=Trainrobot) · Fixes nachweislich im APK (groundSrcPosTrack, placeSourceGhostAt, srcOverlay, Kollaps-Warnung, VERSION 2.28.1).
+- RELEASE: Tag v2.28.1 gepusht → CI build-apk; download/lertrain.apk aktualisiert.
+
+Stage Summary:
+- v2.28.1 / versionCode 42: ALTE ARDY-Clips werden beim Aktivieren automatisch auf den Boden repariert (persistiert), der Stick fährt ab Generierung sofort den ARDY-Geist (Standard, ohne Button-Suche), das grüne Skeleton reitet exakt AUF dem Geist (eine Figur wie im Demo-Avatar) und kollabierte Generierungen werden klar als solche gemeldet. Empfehlung an den Nutzer: App-Update installieren, bestehenden ARDY-Clip antippen (wird repariert) oder neu generieren.

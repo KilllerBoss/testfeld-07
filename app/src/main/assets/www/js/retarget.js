@@ -528,6 +528,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
   // Lehrer-Ghost: Weltpositionen aller Rollenknochen je Frame (MuJoCo-Rahmen, m)
   const srcPos = new Float32Array(n * ghostRoles.length * 3);
   const srcJoints = ghostRoles.slice();
+  const fiLFoot = ghostRoles.indexOf('leftFoot'), fiRFoot = ghostRoles.indexOf('rightFoot'); // v2.28.1
   const worldPos = new Map();
   const FWD_GLB = [0, 0, 1]; // GLB: +Z ist Blickrichtung (Annahme wie Achsen-Mapping)
   const fwdTmp = [0, 0, 0];
@@ -639,24 +640,9 @@ export function retargetToRobot(clip, sim, log = () => {}) {
     // Skeleton ANHEBEN, bis der Fuß bei 0 steht. Sprünge bleiben unangetastet
     // (beide Füße über 0 → kein Lift), Gehen bleibt unverändert (ein Fuß
     // ist immer nahe 0 — der Lift ist dort ~0).
-    {
-      const nR = ghostRoles.length;
-      const probe = (gi) => {
-        const z = srcPos[(f * nR + gi) * 3 + 2];
-        return Number.isFinite(z) ? z : Infinity;
-      };
-      let minZ = Infinity;
-      const fiL = ghostRoles.indexOf('leftFoot'), fiR = ghostRoles.indexOf('rightFoot');
-      if (fiL >= 0) minZ = Math.min(minZ, probe(fiL));
-      if (fiR >= 0) minZ = Math.min(minZ, probe(fiR));
-      if (!Number.isFinite(minZ)) {
-        for (let gi = 0; gi < nR; gi++) minZ = Math.min(minZ, probe(gi));
-      }
-      if (Number.isFinite(minZ) && minZ < 0) {
-        const dz = -minZ;
-        for (let gi = 0; gi < nR; gi++) srcPos[(f * nR + gi) * 3 + 2] += dz;
-      }
-    }
+    // v2.28.1: Logik im exportierten groundSrcPosFrame — dieselbe Garantie
+    // repariert auch GESPEICHERTE alte Clips beim Aktivieren (Migration).
+    groundSrcPosFrame(srcPos, f, ghostRoles.length, fiLFoot, fiRFoot);
   }
 
   // Lücken-Füllung (v2.5.0): Fehlt ein Zielrichtungs- oder Fußquat-Sample
@@ -1380,4 +1366,39 @@ function smooth(arr, win) {
     out[i] = s / c;
   }
   arr.set(out);
+}
+
+// ═══ v2.28.1 BODEN-REPARATUR (Migration für gespeicherte Clips) ═══
+// Hebt in EINEM Frame den tiefsten Fußpunkt exakt auf 0 (Fallback: alle
+// Rollen, NaN-sicher). Sprünge (beide Füße über 0) bleiben unangetastet.
+// Wird von retargetToG1 je Frame UND von activateClip zur Reparatur alter
+// Bestände (vor der v2.28.0-Boden-Garantie generiert) benutzt.
+export function groundSrcPosFrame(srcPos, f, nR, fiL = -1, fiR = -1) {
+  const probe = (gi) => {
+    const z = srcPos[(f * nR + gi) * 3 + 2];
+    return Number.isFinite(z) ? z : Infinity;
+  };
+  let minZ = Infinity;
+  if (fiL >= 0) minZ = Math.min(minZ, probe(fiL));
+  if (fiR >= 0) minZ = Math.min(minZ, probe(fiR));
+  if (!Number.isFinite(minZ)) {
+    for (let gi = 0; gi < nR; gi++) minZ = Math.min(minZ, probe(gi));
+  }
+  if (Number.isFinite(minZ) && minZ < 0) {
+    const dz = -minZ;
+    for (let gi = 0; gi < nR; gi++) srcPos[(f * nR + gi) * 3 + 2] += dz;
+    return dz;
+  }
+  return 0;
+}
+
+/** Ganze Spur reparieren — liefert die Anzahl angehobener Frames. */
+export function groundSrcPosTrack(srcPos, n, srcJoints) {
+  const nR = srcJoints.length;
+  const fiL = srcJoints.indexOf('leftFoot'), fiR = srcJoints.indexOf('rightFoot');
+  let lifted = 0;
+  for (let f = 0; f < n; f++) {
+    if (groundSrcPosFrame(srcPos, f, nR, fiL, fiR) > 0) lifted++;
+  }
+  return lifted;
 }

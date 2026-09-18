@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms } from './retarget.js';
+import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.0'; // v2.28.0: GEIST LENKEN (Stick führt die Referenz in JEDEM Modus — Geist = Trainingsziel) + BODEN-GARANTIE (Geist/Skeleton werden auf den Boden gehoben, nie mehr im Boden). v2.27.1: Fix „Cannot read properties of undefined (reading 'run')“ — Session-Key text_encoder→textEncoder + klare Fehlermeldungen. v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
+const VERSION = '2.28.1'; // v2.28.1: BODEN-REPARATUR (alte ARDY/GLB-Clips werden beim Aktivieren geerdet) + ARDY-OVERLAY (grünes Skeleton reitet exakt auf dem Geist — nichts ist mehr auseinander) + Geist-lenk-Standard für ARDY (Stick fährt sofort die Referenz) + Kollaps-Warnung bei kollabierter Generierung. v2.28.0: GEIST LENKEN (Stick führt die Referenz in JEDEM Modus) + BODEN-GARANTIE (groundGhost + Skeleton-Erdung). v2.27.1: Session-Key-Fix (textEncoder). v2.27.0: Geist-Fix + Modell-Import + Geist lenken.
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -2148,21 +2148,34 @@ function loop(now) {
       const ryaw = Math.atan2(2 * (rq[0] * rq[3] + rq[1] * rq[2]), 1 - 2 * (rq[2] * rq[2] + rq[3] * rq[3]));
       const rr = S.task.ghostAnchor ? S.task.ghostAnchor(phase, rp, ryaw, [0, 0, 0]) : (clip.root && clip.yaw && S.task.refRoot ? S.task.refRoot(S.task.phase, [0, 0, 0]) : null);
       if (r3d.sourceGhost) {
-        r3d.updateSourceGhost(fr);
         const mode = isMotion ? S.task.refMode : S.task.refMode;
-        if (mode === 'frei' && isMotion && rr && clip.root) {
-          r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
+        if (isMotion && clip.srcOverlay && rr) {
+          // v2.28.1 ARDY-OVERLAY: das grüne Skeleton reitet EXAKT auf dem
+          // Geist-Anker (Demo-Avatar-Prinzip: EINE Figur spielt die Motion).
+          // Relative Darstellung + Gruppen-Offset je Frame → die Hüfte des
+          // Skeletons sitzt Millimeter-genau auf der Geist-Basis. Der Weg,
+          // den die ARDY-Hüfte im Clip nimmt, kürzt sich heraus — nichts
+          // wandert mehr auseinander, auch nicht bei Geist-lenk (Stick).
+          r3d.placeSourceGhostAt(fr, rr[0], rr[1]);
           r3d.sourceGhost.visible = true;
-        } else if (rr && mode !== 'stelle') {
-          // 'folgt' (Roboter/Drohne): Geist hängt am Roboter (srcPos = relativ)
-          r3d.setSourceGhostLoop(0, 0);
-          r3d.sourceGhost.position.set(rr[0], rr[1], 0);
-          r3d.sourceGhost.visible = true;
-        } else if (mode === 'stelle') {
-          // Auf der Stelle: Original-Mesh aus — seine srcPos laufen sonst die
-          // Wegroute ab. Der Roboter-Geist (setGhostPose) zeigt die Pose korrekt.
-          r3d.sourceGhost.visible = false;
+        } else {
+          // GLB-Pfade: absolute Darstellung (konsistent mit dem Original-Mesh)
+          r3d.setSourceGhostRelative(false);
+          if (mode === 'frei' && isMotion && rr && clip.root) {
+            r3d.setSourceGhostLoop(rr[0] - clip.root[2 * fr], rr[1] - clip.root[2 * fr + 1]);
+            r3d.sourceGhost.visible = true;
+          } else if (rr && mode !== 'stelle') {
+            // 'folgt' (Roboter/Drohne): Geist hängt am Roboter (srcPos = relativ)
+            r3d.setSourceGhostLoop(0, 0);
+            r3d.sourceGhost.position.set(rr[0], rr[1], 0);
+            r3d.sourceGhost.visible = true;
+          } else if (mode === 'stelle') {
+            // Auf der Stelle: Original-Mesh aus — seine srcPos laufen sonst die
+            // Wegroute ab. Der Roboter-Geist (setGhostPose) zeigt die Pose korrekt.
+            r3d.sourceGhost.visible = false;
+          }
         }
+        r3d.updateSourceGhost(fr); // v2.28.1: NACH der Anker-Wahl (Relativ-Flag!)
       }
       if (r3d.ghostGroups && isMotion && rr) {
         const gh = S.sim.makeGhostData();
@@ -3371,6 +3384,15 @@ function initArdy() {
       const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
       const name = (label ? 'ARDY · ' + label : 'ARDY · ' + prompt.slice(0, 24)) + ' (KI)';
       const packed = packMotion(motion);
+      // v2.28.1 KOLLAPS-WARNUNG: driftet die Generierung (ARDY Mini ist
+      // autoregressiv — lange/unübliche Prompts können kollabieren), sage
+      // es KLAR — der Nutzer soll App-Fehler von Modell-Ausreißern trennen.
+      let hMin = Infinity, hMax = -Infinity;
+      for (let i = 0; i < motion.h.length; i++) { hMin = Math.min(hMin, motion.h[i]); hMax = Math.max(hMax, motion.h[i]); }
+      if (hMax < 0.55 || hMin < 0.32) {
+        log('ARDY-Warnung: die generierte Bewegung kollabiert (Hüftenhöhe ' + hMin.toFixed(2) + '–' + hMax.toFixed(2) + ' m) — bitte anderen Prompt oder anderen Seed probieren', 'warn');
+        ui.toast('Bewegung kollabiert — anderen Prompt/Seed probieren', true, 4500);
+      }
       const rec = {
         id: 'ardy_' + Date.now() + '_' + Math.floor(Math.random() * 1e4),
         name,
@@ -3378,6 +3400,7 @@ function initArdy() {
         glb: null,               // keine Mesh-Datei → nie Re-Retarget
         animIndex: 0,
         src: 'ardy',             // auf dem Gerät generiert
+        ctrl: 'joy',             // v2.28.1: Geist-lenk-Standard (Stick fährt die Referenz)
         prompt: out.promptsLive || prompt,
         seed: out.seed,
         motion: packed,
@@ -3885,6 +3908,38 @@ async function activateClip(rec) {
     } catch (e) {
       log('Neu-Retargeting fehlgeschlagen — alter Bestand bleibt (' + (e && e.message ? e.message : e) + ')', 'warn');
     }
+  }
+  // ── v2.28.1 BODEN-REPARATUR (Migration): vor der v2.28.0-Boden-Garantie
+  // generierte Clips tragen ungeerdete srcPos (Skeleton hängt im Boden).
+  // Beim Aktivieren je Frame erden und SOFORT PERSISTIEREN — der alte
+  // Bestand ist danach dauerhaft repariert (ohne Re-Generierung).
+  if (S.motionClip.srcPos && S.motionClip.srcJoints && S.motionClip.n) {
+    try {
+      const lifted = groundSrcPosTrack(S.motionClip.srcPos, S.motionClip.n, S.motionClip.srcJoints);
+      if (lifted > 0) {
+        const packedFix = packMotion(S.motionClip);
+        rec.motionByRobot = rec.motionByRobot || {};
+        rec.motionByRobot[S.robotId] = packedFix;
+        if (S.robotId === 'g1') rec.motion = packedFix;
+        await putClip(rec);
+        log('Boden-Reparatur: ' + lifted + ' Frames des Lehrer-Skeletons auf den Boden gehoben (alter Bestand vor der Boden-Garantie)' + (rec.src === 'ardy' ? ' — für beste Posen-Qualität den Clip neu generieren' : ''));
+      }
+    } catch (e) { /* Reparatur ist rein visuell — kein Grund abzubrechen */ }
+  }
+  // v2.28.1 ARDY-OVERLAY: das grüne Skeleton gehört ZUM Geist (eine Figur).
+  if (rec.src === 'ardy') S.motionClip.srcOverlay = true;
+  // v2.28.1 GEIST-LENK-STANDARD für ARDY: der Nutzer erwartet, dass der
+  // Stick SOFORT die ARDY-Referenz fährt („der Geist, was ARDY steuert").
+  // Ohne gespeicherte Steuerungswahl gilt: ctrl 'joy' + refMode 'folgt'.
+  // Explizite Chip-Wahlen (joy/btn/none) bleiben erhalten.
+  if (rec.src === 'ardy') {
+    if (rec.ctrl !== 'joy' && rec.ctrl !== 'btn' && rec.ctrl !== 'none') {
+      rec.ctrl = 'joy';
+      await putClip(rec).catch(() => {});
+      log('Steuerung: JOYSTICK (Standard für ARDY) — der Stick fährt jetzt die Referenz; über die Steuer-Chips änderbar');
+    }
+    S.refMode = 'folgt';
+    try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
   }
   // Lehrer-Ghost: v2.24.0 — der GEIST zeigt die trainierte Referenz;
   // das Original-Mesh wird nur gebaut, wenn der Nutzer „Original" einschaltet
