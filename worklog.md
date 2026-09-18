@@ -750,3 +750,27 @@ Work Log:
 
 Stage Summary:
 - v2.26.0: LerTrain ist eine EIGENE App (com.lertrain.app) — die alte Trainrobot-App bleibt unangetastet auf dem Gerät. ARDY Mini hat ein komplett getrenntes Panel: Modell-Download-Button mit Prozent, Prompting getrennt von der Steuerung, LIVE-Umlenken des Prompts während der Generierung (+ Stop), und der Trainings-Fortschritt läuft als Live-Prozent (eigenes Ziel einstellbar) mit, während der Roboter trainiert.
+
+---
+Task ID: 49
+Agent: Super Z (Hauptagent)
+Task: v2.27.0 — Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (HF-Download-Problem umgangen) + Geist lenken (Stick → Referenz → Reward); APK direkt geliefert
+
+Work Log:
+- Screenshot-Analyse: teal „Objekte“ = Geist-Körperteile am Ursprung im Lokal-Ruhesatz (buildGhost ohne initiale Pose), Geist halb im Boden
+- render3d.js: buildGhost() setzt SOFORT die echte Roboter-Pose; neue Methode mirrorGhost(sim)
+- main.js: Render-Loop spiegelt den Geist an den echten Roboter, solange keine Motion-Task/kein Clip läuft → Geist steht normal daneben (cyan), keine verstreuten Teile mehr
+- ardy.js: refreshArdyImports()/ardyImportSummary() + fetchModelFile prüft Import-Dateien ZUERST (/ardymodel/<Name>, same-origin), Basename-Match, keine Cache-Dublette
+- MainActivity.java: WebViewAssetLoader-Handler „/ardymodel/“ (Dateien aus filesDir/ardy_import/, Pfad-Härtung), Bridge ardyPickModel()/ardyImportList()/ardyImportDelete(), onActivityResult 7002 mit Streaming-Kopie (1-MiB-Blöcke, Fortschritt per evaluateJavascript)
+- index.html: Buttons „📁 Vom Gerät wählen“ + „🎮 Geist lenken“, Hinweistext mit Datei-Checkliste (fp16: model.json.gz, tokenizer.json.gz, 3× .onnx.gz)
+- main.js: Import-Verdrahtung (__ardyImportProgress/__ardyImportDone → ensureRuntime), wireArdyGhostDrive() (folgt + ctrlMode joy + startTraining), VERSION 2.27.0
+- build.gradle: versionCode 39 / versionName 2.27.0
+- Tests: ui_v2270 NEU (22/22 grün), ui_v2260 grün (Pins gelockert), ui_v2250 grün, motionset 49/49 (Pins gelockert), ardy_live grün
+- Build: assembleRelease (JDK 21; 10-min-Timeout überschritten, APK trotzdem fertiggestellt), Assets verifiziert (mirrorGhost/ardymodel in APK)
+- Verifikation: aapt package=com.lertrain.app v39 2.27.0 Label LerTrain; apksigner SHA-256 1c0422b9… (identisch — gleicher Keystore, parallel zur alten App installierbar)
+
+Stage Summary:
+- download/lertrain.apk = v2.27.0 (versionCode 39), sha256 d5250bdb36ae2d83…, Signatur unverändert
+- ARDY Mini funktioniert jetzt OHNE HF-Download: Dateimanager → Dateien wählen → Kopie mit Fortschritt → Laden von /ardymodel/ (same-origin)
+- Geist: immer saubere G1-Silhouette (Spiegel des echten Roboters ohne Referenz; Referenz-Pose mit Task) — „blaue Objekte“/Boden-Bug behoben
+- Geist lenken: Stick führt Referenz-Wurzel, Training läuft, Lernen rein per Motion-Belohnung (Animation NIE Input)

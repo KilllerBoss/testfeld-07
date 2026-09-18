@@ -29,12 +29,12 @@ import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJ
 import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnungen (KI-tunbar)
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
-import { loadArdyRuntime, clearArdyCache, BASIS_ANIMS, deToEn, ardyCapabilities } from './ardy.js'; // v2.25.0: ARDY Mini AUF DEM GERÄT (Text→Motion ohne Cloud)
+import { loadArdyRuntime, clearArdyCache, BASIS_ANIMS, deToEn, ardyCapabilities, refreshArdyImports, ardyImportSummary } from './ardy.js'; // v2.25.0: ARDY Mini AUF DEM GERÄT (Text→Motion ohne Cloud) · v2.27.0: Dateimanager-Import
 import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Retarget-Clip
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.26.0'; // v2.26.0: ARDY Mini eigenes Panel (Steuerung+Prompting getrennt, Download-Button, Live-%, Trainings-%) + eigene App-ID com.lertrain.app
+const VERSION = '2.27.0'; // v2.27.0: Geist-Fix (steht normal wie der echte, keine verstreuten blauen Teile) + ARDY-Modell-Import über den Dateimanager (ohne HF-Download) + Geist lenken (Stick → Referenz → Reward)
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -2896,6 +2896,7 @@ const ardyCloseBtn = document.getElementById('ardyClose'); if (ardyCloseBtn) ard
   document.getElementById('glbFile').addEventListener('change', onGlbFiles);
   // v2.22.0: ARDY-Brücke — QPOS-CSV (NVIDIA ARDY, Text→Motion) als Lehrer
   initArdy(); // v2.25.0: ARDY Mini auf dem Gerät (Text→Motion)
+  wireArdyGhostDrive(); // v2.27.0: Geist lenken (Stick → Referenz → Reward)
   document.getElementById('csvImportBtn').addEventListener('click', () => document.getElementById('csvFile').click());
   document.getElementById('csvFile').addEventListener('change', onCsvFiles);
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
@@ -3424,6 +3425,87 @@ function initArdy() {
     if (dlPctEl) dlPctEl.textContent = '—';
     statusEl.textContent = 'Cache gelöscht — Modell wird beim nächsten Einsatz neu geladen.';
     ui.toast('ARDY-Cache gelöscht');
+  });
+
+  // ── v2.27.0: MODELL-IMPORT ÜBER DEN DATEIMANAGER ────────
+  // Der HF-Download schlägt auf manchen Geräten fehl. Stattdessen öffnet
+  // „📁 Vom Gerät wählen“ den ANDROID-DATEIMANAGER; der Nutzer wählt die
+  // Modell-Dateien (z. B. vorher per PC auf das Handy kopiert), die native
+  // Brücke kopiert sie ins App-Verzeichnis (mit Fortschritt) und die App
+  // lädt sie ab sofort same-origin von dort — ohne Hugging Face.
+  const impBtn = document.getElementById('ardyImport');
+  if (impBtn) impBtn.addEventListener('click', () => {
+    controls.buzz();
+    const B = window.TrainrobotBridge;
+    if (!B || typeof B.ardyPickModel !== 'function') {
+      ui.toast('Dateimanager-Import nur in der App verfügbar', true);
+      return;
+    }
+    // Rückrufe der nativen Brücke (Kopier-Fortschritt je Datei + Fertigmeldung)
+    window.__ardyImportProgress = (name, got) => {
+      if (statusEl) statusEl.textContent = 'Importiere ' + name + ' … ' + (got / 1048576).toFixed(0) + ' MiB';
+      if (dlPctEl) dlPctEl.textContent = '…';
+      if (dlBtn) dlBtn.disabled = true;
+    };
+    window.__ardyImportDone = async (ok, msg) => {
+      refreshArdyImports();
+      const sum = ardyImportSummary();
+      if (!ok) {
+        if (statusEl) statusEl.textContent = 'Import: ' + (msg || 'abgebrochen') + ' — Dateien fehlen? (fp16-Ordner: model.json.gz + tokenizer.json.gz + 3× .onnx.gz)';
+        if (dlBtn) dlBtn.disabled = !!S.ardyRuntime;
+        return;
+      }
+      if (statusEl) statusEl.textContent = msg + ' (' + sum.count + ' Dateien, ' + sum.mib + ' MiB) — ARDY Mini wird geladen …';
+      try {
+        await ensureRuntime();
+        log('ARDY-Modell vom Gerät importiert und geladen (' + sum.count + ' Dateien, ' + sum.mib + ' MiB) — läuft ab jetzt ohne Hugging Face', 'ok');
+      } catch (err) {
+        const m = err && err.message ? err.message : String(err);
+        if (statusEl) statusEl.textContent = 'Import ok, aber Laden fehlgeschlagen: ' + m + ' — fehlt eine Datei? (5 Dateien: model.json.gz, tokenizer.json.gz, text_encoder/denoiser/decoder .onnx.gz)';
+        log('ARDY-Import-Ladefehler: ' + m, 'err');
+      }
+    };
+    if (statusEl) statusEl.textContent = 'Dateimanager geöffnet — bitte Modell-Dateien wählen (fp16-Ordner: 5 Dateien) …';
+    B.ardyPickModel();
+  });
+  // Beim Panel-Start: Import-Liste zeigen, falls schon Dateien vorhanden sind
+  refreshArdyImports();
+  {
+    const impSum = ardyImportSummary();
+    if (impSum.count > 0 && impBtn) {
+      impBtn.textContent = '📁 Weitere Datei wählen (' + impSum.count + ')';
+      if (statusEl) statusEl.textContent = impSum.count + ' Modell-Datei(en) vom Gerät (' + impSum.mib + ' MiB) — „Generieren“ lädt sie direkt von dort.';
+    }
+  }
+}
+
+// ── v2.27.0: GEIST LENKEN — Stick führt die Referenz, Roboter lernt ──
+// Der cyanfarbene Geist hängt an LEBENDEN Roboter (folgt) und die Referenz-
+// Wurzel folgt dem Stick (ctrlMode joy): der Nutzer „fährt“ den Geist und
+// der Roboter lernt die gefahrene Route per Motion-Belohnung. Die Animation
+// bleibt wie immer REIN BELohnung (AMP/DeepMimic) — NIE Netzwerk-Eingabe.
+function wireArdyGhostDrive() {
+  const gdBtn = document.getElementById('ardyGhostDrive');
+  if (!gdBtn) return;
+  gdBtn.addEventListener('click', () => {
+    controls.buzz();
+    const t = S.task;
+    if (!t || t.kind !== 'motion' || !t.clip) {
+      ui.toast('Erst eine Bewegung aktivieren — ARDY generieren oder Clip wählen', true);
+      return;
+    }
+    S.refMode = 'folgt';
+    t.refMode = 'folgt';
+    try { localStorage.setItem('tr_refmode_v1', 'folgt'); } catch (e) { /* voll */ }
+    syncRefChips();
+    if (t.ctrlMode !== 'joy' && t.ctrlMode !== 'btn') {
+      t.ctrlMode = 'joy';
+      syncCtrlChips();
+    }
+    if (!S.training) startTraining();
+    log('GEIST LENKEN: der Geist hängt am Roboter (folgt) und der Stick führt die Referenz — der Roboter lernt die gefahrene Route per Motion-Belohnung. Animation ist NIE Eingabe, nur Reward.', 'ok');
+    ui.toast('Geist folgt dem Stick — Roboter lernt die Route');
+    ui.toggleArdy(false);
   });
 }
 

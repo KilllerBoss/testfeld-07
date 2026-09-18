@@ -325,12 +325,16 @@
 
     <div class="ardy-section">
       <div class="glb-head ardy-head">
-        <span class="sheet-title" style="font-size:11px">MODELL (HUGGING FACE, EINMALIG ~650 MB)</span>
+        <span class="sheet-title" style="font-size:11px">MODELL (IMPORT ÜBER DATEIMANAGER ODER HF-DOWNLOAD)</span>
         <span id="ardyDlPct" class="glb-ctrl-label">—</span>
       </div>
       <div class="glb-row ardy-opts">
         <button id="ardyDl" class="btn small btn-solid">⬇ Modell herunterladen</button>
+        <button id="ardyImport" class="btn small">📁 Vom Gerät wählen</button>
         <button id="ardyCacheClear" class="btn small">Cache löschen</button>
+      </div>
+      <div class="glb-row ardy-opts">
+        <button id="ardyGhostDrive" class="btn small btn-solid">🎮 Geist lenken (Stick → Roboter lernt)</button>
       </div>
       <div id="ardyBar" class="ardy-bar hidden"><div id="ardyBarFill"></div></div>
       <div class="glb-row ardy-live-row">
@@ -383,7 +387,7 @@
       </div>
     </div>
 
-    <div id="ardyStatus" class="train-note">Wie im Space intsuc/ardy-mini: Modell (ca. 650 MB, Hugging Face) einmalig per „⬇ Modell herunterladen“ laden (danach offline gecacht) — Text→Bewegung läuft komplett auf dem Gerät (WebGPU, sonst CPU). Ergebnis = normaler Lehrer-Clip (G1, nur Belohnung). LIVE-PROMPT: während der Generierung neuen Text eingeben — das nächste Fenster läuft schon auf dem neuen Prompt. STOP bricht ab.</div>
+    <div id="ardyStatus" class="train-note">MODELL LADEN — zwei Wege: ① „📁 Vom Gerät wählen“ öffnet den DATEIMANAGER: dort die ARDY-Dateien auswählen (model.json.gz, tokenizer/tokenizer.json.gz, text_encoder/denoiser/decoder .onnx.gz — Ordner fp16 bzw. fp32, Mehrfachauswahl möglich). Die App kopiert sie lokal und lädt sie ab sofort von dort — ganz ohne Download. ② „⬇ Modell herunterladen“ (Hugging Face, ~650 MB, einmalig). Danach läuft Text→Bewegung komplett auf dem Gerät. GEIST LENKEN: Geist hängt am Roboter, der Stick führt die Referenz — der Roboter lernt die gefahrene Route per Belohnung.</div>
   </section>
 
   <!-- KI-Trainer (Gemini) -->

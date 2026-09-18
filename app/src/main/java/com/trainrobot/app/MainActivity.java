@@ -4,10 +4,16 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
@@ -36,6 +42,9 @@ public class MainActivity extends Activity {
     // Dateimanager-Brücke: <input type="file"> (GLB-Import, Policy-Import)
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST = 7001;
+    // v2.27.0: ARDY-Modell-Import — eigener Dateimanager-Aufruf (Mehrfach-
+    // auswahl), Kopie in filesDir/ardy_import/, Auslieferung unter /ardymodel/
+    private static final int ARDY_PICK_REQUEST = 7002;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -63,6 +72,28 @@ public class MainActivity extends Activity {
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
                 .setDomain("appassets.androidplatform.net")
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                // v2.27.0: ARDY-Modell-Dateien (Dateimanager-Import) aus dem
+                // App-Ordner — GLEICHER sicherer Ursprung → kein CORS, kein
+                // Hugging-Face-Download mehr nötig.
+                .addPathHandler("/ardymodel/", new WebViewAssetLoader.PathHandler() {
+                    @Override
+                    public WebResourceResponse handle(String path) {
+                        String name = sanitizeImportName(path);
+                        File f = new File(ardyImportDir(), name);
+                        if (path == null || path.contains("..") || path.contains("/") || !f.isFile()) {
+                            return notFound();
+                        }
+                        try {
+                            InputStream is = new FileInputStream(f);
+                            java.util.Map<String, String> h = new java.util.HashMap<>();
+                            h.put("Content-Length", String.valueOf(f.length()));
+                            h.put("Cache-Control", "no-store");
+                            return new WebResourceResponse("application/octet-stream", null, 200, "OK", h, is);
+                        } catch (Exception e) {
+                            return notFound();
+                        }
+                    }
+                })
                 .build();
 
         WebSettings s = webView.getSettings();
@@ -127,8 +158,106 @@ public class MainActivity extends Activity {
         }
     }
 
+    private File ardyImportDir() {
+        File d = new File(getFilesDir(), "ardy_import");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    /** Dateiname härten: nur ein Pfadsegment, keine Punkt-Tricks. */
+    private static String sanitizeImportName(String n) {
+        if (n == null) return "";
+        String s = n.replace("\\", "_").replace("/", "_");
+        while (s.contains("..")) s = s.replace("..", "_");
+        if (s.startsWith(".")) s = "_" + s.substring(1);
+        return s;
+    }
+
+    private WebResourceResponse notFound() {
+        return new WebResourceResponse("text/plain", null, 404, "Not Found", null,
+                new java.io.ByteArrayInputStream(new byte[0]));
+    }
+
+    /** Anzeigename einer Content-URI (OpenableColumns, Fallback LastSegment). */
+    private String displayName(Uri uri) {
+        Cursor c = null;
+        try {
+            c = getContentResolver().query(uri, null, null, null, null);
+            if (c != null) {
+                int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (i >= 0 && c.moveToFirst()) {
+                    String n = c.getString(i);
+                    if (n != null && !n.isEmpty()) return n;
+                }
+            }
+        } catch (Exception e) { /* egal */ } finally {
+            if (c != null) c.close();
+        }
+        String p = uri.getLastPathSegment();
+        return (p == null || p.isEmpty()) ? "modell.bin" : p;
+    }
+
+    private void reportImport(final String name, final long got) {
+        final String js = "window.__ardyImportProgress && window.__ardyImportProgress(" +
+                org.json.JSONObject.quote(name) + "," + got + ");";
+        runOnUiThread(new Runnable() { @Override public void run() { webView.evaluateJavascript(js, null); } });
+    }
+
+    /** Kopiert die gewählten Dateien in filesDir/ardy_import/ (1-MiB-Blöcke,
+     *  Fortschritt per evaluateJavascript), meldet Fertigstellung an JS. */
+    private void copyArdyFiles(final Uri[] uris) {
+        new Thread(new Runnable() { @Override public void run() {
+            boolean ok = true; String err = ""; int copied = 0;
+            File dir = ardyImportDir();
+            for (final Uri u : uris) {
+                if (u == null) continue;
+                final String name = sanitizeImportName(displayName(u));
+                try {
+                    InputStream is = getContentResolver().openInputStream(u);
+                    if (is == null) { ok = false; err = "Datei nicht lesbar: " + name; continue; }
+                    File dst = new File(dir, name);
+                    FileOutputStream os = new FileOutputStream(dst);
+                    byte[] buf = new byte[1 << 20];
+                    long got = 0, lastReport = 0; int n;
+                    while ((n = is.read(buf)) > 0) {
+                        os.write(buf, 0, n); got += n;
+                        if (got - lastReport >= (8L << 20)) { lastReport = got; reportImport(name, got); }
+                    }
+                    os.flush(); os.close(); is.close();
+                    reportImport(name, got);
+                    copied++;
+                } catch (Exception e) {
+                    ok = false; err = (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                }
+            }
+            final boolean fok = ok && copied > 0;
+            final String fmsg = fok ? ("Import fertig (" + copied + " Datei" + (copied == 1 ? "" : "en") + ")") : err;
+            final String js = "window.__ardyImportDone && window.__ardyImportDone(" + fok + "," +
+                    org.json.JSONObject.quote(fmsg) + ");";
+            runOnUiThread(new Runnable() { @Override public void run() { webView.evaluateJavascript(js, null); } });
+        } }).start();
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // v2.27.0: ARDY-Modell-Import (Dateimanager, Mehrfachauswahl)
+        if (requestCode == ARDY_PICK_REQUEST) {
+            java.util.List<Uri> uris = new java.util.ArrayList<>();
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    android.content.ClipData cd = data.getClipData();
+                    for (int i = 0; i < cd.getItemCount(); i++) uris.add(cd.getItemAt(i).getUri());
+                } else if (data.getData() != null) {
+                    uris.add(data.getData());
+                }
+            }
+            if (!uris.isEmpty()) copyArdyFiles(uris.toArray(new Uri[0]));
+            else {
+                final String js = "window.__ardyImportDone && window.__ardyImportDone(false,\"Auswahl abgebrochen\");";
+                webView.evaluateJavascript(js, null);
+            }
+            return;
+        }
         if (requestCode == FILE_CHOOSER_REQUEST && filePathCallback != null) {
             Uri[] results = null;
             if (resultCode == RESULT_OK && data != null) {
@@ -152,6 +281,53 @@ public class MainActivity extends Activity {
     private class FileBridge {
         @JavascriptInterface
         public boolean available() { return true; }
+
+        @JavascriptInterface
+        public void ardyPickModel() {
+            // v2.27.0: Dateimanager öffnen — Nutzer wählt die ARDY-Modell-
+            // Dateien (model.json.gz, tokenizer.json.gz, *.onnx.gz / *.onnx).
+            // Bewusst */*: .gz/.onnx haben in vielen Managern kein MIME.
+            runOnUiThread(new Runnable() { @Override public void run() {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    startActivityForResult(intent, ARDY_PICK_REQUEST);
+                } catch (android.content.ActivityNotFoundException e) {
+                    final String js = "window.__ardyImportDone && window.__ardyImportDone(false,\"Kein Dateimanager gefunden\");";
+                    webView.evaluateJavascript(js, null);
+                }
+            } });
+        }
+
+        @JavascriptInterface
+        public String ardyImportList() {
+            // Liste der importierten Modell-Dateien als JSON [{name,size}]
+            try {
+                File dir = ardyImportDir();
+                File[] files = dir.listFiles();
+                org.json.JSONArray arr = new org.json.JSONArray();
+                if (files != null) {
+                    for (File f : files) {
+                        if (!f.isFile()) continue;
+                        org.json.JSONObject o = new org.json.JSONObject();
+                        o.put("name", f.getName());
+                        o.put("size", f.length());
+                        arr.put(o);
+                    }
+                }
+                return arr.toString();
+            } catch (Exception e) { return "[]"; }
+        }
+
+        @JavascriptInterface
+        public boolean ardyImportDelete(String name) {
+            try {
+                File f = new File(ardyImportDir(), sanitizeImportName(name));
+                return f.isFile() && f.delete();
+            } catch (Exception e) { return false; }
+        }
 
         @JavascriptInterface
         public boolean saveFile(String name, String base64, String mime) {
