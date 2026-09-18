@@ -63,5 +63,5 @@ Smartphone (CPU, ohne CUDA)**.
 ./gradlew assembleRelease   # → app/build/outputs/apk/release/app-release.apk
 ```
 
-APK-Name im Release: `Trainrobot.apk` (v2.1.0, versionCode 5,
+APK-Name im Release: `lertrain.apk` (v2.1.0, versionCode 5,
 `com.trainrobot.app`).

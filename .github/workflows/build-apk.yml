@@ -52,25 +52,25 @@ jobs:
           test -s trainrobot.keystore
           echo "trainrobot.keystore vorhanden (Signatur CN=Trainrobot, OU=Testfeld07)"
 
-      - name: Build (Trainrobot.apk)
+      - name: Build (lertrain.apk)
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
       - name: Umbenennen + Prüfsumme
         run: |
-          cp app/build/outputs/apk/release/app-release.apk Trainrobot.apk
-          sha256sum Trainrobot.apk
+          cp app/build/outputs/apk/release/app-release.apk lertrain.apk
+          sha256sum lertrain.apk
 
       - name: Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: Trainrobot.apk
-          path: Trainrobot.apk
+          name: lertrain.apk
+          path: lertrain.apk
 
       - name: Release bei Tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: Trainrobot.apk
+          files: lertrain.apk
           generate_release_notes: true
