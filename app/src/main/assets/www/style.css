@@ -864,3 +864,48 @@ body.pad-on .ai-buttons { display: none !important; }
 #expertRPanel .er-name { min-width: 64px; color: var(--amber); letter-spacing: 0.06em; }
 #expertRPanel input { width: 58px; background: rgba(13,18,26,0.6); border: 1px solid rgba(148,180,220,0.25); color: #e8eef5; border-radius: 4px; padding: 2px 4px; font-size: 10.5px; }
 #expertRPanel .er-hint { font-size: 9.5px; color: rgba(148,180,220,0.5); }
+
+
+/* ── ARDY Mini (Text → Motion auf dem Gerät) — v2.25.0 ── */
+.ardy-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.ardy-head { margin-bottom: 8px; }
+.ardy-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 8px;
+}
+.ardy-chip {
+  font: 11px/1 var(--mono); color: var(--text-dim);
+  background: rgba(89, 224, 168, 0.07);
+  border: 1px solid rgba(89, 224, 168, 0.25);
+  border-radius: 999px; padding: 7px 11px;
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.ardy-chip.active, .ardy-chip:active { color: #59e0a8; background: rgba(89, 224, 168, 0.18); }
+.ardy-prompt {
+  flex: 1; min-width: 0;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+  border-radius: 10px; color: var(--text);
+  font: 12px/1.4 var(--mono); padding: 9px 10px;
+}
+.ardy-opts { gap: 10px; flex-wrap: wrap; align-items: center; }
+.ardy-select, .ardy-seed {
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+  border-radius: 8px; color: var(--text);
+  font: 11px/1.3 var(--mono); padding: 5px 6px;
+  max-width: 92px;
+}
+.ardy-bar {
+  height: 7px; border-radius: 4px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  margin: 8px 0 4px;
+}
+#ardyBarFill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #59e0a8, #3fcf92);
+  transition: width .2s linear;
+}

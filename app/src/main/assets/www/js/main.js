@@ -29,10 +29,12 @@ import { loadButtons, addButton, removeButton, loadJoyMap, saveJoyMap, validateJ
 import { EXPERT_R } from './skill.js';   // v2.13.0: Experten-/Router-Belohnungen (KI-tunbar)
 import { Fpv } from './fpv.js';          // v2.13.0: FPV-Kamerabild (nur Anzeige, KEIN Policy-Eingang)
 import { loadAppearance, saveAppearance, clearAppearance, sanitizeAppearance, partCatalog } from './appearance.js'; // v2.14.0: Aussehen-Editor
+import { loadArdyRuntime, clearArdyCache, BASIS_ANIMS, deToEn, ardyCapabilities } from './ardy.js'; // v2.25.0: ARDY Mini AUF DEM GERÄT (Text→Motion ohne Cloud)
+import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Retarget-Clip
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.24.0';
+const VERSION = '2.25.0';
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -62,6 +64,8 @@ const S = {
   srcShow: false,
   clips: [],          // gespeicherte Clips (IndexedDB)
   ghostOn: true,
+  ardyBusy: false,    // v2.25.0: ARDY-Mini-Generierung läuft
+  ardyRuntime: null,  // v2.25.0: geladene ARDY-Laufzeit (lazy)
   sim: null,
   gait: null,        // Gang-/Flugregler-Instanz
   task: null,        // Trainingsaufgaben-Instanz
@@ -2864,6 +2868,7 @@ function wireUI() {
   document.getElementById('glbImportBtn').addEventListener('click', () => document.getElementById('glbFile').click());
   document.getElementById('glbFile').addEventListener('change', onGlbFiles);
   // v2.22.0: ARDY-Brücke — QPOS-CSV (NVIDIA ARDY, Text→Motion) als Lehrer
+  initArdy(); // v2.25.0: ARDY Mini auf dem Gerät (Text→Motion)
   document.getElementById('csvImportBtn').addEventListener('click', () => document.getElementById('csvFile').click());
   document.getElementById('csvFile').addEventListener('change', onCsvFiles);
   document.getElementById('bcBtn').addEventListener('click', () => runBC());
@@ -3129,6 +3134,173 @@ async function onGlbFiles(e) {
 // ═══ (36 Spalten: root+Quat+29 Gelenke — Gelenkliste identisch zur App)
 // ═══ wird direkt zum Lehrer-Clip: Geist, BC, PPO-Motion-Tracking,
 // ═══ MOTION-KI-Wiedergabe — genau wie GLB, nur ohne Retargeting.
+// ── v2.25.0 — ARDY Mini AUF DEM GERÄT (Text → Motion) ─────────
+// Nutzerwunsch: „Du solltest dieses model benutzen wie hier
+// https://huggingface.co/spaces/intsuc/ardy-mini" — das Modell
+// intsuc/Llama-3-ARDY-Mini-Core40-Browser läuft wie im Space mit
+// onnxruntime-web DIREKT im Gerät (WebGPU, Fallback WASM): erster
+// Einsatz lädt die Modell-Dateien von Hugging Face (einmalig,
+// Cache Storage), danach funktioniert Text→Bewegung OFFLINE.
+// Die cskel27-Weltposen (27 Gelenke, Mixamo-Namen) laufen über
+// ArdyClip → retargetToG1 → normaler Lehrer-Clip (Belohnung-only,
+// nie Policy-Input — wie alle Referenzen). Kein Colab, keine CSV.
+function initArdy() {
+  const chipsEl = document.getElementById('ardyChips');
+  const promptEl = document.getElementById('ardyPrompt');
+  const genBtn = document.getElementById('ardyGenerate');
+  const barEl = document.getElementById('ardyBar');
+  const fillEl = document.getElementById('ardyBarFill');
+  const statusEl = document.getElementById('ardyStatus');
+  const durEl = document.getElementById('ardyDur');
+  const seedEl = document.getElementById('ardySeed');
+  const cfgEl = document.getElementById('ardyCfg');
+  const epEl = document.getElementById('ardyEp');
+  if (!chipsEl || !genBtn) return;
+
+  const setBar = (pct) => {
+    if (pct === null) { barEl.classList.add('hidden'); fillEl.style.width = '0%'; return; }
+    barEl.classList.remove('hidden');
+    fillEl.style.width = Math.round(pct * 100) + '%';
+  };
+  const fmtMB = (n) => (n / 1048576).toFixed(0) + ' MB';
+
+  for (const a of BASIS_ANIMS) {
+    const chip = document.createElement('button');
+    chip.className = 'ardy-chip';
+    chip.textContent = a.label;
+    chip.title = a.prompt;
+    chip.addEventListener('click', () => {
+      controls.buzz();
+      promptEl.value = a.prompt;
+      runArdy(a.prompt, a.label);
+    });
+    chipsEl.appendChild(chip);
+  }
+
+  (async () => {
+    try {
+      const caps = await ardyCapabilities();
+      epEl.textContent = caps.webgpu ? (caps.shaderF16 ? 'WebGPU · fp16' : 'WebGPU · fp32') : 'CPU (WASM) — langsam';
+    } catch (e) { epEl.textContent = '—'; }
+  })();
+
+  async function ensureRuntime() {
+    if (S.ardyRuntime) return S.ardyRuntime;
+    statusEl.textContent = 'Lade ARDY … (Modell wird einmalig geladen und gecacht)';
+    const rt = await loadArdyRuntime({
+      onProgress: (p) => {
+        if (p.stage === 'ort') {
+          statusEl.textContent = 'Lade onnxruntime-web … ' + (p.total > 1 ? fmtMB(p.completed) + ' / ' + fmtMB(p.total) : '');
+          setBar(p.total > 1 ? p.completed / p.total : 0.02);
+        } else if (p.stage === 'denoiser' || p.stage === 'text_encoder' || p.stage === 'decoder') {
+          if (p.total > 1) {
+            statusEl.textContent = 'Lade ' + p.stage + ' … ' + fmtMB(p.completed) + ' / ' + fmtMB(p.total);
+            setBar(p.completed / p.total);
+          } else {
+            statusEl.textContent = p.stage + ': Session erstellen …';
+          }
+        } else if (p.stage === 'denoising') {
+          statusEl.textContent = 'Denoising ' + p.completed + '/' + p.total + ' (Fenster)';
+          setBar(p.completed / p.total);
+        } else if (p.stage === 'decoding') {
+          statusEl.textContent = 'Decodieren … Frame ' + (p.frame || 0);
+          setBar(0.97);
+        } else if (p.stage === 'encoding-text') {
+          statusEl.textContent = 'Text kodieren …';
+        }
+      },
+    });
+    S.ardyRuntime = rt;
+    statusEl.textContent = 'ARDY Mini bereit (' + rt.epName.toUpperCase() + ' · ' + rt.fps + ' FPS · ' + rt.jointNames.length + ' Gelenke)';
+    log('ARDY Mini geladen (' + rt.epName + ') — Modell intsuc/Llama-3-ARDY-Mini-Core40-Browser, läuft ab jetzt auf dem Gerät', 'ok');
+    return rt;
+  }
+
+  async function runArdy(promptRaw, label) {
+    if (S.ardyBusy) { ui.toast('Generierung läuft schon', true); return; }
+    const prompt = deToEn(promptRaw || promptEl.value || '').trim();
+    if (!prompt) { ui.toast('Prompt eingeben oder Chip wählen', true); return; }
+    promptEl.value = prompt;
+    if (!S.sim) { ui.toast('Roboter lädt noch — kurz warten', true); return; }
+    if (S.robotId !== 'g1') {
+      ui.toast('ARDY Mini erzeugt humanoides Motion — bitte zuerst den G1 wählen', true, 4000);
+      log('ARDY-Mini abgelehnt: cskel27 → G1-Retargeting, anderer Roboter aktiv', 'warn');
+      return;
+    }
+    S.ardyBusy = true;
+    genBtn.disabled = true;
+    const oldLabel = genBtn.textContent;
+    genBtn.textContent = '…';
+    try {
+      const rt = await ensureRuntime();
+      const seedRaw = seedEl.value.trim();
+      const seed = seedRaw ? (Number.isFinite(parseInt(seedRaw, 10)) ? parseInt(seedRaw, 10) : seedRaw) : undefined;
+      const cfg = parseFloat(cfgEl.value);
+      const seconds = parseFloat(durEl.value) || 5;
+      log('ARDY Mini: „' + prompt + '“ — ' + seconds + ' s' + (seed !== undefined ? ' · Seed ' + seed : '') + (Number.isFinite(cfg) ? ' · CFG ' + cfg : ''));
+      const out = await rt.generate({
+        prompt, seconds,
+        seed, cfgWeight: Number.isFinite(cfg) ? cfg : undefined,
+        onProgress: (p) => {
+          if (p.stage === 'denoising') {
+            statusEl.textContent = 'Denoising ' + p.completed + '/' + p.total;
+            setBar(p.completed / p.total);
+          } else if (p.stage === 'decoding') {
+            statusEl.textContent = 'Decodieren … Frame ' + (p.frame || 0);
+            setBar(0.97);
+          }
+        },
+      });
+      log('ARDY Mini: ' + out.frameCount + ' Frames @ ' + out.fps + ' FPS (' + out.duration.toFixed(1) + ' s) — Retargeting cskel27 → G1 …');
+      statusEl.textContent = 'Retargeting auf G1 …';
+      const clip = new ArdyClip(out);
+      const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+      const name = (label ? 'ARDY · ' + label : 'ARDY · ' + prompt.slice(0, 24)) + ' (KI)';
+      const packed = packMotion(motion);
+      const rec = {
+        id: 'ardy_' + Date.now() + '_' + Math.floor(Math.random() * 1e4),
+        name,
+        size: out.frameCount * 27 * 3 * 4,
+        glb: null,               // keine Mesh-Datei → nie Re-Retarget
+        animIndex: 0,
+        src: 'ardy',             // v2.25.0: auf dem Gerät generiert
+        prompt,
+        seed: out.seed,
+        motion: packed,
+        motionByRobot: { g1: packed }, // v2.15.0-Konvention
+      };
+      await putClip(rec);
+      await refreshClipList();
+      await activateClip(rec);
+      statusEl.textContent = 'Fertig: „' + name + '“ — ' + out.duration.toFixed(1) + ' s als Referenz aktiv.';
+      setBar(null);
+      ui.toast('KI-Bewegung bereit: ' + name);
+      log('ARDY-Mini-Bewegung „' + name + '“ gespeichert und aktiviert — ' + motion.n + ' Frames × ' + motion.nu + ' Gelenke', 'ok');
+    } catch (err) {
+      console.error(err);
+      const msg = err && err.message ? err.message : String(err);
+      statusEl.textContent = 'Fehler: ' + msg;
+      setBar(null);
+      log('ARDY-Mini-Fehler: ' + msg, 'err');
+      ui.toast('ARDY Mini fehlgeschlagen: ' + msg, true, 5000);
+    } finally {
+      S.ardyBusy = false;
+      genBtn.disabled = false;
+      genBtn.textContent = oldLabel;
+    }
+  }
+
+  genBtn.addEventListener('click', () => { controls.buzz(); runArdy(); });
+  promptEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); controls.buzz(); runArdy(); } });
+  document.getElementById('ardyCacheClear').addEventListener('click', async () => {
+    controls.buzz();
+    await clearArdyCache();
+    S.ardyRuntime = null;
+    statusEl.textContent = 'Cache gelöscht — Modell wird beim nächsten Einsatz neu geladen.';
+    ui.toast('ARDY-Cache gelöscht');
+  });
+}
+
 async function onCsvFiles(e) {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
@@ -3508,7 +3680,9 @@ async function activateClip(rec) {
   const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'
     : S.task.ctrlMode === 'btn' ? ' · Steuerung: BUTTONS (Training würfelt Fahrbefehle + Trigger, POLICY-Modus: Stick + Tasten unten)'
     : ' · Steuerung: keine (rein Referenzbahn)';
-  const srcInfo = rec.src === 'qpos' ? 'ARDY-Referenz aktiv' : 'GLB-Referenz aktiv';
+  const srcInfo = rec.src === 'qpos' ? 'ARDY-Referenz aktiv (Cloud-CSV)'
+    : rec.src === 'ardy' ? 'ARDY-Mini-Referenz aktiv (auf dem Gerät generiert)'
+    : 'GLB-Referenz aktiv';
   log(srcInfo + ': ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);
   refreshClipList().catch(() => {});
