@@ -829,3 +829,20 @@ Work Log:
 
 Stage Summary:
 - v2.28.1 / versionCode 42: ALTE ARDY-Clips werden beim Aktivieren automatisch auf den Boden repariert (persistiert), der Stick fährt ab Generierung sofort den ARDY-Geist (Standard, ohne Button-Suche), das grüne Skeleton reitet exakt AUF dem Geist (eine Figur wie im Demo-Avatar) und kollabierte Generierungen werden klar als solche gemeldet. Empfehlung an den Nutzer: App-Update installieren, bestehenden ARDY-Clip antippen (wird repariert) oder neu generieren.
+
+---
+Task ID: 53
+Agent: Super Z (Hauptagent)
+Task: Referenz-Video (YouTube „SIGGRAPH 2022: Adversarial Skill Embeddings", Jason Peng) vom Nutzer eingeordnet + v2.28.1-Endzustand end-to-end verifiziert
+
+Work Log:
+- Video-Metadaten via oEmbed geladen: „SIGGRAPH 2022: Adversarial Skill Embeddings" — Physik-Sim-Figuren stehen sauber AUF dem Boden und sind steuerbar → exakt die Referenz für den v2.28.0/28.1-Fixumfang (Boden-Garantie + Stick lenkt Geist); kein neues Feature erkennbar, das über die freigegebene Umsetzung hinausgeht
+- Lokaler Checkout war auf v2.6.1 stehengeblieben (Environment-Reset) → fetch upstream (Token inline, nicht persistiert) + reset --hard auf 2eb3e4d (v2.28.1, versionCode 42)
+- Release-Integrität: lertrain.apk (v2.28.1) anonym geladen (28.124.265 bytes) → aapt: com.lertrain.app versionCode 42 versionName 2.28.1; apksigner: CN=Trainrobot OU=Testfeld07, SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH
+- Toolchain-Reset behoben: build-tools 34 direkt von dl.google.com nach /home/z/tools/build-tools-34 (aapt/apksigner verfügbar); ardy-Test-Fixture scripts/ardy/model.json.gz erneut von HF geladen (Rev 1c21362)
+- Regressionen auf 2eb3e4d ALLE GRÜN: ghost_ground_v2281 30/30 · ghost_drive_v2280 17/17 · qpos_v2220 52/52 · ardy_runtime 18/18
+- Kein Code-/APK-Änderungsbedarf: der Nutzer-Report (Skeleton/Geist im Boden, auseinander, Stick ohne Geist-Wirkung) ist durch v2.28.0 + v2.28.1 abgedeckt und released
+
+Stage Summary:
+- v2.28.1 (versionCode 42) verifiziert LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.1/lertrain.apk — Signatur identisch (1c0422b9…), alle Fix-Regressionen grün
+- ASE-Video als Referenz erfüllt: Figur AUF dem Boden (Boden-Garantie + Auto-Reparatur alter Clips), grünes Skeleton reitet exakt auf dem Geist (eine Figur wie Demo-VRM), Stick fährt ab Generierung sofort die Referenz
