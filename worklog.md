@@ -846,3 +846,25 @@ Work Log:
 Stage Summary:
 - v2.28.1 (versionCode 42) verifiziert LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.1/lertrain.apk — Signatur identisch (1c0422b9…), alle Fix-Regressionen grün
 - ASE-Video als Referenz erfüllt: Figur AUF dem Boden (Boden-Garantie + Auto-Reparatur alter Clips), grünes Skeleton reitet exakt auf dem Geist (eine Figur wie Demo-VRM), Stick fährt ab Generierung sofort die Referenz
+
+---
+Task ID: 54
+Agent: Super Z (Hauptagent)
+Task: v2.28.2 — ARDY-Explosions-Fix („Wenn GLB an ist ist der Geist in Ordnung, bei ARDY-Animation kommen plötzlich Streifen darüber — sollte Skeleton sein, ist aber explodiert — und der Geist macht komische explodierte Bewegungen")
+
+Work Log:
+- DIAGNOSE MIT ECHTEN MODEllen (neu: scripts/ardy/ardy_explode_diag.mjs + ardy_batch_diag.mjs + ardy_fp16_decoder_diag.mjs, onnxruntime-node 1.30, FP32-Set vom HF-Repo): Full-Generation über den EXAKTEN App-Codepfad (ArdyRuntime.generate) → fp32 ist 10/10 SAUBER (0 NaN, Knochenfehler 0,00, Hüfte 0,68–1,30 m, 5 Prompts × 2 Seeds) — der App-Codepfad ist korrekt.
+- ROOT-CAUSE via LFS-Hash-Vergleich: fp16/denoiser.onnx.gz == fp32/denoiser.onnx.gz (Hash 466e0198…) und fp16/text_encoder == fp32/text_encoder (4d97f7b1…) — ABER fp16/decoder.onnx.gz (cc297136…) ist ein ECHTER fp16-Graph (≠ fp32/decoder 865db35a…). Auf Geräten mit WebGPU+shader-f16 lädt die App den fp16-Decoder; ORT-web 1.27 f16-Kernel erzeugen daraus explodierte posedJoints → grünes Skeleton = „Streifen", retargetToG1 bekommt Müll → Geist zappelt. GLB-Pfad unberührt → „GLB in Ordnung". (fp16-Decoder auf CPU = f32-Mathematik: byteidentisch sauber → Graph ok, Ausführung ist der Defekt.)
+- FIX 1 (Ursache): modelFilePrecision(graph, precision) — der Decoder wird IMMER aus fp32 geladen (+33 MB, Denoiser/TE unverändert); loadArdyRuntime nutzt ihn im Loop.
+- FIX 2 (Verteidigung): sanitizeArdyOutput(out) am Ende von generate() — NaN/Inf-Frames werden auf den letzten guten Frame gehalten (alle Arrays, Frame-0-Fallback = Nullen + Identitäts-Rotation), Knochenlängen werden je Frame auf die Median-Referenz reskaliert (Eltern zuerst, parents[j]<j; saubere Frames bleiben BITWEISE unangetastet); Metriken out.sanity = {nanFrames, fixedFrames, maxBoneErr, checkedFrames}.
+- FIX 3 (Frühwarnung): _denoiseWindow prüft die Generation-Region von predX0 auf Endlichkeit — nicht-endliche Werte → klare deutsche Meldung („Denoiser lieferte N ungültige Werte (GPU-Präzision) …") statt stiller NaN-Vergiftung.
+- FIX 4 (UX): runArdy meldet Sanitizer-Eingriffe klar (Log + Toast „Generierung instabil — automatisch repariert … anderen Prompt/Seed probieren"), Schwelle fixedFrames > 15 %.
+- TEST-BUG NEBENBEFUND: FakeTensor in ardy_runtime_test/ardy_sanitize_test hatte die falsche ORT-Signatur (data,dims statt type,data,dims) → feeds.x.data war der String „float32" und die Feeds stille NaNs (fiel erst durch die neue Endlichkeits-Wache auf) — beide Tests auf ORT-Signatur umgestellt; ardy_runtime 18/18 weiter grün.
+- TESTS: ardy_sanitize_test.mjs NEU 12/12 (modelFilePrecision-Vertrag, Clean-Idempotenz bitweise, 5×-Explosion repariert, Ketten-Reparatur, NaN-Halt inkl. Frame 0, footContacts, frameCount 0, generate()-Integration mit Explosion+NaN, Denoiser-NaN-Wache, keine False Positives) · Regressionen GRÜN: ardy_runtime 18/18 · ardy_math 17/17 · ghost_ground 30/30 · ghost_drive 17/17 · qpos 52/52 · motionset 49/49 · motion_ctrl grün · ui_v2270 + ui_v2260 grün (Pins auf 2.28.2/43 erweitert) · Real-Modell nach Sanitizer: 0 NaN, 0 Reparaturen, 0,000 % — keine False Positives.
+- BUILD+VERIFIKATION: APK 28.126.421 bytes — aapt com.lertrain.app versionCode 43 versionName 2.28.2 · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH (CN=Trainrobot) · Fixes nachweislich im APK (modelFilePrecision/sanitizeArdyOutput 5 Treffer, VERSION 2.28.2).
+- RELEASE: main f1fcdd7→3301c48 + Tag v2.28.2 → CI Runs 106 (main) + 107 (tag) BEIDE success, Release id 392560173 mit lertrain.apk 28.126.421 bytes (state uploaded); Asset-Download verifiziert (aapt 43/2.28.2, Signatur identisch).
+
+Stage Summary:
+- v2.28.2 / versionCode 43 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.2/lertrain.apk
+- Ursache war EINZIG die echte fp16-Decoder-Datei auf WebGPU-f16-Geräten; jetzt läuft der Decoder immer in fp32 (exakte Mathematik), und selbst falls je ein Fenster kippt, repariert der Sanitizer still und meldet klar.
+- Umgebung: Build-Tools/SDK/Gradle nach Environment-Reset neu installiert (/home/z/tools/build-tools-34, android-sdk, gradle-8.7); Playwright installiert für UI-Tests.
