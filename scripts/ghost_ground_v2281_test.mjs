@@ -183,7 +183,7 @@ console.log('\n[5] Verdrahtungs-Pins (main.js / render3d.js)');
   ok(mainJs.includes('r3d.placeSourceGhostAt(fr, rr[0], rr[1])'), 'Render-Loop: Overlay-Platzierung am Geist-Anker');
   ok(mainJs.includes('r3d.updateSourceGhost(fr); // v2.28.1'), 'Render-Loop: updateSourceGhost NACH Anker-Wahl');
   ok(mainJs.includes('Bewegung kollabiert'), 'Kollaps-Warnung bei kollabierter Generierung');
-  ok(mainJs.includes("const VERSION = '2.28.1';"), 'VERSION 2.28.1');
+  ok(mainJs.includes("const VERSION = '2.28.2';"), 'VERSION 2.28.2');
   ok(mainJs.includes('groundSrcPosTrack } from'), 'Import der Reparatur-Helfer');
   ok(retJs.includes('export function groundSrcPosFrame') && retJs.includes('export function groundSrcPosTrack'), 'retarget.js: Reparatur-Helfer exportiert');
   ok(r3dJs.includes('placeSourceGhostAt(frame, x, y)') && r3dJs.includes('_srcRelative'), 'render3d: Overlay-API');

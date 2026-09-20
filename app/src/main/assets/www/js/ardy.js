@@ -528,6 +528,115 @@ export async function ardyCapabilities() {
 // ═══════════════════════════════════════════════════════════
 // ArdyRuntime — Sessions + Generierung
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// v2.28.2: SANITIZER — explodierte/NaN-Frames abfangen.
+// Der Nutzer-Report „grünes Skeleton wird zu Streifen, Geist macht
+// explodierte Bewegungen“ entsteht, wenn Decoder-Ausgaben nicht-
+// endlich (WebGPU-f16) oder mit auseinandergerissenen Knochen-
+// längen ankommen (echtes Modell-Collapse). Der Sanitizer hält
+// NaN-Frames auf dem letzten guten Frame, skaliert Knochen auf
+// ihre Referenzlänge (Stil bleibt, Explosion weg) und liefert
+// Metriken für klare Nutzer-Meldungen.
+// ═══════════════════════════════════════════════════════════
+/**
+ * Decoder-Ausgabe säubern (in-place) + Metriken.
+ * @param out Ergebnis von ArdyRuntime.generate()
+ * @returns out (mit out.sanity = { nanFrames, fixedFrames, maxBoneErr, checkedFrames })
+ */
+export function sanitizeArdyOutput(out) {
+  const J = out.jointNames.length;
+  const n = Math.max(0, Math.min(out.frameCount | 0, (out.joints.length / (J * 3)) | 0));
+  const parents = out.parents || [];
+  const arrays = [
+    { data: out.joints, stride: J * 3 },
+    { data: out.globalRotations, stride: J * 9 },
+    { data: out.localRotations, stride: J * 9 },
+    { data: out.rootPositions, stride: 3 },
+    out.footContacts ? { data: out.footContacts, stride: 4 } : null,
+  ].filter(Boolean);
+  // ── 1) NaN/Inf-Frames: kompletten Frame vom letzten guten kopieren ──
+  let nanFrames = 0, lastGood = -1;
+  for (let f = 0; f < n; f++) {
+    let bad = false;
+    for (const a of arrays) {
+      const o = f * a.stride;
+      for (let i = 0; i < a.stride; i++) {
+        if (!Number.isFinite(a.data[o + i])) { bad = true; break; }
+      }
+      if (bad) break;
+    }
+    if (bad) {
+      nanFrames++;
+      if (lastGood >= 0) {
+        for (const a of arrays) {
+          a.data.copyWithin(f * a.stride, lastGood * a.stride, lastGood * a.stride + a.stride);
+        }
+      } else {
+        // Kein guter Frame davor: Frame mit Nullen/Identität füllen
+        for (const a of arrays) a.data.fill(0, f * a.stride, f * a.stride + a.stride);
+        for (let j = 0; j < J; j++) {
+          const o = f * J * 9 + j * 9;
+          out.globalRotations[o] = out.globalRotations[o + 4] = out.globalRotations[o + 8] = 1;
+          out.localRotations[o] = out.localRotations[o + 4] = out.localRotations[o + 8] = 1;
+        }
+      }
+    } else {
+      lastGood = f;
+    }
+  }
+  // ── 2) Knochenlängen reparieren (Eltern zuerst — parents[j] < j) ──
+  const bones = [];
+  for (let j = 1; j < J; j++) if (parents[j] >= 0 && parents[j] < j) bones.push({ c: j, p: parents[j] });
+  const refLen = new Float64Array(bones.length);
+  if (bones.length && n > 0) {
+    const lens = bones.map(() => []);
+    for (let f = 0; f < n; f++) {
+      const b = f * J * 3;
+      for (let k = 0; k < bones.length; k++) {
+        const { c, p } = bones[k];
+        lens[k].push(Math.hypot(
+          out.joints[b + c * 3] - out.joints[b + p * 3],
+          out.joints[b + c * 3 + 1] - out.joints[b + p * 3 + 1],
+          out.joints[b + c * 3 + 2] - out.joints[b + p * 3 + 2]));
+      }
+    }
+    for (let k = 0; k < bones.length; k++) {
+      lens[k].sort((x, y) => x - y);
+      refLen[k] = lens[k][lens[k].length >> 1] || 0;
+    }
+  }
+  let fixedFrames = 0, maxBoneErr = 0;
+  for (let f = 0; f < n; f++) {
+    const b = f * J * 3;
+    let fErr = 0;
+    for (let k = 0; k < bones.length; k++) {
+      const { c, p } = bones[k];
+      const ref = refLen[k];
+      if (ref <= 1e-4) continue;
+      const dx = out.joints[b + c * 3] - out.joints[b + p * 3];
+      const dy = out.joints[b + c * 3 + 1] - out.joints[b + p * 3 + 1];
+      const dz = out.joints[b + c * 3 + 2] - out.joints[b + p * 3 + 2];
+      const L = Math.hypot(dx, dy, dz);
+      if (L > 1e-6) {
+        const e = Math.abs(L - ref) / ref;
+        if (e > fErr) fErr = e;
+        // Nur bei WIRKLICHER Abweichung schreiben — saubere Frames bleiben
+        // bitweise unangetastet (Seed-Determinismus/Diagnosen erhalten).
+        if (Math.abs(L - ref) > 1e-6 * ref) {
+          const s = ref / L;
+          out.joints[b + c * 3] = out.joints[b + p * 3] + dx * s;
+          out.joints[b + c * 3 + 1] = out.joints[b + p * 3 + 1] + dy * s;
+          out.joints[b + c * 3 + 2] = out.joints[b + p * 3 + 2] + dz * s;
+        }
+      }
+    }
+    if (fErr > 0.3) fixedFrames++;
+    if (fErr > maxBoneErr) maxBoneErr = fErr;
+  }
+  out.sanity = { nanFrames, fixedFrames, maxBoneErr, checkedFrames: n };
+  return out;
+}
+
 export class ArdyRuntime {
   constructor(manifest, tokenizer, sessions, epName) {
     this.manifest = manifest;
@@ -594,6 +703,13 @@ export class ArdyRuntime {
       if (!pred || !(pred.data instanceof Float32Array)) throw new Error('Denoiser lieferte predX0 nicht');
       const p = win.generationTokenOffset * dims.hybrid_dim;
       const m = (win.generationTokenOffset + win.generationTokens) * dims.hybrid_dim;
+      // v2.28.2: nicht-endliche Werte (GPU-Präzision) SOFORT melden —
+      // NaN würde x vergiften und die restliche Generierung zu Müll
+      // machen. Der Denoiser liegt byteidentisch in fp32 vor, daher
+      // tritt das real nur bei echten Hardware-Ausreißern auf.
+      let bad = 0;
+      for (let i = p; i < m; i++) if (!Number.isFinite(pred.data[i])) bad++;
+      if (bad > 0) throw new Error('Denoiser lieferte ' + bad + ' ungültige Werte (GPU-Präzision) — Generierung bitte erneut starten (anderer Seed hilft oft)');
       ddimUpdate(win.x, pred.data, step, p, m);
       onProgress && onProgress({ stage: 'denoising', completed: stepBase + r + 1, total: stepTotal });
     }
@@ -716,6 +832,9 @@ export class ArdyRuntime {
     }
     out.frameCount = written;
     out.duration = written / dims.fps;
+    // v2.28.2: Decoder-Ausgabe säubern (NaN halten + Knochenlängen
+    // reparieren) — verhindert „Streifen“-Skeleton und zappelnden Geist.
+    sanitizeArdyOutput(out);
     out.promptsLive = curPrompt !== prompt ? curPrompt : undefined; // v2.26.0: tatsächlich verwendeter Live-Prompt
     return out;
   }
@@ -742,6 +861,16 @@ let _runtimePromise = null;
 // schreibt unter diesen Keys, ArdyRuntime liest sie (_encodeText/
 // _denoiseWindow/_decode). Graf-Dateinamen bleiben mit Unterstrich.
 export const SESSION_KEYS = ['textEncoder', 'denoiser', 'decoder'];
+
+// v2.28.2: Aus welchem Präzisions-Ordner lädt welcher Graph? Der
+// Decoder ist der einzige ECHTE fp16-Graph im Modell-Repo — WebGPU-
+// f16-Kernel (ORT-web 1.27) erzeugen aus ihm auf vielen Geräten
+// explodierte posedJoints („Streifen“-Skeleton, zappelnder Geist).
+// Denoiser/Text-Encoder sind in beiden Ordnern byteidentisch fp32
+// (LFS-Hash-geprüft) → der Decoder wird IMMER aus fp32 geladen.
+export function modelFilePrecision(graph, precision) {
+  return graph === 'decoder' ? 'fp32' : precision;
+}
 export function sessionKey(graph) {
   return graph === 'text_encoder' ? 'textEncoder' : graph;
 }
@@ -787,7 +916,10 @@ export async function loadArdyRuntime(opts = {}) {
     };
     const sessions = {};
     for (const graph of ['text_encoder', 'denoiser', 'decoder']) {
-      const bytes = await fetchModelFile(precision + '/' + graph + '.onnx.gz', { onProgress, signal: opts.signal });
+      // v2.28.2 FIX: Decoder IMMER aus fp32 (WebGPU-f16 explodiert) —
+      // siehe modelFilePrecision() unten.
+      const filePrecision = modelFilePrecision(graph, precision);
+      const bytes = await fetchModelFile(filePrecision + '/' + graph + '.onnx.gz', { onProgress, signal: opts.signal });
       onProgress && onProgress({ stage: graph, completed: 1, total: 1, message: 'Session erstellen …' });
       sessions[sessionKey(graph)] = await ort.InferenceSession.create(bytes, sessionOpts);
     }

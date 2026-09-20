@@ -25,8 +25,12 @@ const manifest = JSON.parse(gunzipSync(readFileSync('/home/z/my-project/scripts/
 const dims = manifest.dimensions;
 const d = manifest.diffusion;
 
+// v2.28.2: ORT-Signatur new Tensor(type, data, dims) — die alte
+// (data, dims)-Reihenfolge machte feeds.x.data zum String 'float32'
+// und die Feeds zu stillen NaNs (fiel erst durch die neue
+// Denoiser-Endlichkeits-Wache auf).
 class FakeTensor {
-  constructor(data, dimsArr) { this.data = data; this.dims = dimsArr; }
+  constructor(type, data, dimsArr) { this.type = type; this.data = data; this.dims = dimsArr; }
 }
 
 // ── 1) DDIM mit echten Manifest-Daten ──────────────────────
@@ -199,7 +203,7 @@ const sessions = {
   textEncoder: {
     async run(feeds) {
       const tc = new Float32Array(dims.text_condition_dim).fill(0.05);
-      return { text_conditions: new FakeTensor(tc, [1, 1, dims.text_condition_dim]) };
+      return { text_conditions: new FakeTensor('float32', tc, [1, 1, dims.text_condition_dim]) };
     },
   },
   denoiser: {
@@ -210,7 +214,7 @@ const sessions = {
       const pred = new Float32Array(xin.length);
       // predX0 = gedämpftes x (konvergiert gegen 0.1-Muster)
       for (let i = 0; i < xin.length; i++) pred[i] = Math.fround(xin[i] * 0.85 + 0.1);
-      return { pred_x0: new FakeTensor(pred, [1, dims.max_tokens, dims.hybrid_dim]) };
+      return { pred_x0: new FakeTensor('float32', pred, [1, dims.max_tokens, dims.hybrid_dim]) };
     },
   },
   decoder: {
@@ -242,13 +246,13 @@ const sessions = {
         heading[f * 2] = 1; heading[f * 2 + 1] = 0;
       }
       return {
-        normalized_motion: new FakeTensor(motion, [1, L, dims.motion_dim]),
-        posed_joints: new FakeTensor(joints, [1, L, J, 3]),
-        local_rotations: new FakeTensor(rots, [1, L, J, 3, 3]),
-        global_rotations: new FakeTensor(rots, [1, L, J, 3, 3]),
-        root_positions: new FakeTensor(roots, [1, L, 3]),
-        foot_contacts: new FakeTensor(new Uint8Array(L * 4), [1, L, 4]),
-        global_root_heading: new FakeTensor(heading, [1, L, 2]),
+        normalized_motion: new FakeTensor('float32', motion, [1, L, dims.motion_dim]),
+        posed_joints: new FakeTensor('float32', joints, [1, L, J, 3]),
+        local_rotations: new FakeTensor('float32', rots, [1, L, J, 3, 3]),
+        global_rotations: new FakeTensor('float32', rots, [1, L, J, 3, 3]),
+        root_positions: new FakeTensor('float32', roots, [1, L, 3]),
+        foot_contacts: new FakeTensor('uint8', new Uint8Array(L * 4), [1, L, 4]),
+        global_root_heading: new FakeTensor('float32', heading, [1, L, 2]),
       };
     },
   },

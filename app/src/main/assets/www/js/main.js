@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.1'; // v2.28.1: BODEN-REPARATUR (alte ARDY/GLB-Clips werden beim Aktivieren geerdet) + ARDY-OVERLAY (grünes Skeleton reitet exakt auf dem Geist — nichts ist mehr auseinander) + Geist-lenk-Standard für ARDY (Stick fährt sofort die Referenz) + Kollaps-Warnung bei kollabierter Generierung. v2.28.0: GEIST LENKEN (Stick führt die Referenz in JEDEM Modus) + BODEN-GARANTIE (groundGhost + Skeleton-Erdung). v2.27.1: Session-Key-Fix (textEncoder). v2.27.0: Geist-Fix + Modell-Import + Geist lenken.
+const VERSION = '2.28.2'; // v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -3379,6 +3379,13 @@ function initArdy() {
         },
       });
       log('ARDY Mini: ' + out.frameCount + ' Frames @ ' + out.fps + ' FPS (' + out.duration.toFixed(1) + ' s)' + (out.promptsLive ? ' · Live umgelenkt auf „' + out.promptsLive + '“' : '') + ' — Retargeting cskel27 → G1 …');
+      // v2.28.2 SANITY-MELDUNG: der Sanitizer hat NaN-Frames gehalten /
+      // Knochenlängen repariert — dem Nutzer KLAR sagen (trennt App-Fix
+      // von Modell-Ausreißer) statt still weiterzuarbeiten.
+      if (out.sanity && out.frameCount > 0 && (out.sanity.nanFrames > 0 || out.sanity.fixedFrames > out.frameCount * 0.15)) {
+        log('ARDY-Warnung: instabile Decoder-Ausgabe automatisch repariert (NaN-Frames ' + out.sanity.nanFrames + ', reparierte Frames ' + out.sanity.fixedFrames + '/' + out.frameCount + ', max. Knochenfehler ' + Math.round(out.sanity.maxBoneErr * 100) + ' %) — bitte anderen Prompt oder Seed probieren', 'warn');
+        ui.toast('Generierung instabil — automatisch repariert', true, 4500);
+      }
       statusEl.textContent = 'Retargeting auf G1 …';
       const clip = new ArdyClip(out);
       const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
