@@ -868,3 +868,23 @@ Stage Summary:
 - v2.28.2 / versionCode 43 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.2/lertrain.apk
 - Ursache war EINZIG die echte fp16-Decoder-Datei auf WebGPU-f16-Geräten; jetzt läuft der Decoder immer in fp32 (exakte Mathematik), und selbst falls je ein Fenster kippt, repariert der Sanitizer still und meldet klar.
 - Umgebung: Build-Tools/SDK/Gradle nach Environment-Reset neu installiert (/home/z/tools/build-tools-34, android-sdk, gradle-8.7); Playwright installiert für UI-Tests.
+
+---
+Task ID: 55
+Agent: Super Z (Hauptagent)
+Task: v2.28.3 — Nutzer-Screenshot (2026-09-21 05:41): Geist als kollabierter Haufen am Boden bei aktiver ARDY-Animation — Restrisiko hinter dem v2.28.2-fp16-Fix schließen (Pose-Kollaps wurde nur WARNGT, nicht behoben)
+
+Work Log:
+- SITUATION: Session begann mit Nutzer-Screenshot (ohne Text): G1 steht sauber (0,78 m), der ARDY-Geist liegt als teal-Farbener Haufen am Boden — Statusleiste „GLB" (stMode zeigt generisch 'GLB' für JEDEN Clip, auch ARDY — main.js activateClip). Release v2.28.2 war zu dem Zeitpunkt bereits live (Tasks 54, 20:15 UTC), Asset-Download-Count = 2 (nur Verifikation) → Nutzer hatte den Fix höchstwahrscheinlich NOCH NICHT installiert; Screenshot = Beleg des gemeldeten Bugs.
+- LÜCKEN-ANALYSE (Code-Lektüre): v2.28.2 fixt die fp16-NaN-Explosion („Streifen"), ABER die v2.28.1-Kollaps-Warnung (hMax < 0.55 || hMin < 0.32 auf motion.h) speicherte/aktivierte kollabierte Generierungen TROTZDEM — der Geist bleibt ein Haufen, nur mit Toast. Genau dieses Restsymptom (Haufen OHNE Streifen im Screenshot) ist Pose-Kollaps, nicht NaN.
+- FIX 1 (retarget.js): ardyMotionQuality(motion, sanity, frameCount) — reine Versuchs-Bewertung: collapsed (Schwellen UNVERÄNDERT von v2.28.1), sanityBad (Sanitizer-Eingriff: nanFrames > 0 oder fixedFrames > 15 %), bad, score = (bad ? 0 : 1e9) + hMax·1e3 + hMin; leerer/NaN-h-Track = Kollaps (kein Infinity-Leck).
+- FIX 2 (main.js runArdy): AUTO-RETRY-Loop — bis 3 Versuche; Versuch 1 mit Nutzer-Seed, Retry mit seed0 + attempt·101 (String-Seeds → zufällig); pro Versuch generate → ArdyClip → retargetToG1 → ardyMotionQuality; Loop bricht beim ersten sauberen Versuch ab, sonst gewinnt der beste Score; klare Logs („Versuch n/3 mit neuem Seed …", „Versuch n verworfen (kollabiert, Hüftenhöhe a–b m)"), Statuszeile „Neuer Versuch n/3 …"; Warnungen (Sanity/Kollaps) nur noch am GEWÄHLTEN Ergebnis, Kollaps-Warnung nennt Versuchsanzahl; rec-Struktur/Seed-Persistenz unverändert.
+- TESTS: ardy_retry_test.mjs NEU 35/35 (sauber/kollabiert/Teilkollaps via hMin+hMax/leer/NaN/sanity-Grenzen 15 % + frameCount 0, Score-Ordnung, Retry-Loop-Semantik mit Seed 209-Eskalation, Best-of-3 bei Total-Kollaps, 14 Verdrahtungs-Pins) — erste Runde: 3 Fehlschläge waren float32-Toleranzen im TEST (Float32Array speichert 0,78 als 0,77999…), Assertions auf 1e-5/1e-6-Toleranz umgestellt, App-Code unverändert. Pin-Updates: ui_v2260/ui_v2270 (VERSION + versionCode-OR-Ketten → 2.28.3/44), qpos/motionset (OR-Ketten +1), ghost_ground (Import-Pin auf 'groundSrcPosTrack, ardyMotionQuality } from'). scripts/ardy/model.json (HF-Manifest, 27 Joints) EINGECHECKT — Tests laufen jetzt auch nach Environment-Reset ohne Download.
+- REGRESSIONEN ALLE GRÜN: ardy_retry 35/35 · ardy_math 17/17 · ardy_sanitize 12/12 · ardy_runtime 18/18 · ghost_ground 30/30 · ghost_drive 17/17 · qpos 52/52 · motionset 49/49 · motion_ctrl GRÜN · ui_v2260 + ui_v2270 GRÜN · ardy_live GRÜN = 230 Node-Assertions + UI/Live-Suiten.
+- BUILD: Environment-Reset hatte Toolchain komplett weggeräumt → Gradle 8.7 + cmdline-tools 11076708 + platforms;android-34 + build-tools;34.0.0 NEU installiert (/home/z/tools). Erster Build --no-daemon vom Timeout gekillt; Daemon-Build vollendete nach Timeout (APK 04:02); inkrementelle Bestätigung hängt an Daemon-Lock → APK direkt verifiziert: aapt versionCode 44 / versionName 2.28.3 · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH (CN=Trainrobot OU=Testfeld07) · APK-Inhalt: ARDY_MAX_ATTEMPTS/VERSION 2.28.3/ardyMotionQuality/„Neuer Versuch" nachweislich in assets/www/js.
+- RELEASE: main e07f108→38a0615 + Tag v2.28.3 gepusht (Token nur inline) → CI baut + released automatisch.
+
+Stage Summary:
+- v2.28.3 / versionCode 44: ARDY AUTO-RETRY — kollabierte/instabile Generierungen werden jetzt automatisch 2× mit neuem Seed nachgeneriert; nur noch das beste Ergebnis landet im Geist.
+- Zusammen mit v2.28.2 (fp16-Decoder-Explosion) sind damit BEIDE ARDY-Fehlbilder abgedeckt: NaN-„Streifen" (fp32-Decoder + Sanitizer) und Pose-Kollaps (Auto-Retry + Best-Wahl).
+- Hinweis an den Nutzer: v2.28.2 installieren war wahrscheinlich nie erfolgt (2 Downloads = nur Verifikation) — jetzt direkt v2.28.3 laden.
