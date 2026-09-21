@@ -1118,3 +1118,21 @@ Stage Summary:
 - Seiten-Reparatur: Der v2.28.4er Spiegel-Defekt (Kreuzprodukt-Fehler) ist behoben — neue Generierungen sind seitenrichtig, bestehende Clips migrieren sich beim ersten Aktivieren selbst (FK-bewiesener Y-Spiegel mirrorMotionY, mv-Marker).
 - Twist-Leine: Schulter-Yaw driftet nicht mehr (Range 0,37 → 0,05 rad) — „Arme bewegen sich hin und her" behoben.
 - Geist bleibt ROHE ARDY-Ausgabe (kinematisches Retargeting-Replay aus clip.q, keine Policy).
+
+---
+Task ID: 62
+Agent: Super Z (Hauptagent)
+Task: v2.28.10 — Nutzer: „Skellet und der Geist unterschieden sich. Kann man Output von ardy nicht direkt an g1 Geist binden ohne Skelett?“
+
+Work Log:
+- DIAGNOSE an der echten Kette (render3d.js/main.js/engine.js/motiontask.js): der cyan-Geist hing BEREITS direkt an der rohen ARDY-Ausgabe — setGhostPose(gh, clip.q, fr*nu, clip.h[fr], Anker, baseQ) = Retargeting-Replay; engine.setGhostPose liest KEINE Sim-/Policy-Zustände (reine Funktion qArr+Anker, nur mj_forward); die Physik trackt dasselbe clip.q (motiontask: target = c.q[...]) — der Geist IST exakt die Trainings-Referenz. Die Differenz kam vom zweiten Objekt: das grüne Lehrer-Skelett (srcPos) war eine EIGENE Figur mit eigener Datenquelle, eigener Boden-Korrektur (groundSrcPosTrack beim Aktivieren statt groundGhost je Frame) und Retarget-Restdifferenz.
+- MESSUNG (idle Seed 7, echte Pipeline): Form-Differenz Skelett↔Geist (Vektoren relativ Hüfte/Becken) 7–12,5 cm (Hüfte 8,7 · Knöchel bis 10,9 · Handgelenk bis 12,5 cm) — genau die vom Nutzer gesehene Abweichung, kein Verdrahtungsfehler.
+- FIX (Nutzer-Wunsch „ohne Skelett“): ARDY-Clips zeigen NUR noch den Geist. (1) Render-Loop: srcOverlay-Zweig versteckt das Skelett (visible=false), placeSourceGhostAt wird nicht mehr gerufen (API in render3d.js bleibt für GLB/Bestand). (2) applyGhosts: Lehrer wird für srcOverlay-Clips NICHT mehr gebaut (srcShow bleibt GLB-Feature). (3) srcShow-Toggle + Aktivierungs-Log nennen die Ausnahme („Kein Lehrer-Skelett bei ARDY — der Geist zeigt die rohe ARDY-Ausgabe“). GLB-Lehrer (Original-Mesh) UNVERÄNDERT.
+- BEWEISE (scripts/ardy/ardy_ghost_proof.mjs, fp32-Modell, CPU, echte G1-Sim, idle Seed 7): DIREKTBINDUNG — Geist-Gelenke bit-identisch zu clip.q über alle Frames (1k Werte, Object.is), Basishöhe == clip.h (Δ 0.0e+0). UNABHÄNGIGKEIT — unter zwei REAL verschiedenen Sim-Zuständen (300 vs 700 Zufalls-Steuerungs-Schritte, Roboter-Δ 0,722 m) ist der Geist bit-identisch (Δ 0.0e+0) = Geist hängt NICHT an Policy/Physik (Nutzerhypothese „Policy an Geist“ empirisch widerlegt). Beweisbild download/ardy_ghost_only.png.
+- SUITE NEU: ardy_ghost_only_test (28 Checks: Anzeige aus, Direktbindung, keine Policy-Lese in setGhostPose, Logik-Spiegel der applyGhosts-Bedingung, git-Verhaltensvergleich vs v2.28.9 — vorher sichtbar/jetzt aus). Fix im Test: „visible = false“ existierte in v2.28.9 schon im stelle-Zweig — Verhaltensbeweis über placeSourceGhostAt+visible=true geführt.
+- REGRESSIONEN GRÜN (18 Suiten): ardy_ghost_only 28 · ardy_side 10 · ardy_mirror 15 · ardy_retry 35 · ardy_probe 22 · ardy_math 17 · ardy_sanitize 12 · ardy_runtime 18 · physics_filter 42 · qpos 52 (versionCode-Regex → 51 erweitert) · motionset 49 · ghost_ground 30 (Pin auf neues Verhalten umgestellt: Skelett AUS statt Overlay-Platzierung) · src_skeleton 90 · ui_v2260 · ui_v2270 · ardy_live · ghost_drive 17 · motion_ctrl · canvas_v2200 84 (Regex → 51). Versions-Pins via pins_22810.py.
+- BUILD: app-release.apk 28.146.173 bytes · aapt versionCode 51 / versionName 2.28.10 · apksigner SHA-256 1c0422b9… IDENTISCH (CN=Trainrobot) · APK-Marker (VERSION 2.28.10, visible=false ×2, placeSourceGhostAt-Aufrufe 0, GEIST-Marker ×3) ✓.
+
+Stage Summary:
+- v2.28.10 / versionCode 51: Der Geist ist die EINZIGE Referenzfigur für ARDY und hängt nachweislich direkt an der rohen ARDY-Ausgabe (bit-exaktes clip.q-Replay, keine Policy/Physik) — das grüne Lehrer-Skelett ist im ARDY-Modus ENTFERNT („ohne Skelett“). Die beobachtete Skelett↔Geist-Differenz (7–12,5 cm Retarget-Restdifferenz) ist damit aus der Anzeige weg; GLB-Clips behalten ihren Original-Mesh-Lehrer.
+- Nutzer-Hinweis: Nach dem Update zeigt ein ARDY-Clip nur noch Geist (cyan) + Roboter. Der Geist zeigt ab Frame 1 exakt die ARDY-Bewegung — Abweichungen zwischen Geist und Roboter sind reine Physik-Nachführdifferenz (IK/Regelung), nicht mehr Figuren-Vergleich.
