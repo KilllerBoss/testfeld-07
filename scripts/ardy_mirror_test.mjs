@@ -191,9 +191,9 @@ console.log('\n[3] Verdrahtungs-Pins');
     assert.ok(iMirror > 0 && iSan > iMirror);
   });
   await ok('mirrorArdyOutputX exportiert', () => assert.ok(ardyJs.includes('export function mirrorArdyOutputX')));
-  await ok('VERSION 2.28.4 + versionCode 45/2.28.4', () => {
-    assert.ok(mainJs.includes("const VERSION = '2.28.4';"));
-    assert.ok(gradle.includes('versionCode 45') && gradle.includes('versionName "2.28.4"'));
+  await ok('VERSION 2.28.5 + versionCode 46/2.28.5', () => {
+    assert.ok(mainJs.includes("const VERSION = '2.28.5';"));
+    assert.ok(gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"'));
   });
 }
 

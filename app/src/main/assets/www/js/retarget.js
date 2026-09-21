@@ -1431,3 +1431,146 @@ export function ardyMotionQuality(motion, sanity, frameCount) {
   const score = (bad ? 0 : 1e9) + hMax * 1e3 + hMin;
   return { hMin, hMax, collapsed, sanityBad, bad, score };
 }
+
+// ═══ v2.28.5 — PHYSIK-GLÄTTUNG DER ARDY-REFERENZ ═══
+// Messbefund (scripts/ardy/ardy_robot_diag.mjs, echtes fp32-Modell → echte
+// G1-Sim): ARDY-Timelines enthalten Gelenkwinkel-Raten bis 63 rad/s
+// (GLB-Referenz: 5 rad/s) und Blick-Ruckler von ±178° (Hüft-Sway-Nulldurch-
+// gang im Yaw-Messvektor). Eine Positionregelung kann das physikalisch NICHT
+// nachfahren — die Policy kämpft gegen unerreichbare Ziele = „steht sich,
+// schlägt um sich, springt, fällt". Der Filter macht die Referenz FAHRBAR,
+// ohne die Bewegung sichtbar zu verändern:
+//   1) q: Rate-Klemme (2 Pässe vor+rück, richtungssymmetrisch) + Zero-Phase-EMA
+//      → keine Phasenverschiebung, keine Sprünge > rateMax rad/s
+//   2) yaw: Unwrap → EMA → STRENGE Rate-Klemme (letzte Operation gewinnt)
+//   3) h/root: Zero-Phase-EMA (Höhen-/Bahn-Zittern weg)
+// Idempotent über motion.pf (Version-Marker, wird mitgepackt).
+export const PHYS_FILTER_VERSION = 1;
+
+function _zeroPhaseEMA(arr, perFrame, alpha) {
+  const n = arr.length / perFrame;
+  for (let pass = 0; pass < 2; pass++) {
+    const fwd = pass === 0;
+    for (let i = 0; i < n - 1; i++) {
+      const f = fwd ? i : n - 2 - i;
+      for (let j = 0; j < perFrame; j++) {
+        const a = arr[f * perFrame + j], b = arr[(f + 1) * perFrame + j];
+        arr[(f + 1) * perFrame + j] = a + (b - a) * alpha;
+      }
+    }
+  }
+}
+
+function _rateClamp(arr, perFrame, maxStep) {
+  const n = arr.length / perFrame;
+  for (let pass = 0; pass < 2; pass++) {
+    const fwd = pass === 0;
+    for (let i = 0; i < n - 1; i++) {
+      const f = fwd ? i : n - 2 - i;
+      for (let j = 0; j < perFrame; j++) {
+        const a = arr[f * perFrame + j], b = arr[(f + 1) * perFrame + j];
+        const d = b - a;
+        if (d > maxStep) arr[(f + 1) * perFrame + j] = a + maxStep;
+        else if (d < -maxStep) arr[(f + 1) * perFrame + j] = a - maxStep;
+      }
+    }
+  }
+}
+
+function _rateStats(arr, perFrame, dt) {
+  const n = arr.length / perFrame;
+  const rates = [];
+  for (let f = 0; f < n - 1; f++) {
+    let mx = 0;
+    for (let j = 0; j < perFrame; j++) {
+      const d = Math.abs(arr[(f + 1) * perFrame + j] - arr[f * perFrame + j]) / dt;
+      if (d > mx) mx = d;
+    }
+    rates.push(mx);
+  }
+  rates.sort((a, b) => a - b);
+  const pick = (p) => (rates.length ? rates[Math.min(rates.length - 1, Math.floor(p * rates.length))] : 0);
+  return { p50: pick(0.5), p95: pick(0.95), max: rates.length ? rates[rates.length - 1] : 0 };
+}
+
+export function smoothMotionPhysics(motion, opts = {}) {
+  const res = { changed: false, before: null, after: null, yawBefore: 0, yawAfter: 0 };
+  if (!motion || !motion.q || !motion.n) return res;
+  if ((motion.pf || 0) >= PHYS_FILTER_VERSION) return res; // schon gefiltert
+  const n = motion.n;
+  const nu = motion.nu || (motion.q.length / n);
+  if (nu < 1 || n < 4 || motion.q.length !== n * nu) return res;
+  const dt = 1 / (motion.fps || 20);
+  const rateMax = opts.rateMax ?? 8;       // rad/s — oberhalb des GLB-niveaus
+  const yawRateMax = opts.yawRateMax ?? 3; // rad/s — komfortable Gier-Tempo
+  const ema = opts.ema ?? 0.7;             // MILDE Glättung — die Rate-Klemme
+  // trägt die Sprünge; das EMA dämpft nur Mikro-Zittern (Periode < 0.3 s)
+  // und lässt normale Gehen-Périoden (≥ 1 s) zu ≥ 90 % durch (gemessen).
+
+  // ── q ──
+  res.before = _rateStats(motion.q, nu, dt);
+  _rateClamp(motion.q, nu, rateMax * dt);
+  _zeroPhaseEMA(motion.q, nu, ema);
+  _rateClamp(motion.q, nu, rateMax * dt); // EMA-Rest-Raten wieder an die Klemme
+  res.after = _rateStats(motion.q, nu, dt);
+
+  // ── yaw: Unwrap (±π-Sprünge), EMA, dann STRENGE Rate-Klemme ──
+  if (motion.yaw && motion.yaw.length === n) {
+    let jump = 0;
+    for (let f = 1; f < n; f++) jump = Math.max(jump, Math.abs(motion.yaw[f] - motion.yaw[f - 1]));
+    res.yawBefore = jump;
+    const unw = new Float32Array(n);
+    unw[0] = motion.yaw[0];
+    for (let f = 1; f < n; f++) {
+      let d = motion.yaw[f] - motion.yaw[f - 1];
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      unw[f] = unw[f - 1] + d;
+    }
+    _zeroPhaseEMA(unw, 1, 0.5);
+    _rateClamp(unw, 1, yawRateMax * dt);
+    motion.yaw.set(unw);
+    jump = 0;
+    for (let f = 1; f < n; f++) jump = Math.max(jump, Math.abs(motion.yaw[f] - motion.yaw[f - 1]));
+    res.yawAfter = jump;
+  }
+
+  // ── h + root ──
+  if (motion.h && motion.h.length === n) _zeroPhaseEMA(motion.h, 1, 0.4);
+  if (motion.root && motion.root.length === 2 * n) _zeroPhaseEMA(motion.root, 2, 0.5);
+
+  motion.pf = PHYS_FILTER_VERSION;
+  res.changed = true;
+  return res;
+}
+
+// ═══ v2.28.5 — SKELETT-GRÖSSE AUF DEN ROBOTER FITTEN ═══
+// Das grüne ARDY-Lehrer-Skelett (srcPos) läuft in MENSCHEN-Maßstab
+// (~1,6 m Hüfthöhe-Plus), der G1-Geist ist kleiner — der Nutzer sieht
+// „ein zu großes Skelett am Roboter". Diese Funktion skaliert srcPos
+// UNIFORM so, dass die Frame-0-Hüfthöhe exakt auf die Ziel-Basishöhe
+// (motion.h[0] = G1-Geist-Hüfte im ersten Frame) landet. Füße stehen
+// durch die Boden-Garantie bei 0 — Skalierung bleibt geerdet (0·F = 0).
+// Uniform = KnochenVERHÄLTNISSE bleiben, keine Verzerrung.
+// Rückgabe: angewendeter Faktor (0 = nichts zu tun — schon passend/unsinnig).
+export function fitSrcPosToRobot(motion, opts = {}) {
+  if (!motion || !motion.srcPos || !motion.srcJoints || !motion.n || !motion.h || !motion.h.length) return 0;
+  const n = motion.n, nR = motion.srcJoints.length;
+  if (motion.srcPos.length !== 3 * n * nR) return 0;
+  const target = motion.h[0];
+  if (!Number.isFinite(target) || target < 0.1) return 0;
+  // Hüfthöhe der srcPos: erster ENDLICHER Frame (Frame 0 kann NaN haben)
+  let hi = motion.srcJoints.indexOf('hips');
+  if (hi < 0) hi = 0;
+  let srcH = 0;
+  for (let f = 0; f < n; f++) {
+    const z = motion.srcPos[(f * nR + hi) * 3 + 2];
+    if (Number.isFinite(z) && z > 0.05) { srcH = z; break; }
+  }
+  if (!srcH) return 0;
+  let F = target / srcH;
+  if (opts.maxFactor) F = Math.min(opts.maxFactor, Math.max(1 / opts.maxFactor, F));
+  if (Math.abs(F - 1) < 0.03) return 0; // passt schon (Idempotenz)
+  for (let i = 0; i < motion.srcPos.length; i++) motion.srcPos[i] *= F;
+  return F;
+}

@@ -126,11 +126,11 @@ console.log('\n[6] Verdrahtungs-Pins (main.js)');
   ok(mainJs.includes('sauberes Ergebnis nach '), 'Log: sauberes Ergebnis nach n Versuchen');
   ok(mainJs.includes('if (best.q.collapsed) {'), 'Kollaps-Warnung am GEWÄHLTEN Ergebnis (nach Retry)');
   ok(mainJs.includes('attemptsUsed'), 'Warnung nennt die Versuchsanzahl');
-  ok(mainJs.includes('ardyMotionQuality } from'), 'Import: ardyMotionQuality aus retarget.js');
+  ok(mainJs.includes('ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from'), 'Import: ardyMotionQuality aus retarget.js');
   ok(retJs.includes('export function ardyMotionQuality'), 'retarget.js: ardyMotionQuality exportiert');
-  ok(mainJs.includes("const VERSION = '2.28.4';"), 'VERSION 2.28.4');
+  ok(mainJs.includes("const VERSION = '2.28.5';"), 'VERSION 2.28.5');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(gradle.includes('versionCode 45') && gradle.includes('versionName "2.28.4"'), 'versionCode 45 / versionName 2.28.4');
+  ok(gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"'), 'versionCode 46 / versionName 2.28.5');
 }
 
 console.log('\n═══ Ergebnis: ' + pass + ' bestanden, ' + fail + ' fehlgeschlagen ═══');

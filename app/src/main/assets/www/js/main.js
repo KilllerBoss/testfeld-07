@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack, ardyMotionQuality } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips · v2.28.3: Versuchs-Qualität für Auto-Retry
+import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack, ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips · v2.28.3: Versuchs-Qualität für Auto-Retry · v2.28.5: Physik-Glättung + Skelett-Fit
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.4'; // v2.28.4: ARDY X-SPIEGELUNG (Decoder-Welt ist linkshändig gegenüber glTF/Mixamo → Mixamo-Namen links/rechts vertauscht; mirrorArdyOutputX in ardy.js, bewiesen per ardy_walk_probe.mjs mit echtem Decoder: RightUpLeg anatomisch LINKS) + AUTO-RETRY. v2.28.3: ARDY AUTO-RETRY — kollabiert/instabil ein Versuch, wird automatisch mit neuem Seed erneut generiert (bis 3 Versuche, bestes Ergebnis gewinnt; Quality-Funktion ardyMotionQuality in retarget.js). v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
+const VERSION = '2.28.5'; // v2.28.5: ARDY-PHYSIK-GLÄTTUNG (Messbefund: ARDY-Referenz hat Gelenk-Raten bis 63 rad/s + Blick-Ruckler ±178° — die Positionregelung kann das nicht nachfahren, der Roboter „steht sich/schlägt um sich/springt/fällt“; smoothMotionPhysics: Rate-Klemme + Zero-Phase-EMA + yaw-Unwrap) + SKELETT-FIT (grünes ARDY-Skelett lief in Menschen-Größe neben dem kleineren Geist → fitSrcPosToRobot) + BC-VORAB-TRAINING (frischer ARDY-Clip hatte keine Policy → random Zappeln beim Kaltstart; jetzt imitiert die Policy die Referenz automatisch). v2.28.4: ARDY X-SPIEGELUNG (Decoder-Welt ist linkshändig gegenüber glTF/Mixamo → Mixamo-Namen links/rechts vertauscht; mirrorArdyOutputX in ardy.js, bewiesen per ardy_walk_probe.mjs mit echtem Decoder: RightUpLeg anatomisch LINKS) + AUTO-RETRY. v2.28.3: ARDY AUTO-RETRY — kollabiert/instabil ein Versuch, wird automatisch mit neuem Seed erneut generiert (bis 3 Versuche, bestes Ergebnis gewinnt; Quality-Funktion ardyMotionQuality in retarget.js). v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -3955,6 +3955,40 @@ async function activateClip(rec) {
       }
     } catch (e) { /* Reparatur ist rein visuell — kein Grund abzubrechen */ }
   }
+  // ── v2.28.5 ARDY-MIGRATION: PHYSIK-GLÄTTUNG + SKELETT-FIT ──
+  // (a) Physik-Glättung: ARDY-Referenzen enthalten Gelenkwinkel-Raten bis
+  //     63 rad/s und Blick-Ruckler ±178° (gemessen, ardy_robot_diag.mjs) —
+  //     die Positionregelung kann das nicht nachfahren („steht sich, schlägt
+  //     um sich, springt, fällt"). Alte Bestände werden beim Aktivieren
+  //     einmalig geglättet und PERSISTIERT (pf-Marker verhindert Doppelfilter).
+  // (b) Skelett-Fit: das grüne ARDY-Lehrer-Skelett lief in MENSCHEN-Größe
+  //     (~1,6 m) neben dem kleineren G1-Geist — jetzt uniform auf die
+  //     Geist-Basishöhe gefittet (Füße bleiben geerdet).
+  if (rec.src === 'ardy' && S.motionClip.n) {
+    let pfChanged = false;
+    try {
+      if ((S.motionClip.pf || 0) < PHYS_FILTER_VERSION) {
+        const pf = smoothMotionPhysics(S.motionClip);
+        if (pf.changed) {
+          pfChanged = true;
+          log('Physik-Glättung: Gelenk-Raten max ' + pf.before.max.toFixed(1) + ' → ' + pf.after.max.toFixed(1) + ' rad/s (p95 ' + pf.before.p95.toFixed(1) + ' → ' + pf.after.p95.toFixed(1) + ')' + (pf.yawBefore > 0.6 ? ' · Blick-Ruckler ' + Math.round(pf.yawBefore * 180 / Math.PI) + '° → ' + Math.round(pf.yawAfter * 180 / Math.PI) + '°' : '') + ' — die Referenz ist jetzt fahrbar');
+        }
+      }
+      const F = fitSrcPosToRobot(S.motionClip);
+      if (F > 0) {
+        pfChanged = true;
+        log('Skelett-Größe an den Roboter angepasst (×' + F.toFixed(2) + ') — das Lehrer-Skeleton sitzt jetzt AUF dem Geist statt daneben');
+      }
+      if (pfChanged) {
+        const packedFix = packMotion(S.motionClip);
+        rec.motionByRobot = rec.motionByRobot || {};
+        rec.motionByRobot[S.robotId] = packedFix;
+        if (S.robotId === 'g1') rec.motion = packedFix;
+        await putClip(rec);
+        log('v' + VERSION + '-Reparatur gespeichert — gilt ab jetzt für diesen Clip dauerhaft', 'ok');
+      }
+    } catch (e) { /* Migration ist best-effort — Clip läuft weiter */ }
+  }
   // v2.28.1 ARDY-OVERLAY: das grüne Skeleton gehört ZUM Geist (eine Figur).
   if (rec.src === 'ardy') S.motionClip.srcOverlay = true;
   // v2.28.1 GEIST-LENK-STANDARD für ARDY: der Nutzer erwartet, dass der
@@ -4012,6 +4046,18 @@ async function activateClip(rec) {
   S.trainer = loadPolicy(S.robotId);
   ui.policyAvailable(!!S.trainer);
   ui.$('stMode').textContent = 'GLB';
+  // ── v2.28.5 BC-VORAB-TRAINING für frische ARDY-Clips ──
+  // Jeder ARDY-Clip hat eine NEUE id → keine gespeicherte Policy → im
+  // POLICY-Modus fährt ein UNTRAINIERTES Netz = „schlägt um sich, springt,
+  // fällt, random Bewegungen" (Kaltstart). Jetzt imitiert die Policy die
+  // Geist-Referenz automatisch (Supervised, im Hintergrund), bevor PPO
+  // verfeinert — der Roboter folgt der ARDY-Bewegung SOFORT sinnvoll.
+  // Nur wenn wirklich keine Policy existiert (bestehende bleibt unberührt).
+  if (rec.src === 'ardy' && !S.trainer && S.task && S.task.kind === 'motion') {
+    log('Kein Policy-Stand für diesen ARDY-Clip — Imitations-Vorab-Training (BC) startet automatisch: der Roboter lernt zuerst, die Referenz nachzumachen', 'ok');
+    ui.toast('Vorab-Training: Roboter imitiert die ARDY-Bewegung …');
+    runBC().catch((e) => log('BC-Vorab-Training fehlgeschlagen: ' + (e && e.message ? e.message : e), 'warn'));
+  }
   const rootInfo = S.motionClip.root ? ' · Root-Bahn aktiv (' + ({ stelle: 'Referenz steht FIX am Startpunkt', folgt: 'Lehrer hängt am Roboter — kein Bahn-Zwang', frei: 'Roboter folgt dem wandernden Lehrer' })[S.refMode] + ')' : '';
   const mergeInfo = S.motionClip.mergedFrom ? ' [assimp: ' + S.motionClip.mergedFrom + ' Fragmente zusammengeführt]' : '';
   const ctrlInfo = S.task.ctrlMode === 'joy' ? ' · Steuerung: JOYSTICK (Training würfelt Fahrbefehle, POLICY-Modus: Stick)'

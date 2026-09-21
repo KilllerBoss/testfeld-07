@@ -942,3 +942,29 @@ Work Log:
 Stage Summary:
 - Release v2.28.4 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.4/lertrain.apk
 - ARDY-Kette jetzt konventionskorrekt: fp32-Decoder (v2.28.2) + X-Spiegelung (v2.28.4) + Auto-Retry (v2.28.3) + Sanitizer — links bleibt links.
+---
+Task ID: 57
+Agent: Super Z (Hauptagent)
+Task: v2.28.5 — Nutzer: „Alles ist immernoch durcheinander. Kann sein das bei Geist die Physik an ist und die Animation von ardy rechnet Physik nicht mit? Und kann sein das zusätzlich das verwendete skellet zu groß und falsch gemappt ist an den Roboter? Er steht sich, schlägt mit armen und Beinen, springt, fällt am Boden und macht sonst noch random Bewegungen"
+
+Work Log:
+- DIAGNOSE MIT VOLLER KETTE (neu: scripts/ardy/ardy_robot_diag.mjs — ECHTES fp32-Modell inkl. Denoiser/Text-Encoder neu vom HF-Repo (Rev 1c21362) geladen, ArdyRuntime.generate-App-Codepfad, retargetToRobot an ECHTER G1-MuJoCo-wasm-Sim):
+  1) ARDY-Referenzen enthalten Gelenkwinkel-Raten bis 63 rad/s (Dance: p95 25,4) vs GLB-Referenz ~5 rad/s — physikalisch UNFAHRBAR; 4,1 % Limit-Sättigung.
+  2) Blick-Ruckler ±179° zwischen Frames (Hüft-Sway-Nulldurchgang im Yaw-Messvektor — derselbe Mechanismus wie der alte v2.4.1-GLB-Yaw-Bug, jetzt über die ARDY-Hüfte).
+  3) IDEAL-FAHRTEST (q_ref direkt auf Positionaktoren, ohne Balance): ARDY fällt bei 0,86–1,08 s, GLB bei 1,08 s — BEIDE stürzen: JEDE kinematische Referenz hat kein eingerechnetes Gleichgewicht („die Animation rechnet Physik nicht mit" ist korrekt — die Policy MUSS Balance+Tracking lernen). ARDY-walk ist dabei fast perfekt verfolgbar (Track-RMS 0,057 rad < GLB-synth 0,322) — das Problem ist NICHT das Mapping, sondern (a) unmögliche Raten/Ruckler, (b) fehlende Policy.
+  4) GEIST: rein kinematisch (setGhostPose) — KEINE Physik, die Vermutung „Geist hat Physik an" trifft nicht; das Symptom kam von der Referenz+Policy.
+  5) SKELETT-GRÖSSE: grünes ARDY-Lehrer-Skelett (srcPos) wurde nur cm→m skaliert, NICHT auf die G1-Geist-Größe → lief als ~1,6-m-Mensch neben dem kleineren Geist („verwendetes Skelett zu groß" bestätigt; Mapping selbst war sauber).
+  6) KALTSTART: Policies werden PRO CLIP gespeichert — jeder ARDY-Clip hat NEUE id → leere Policy → untrainiertes Netz = „random Bewegungen, schlägt um sich" beim ersten POLICY-Start (BC-Button existierte, wurde aber nie automatisch gestartet).
+- FIX 1 (retarget.js): smoothMotionPhysics(motion, opts) — PHYS_FILTER_VERSION=1: q Rate-Klemme 8 rad/s (2 richtungssymmetrische Durchgänge) + MILDE zero-phase EMA (α=0,7 — erste Version α=0,35 dämpfte normale Gehen-Perioden um 45 % → verworfen) + finale Rate-Klemme; yaw: Unwrap → EMA → STRENGE Rate-Klemme 3 rad/s (letzte Operation gewinnt); h/root zero-phase EMA. Idempotent über motion.pf.
+- FIX 2 (retarget.js): fitSrcPosToRobot(motion) — srcPos uniform auf die Geist-Basishöhe (motion.h[0]) gefittet (Frame-0-Hüfte, NaN-Fallback, maxFactor-Klemme, Füße bleiben geerdet 0·F=0, Idempotenz ±3 %).
+- FIX 3 (main.js activateClip): v2.28.5 ARDY-MIGRATION — beim Aktivieren von src==='ardy'-Clips werden Physik-Glättung (pf<1) + Skelett-Fit einmalig ausgeführt und PERSISTIERT (packMotion/unpackMotion um pf erweitert, glbstore.js); klare Logs („Raten max a→b rad/s", „Skelett-Größe ×F"). GLB-Clips unberührt.
+- FIX 4 (main.js): BC-VORAB-TRAINING automatisch — frischer ARDY-Clip ohne Policy startet das bestehende Supervised-Imitations-Training (runBC, 60 Epochen) im Hintergrund, bevor der Nutzer PPO verfeinert → kein mehr random-Zappeln beim Kaltstart; Toast+Log klarmachen.
+- MESSBEWEIS (neu: scripts/ardy/ardy_filter_validate.mjs, ECHTE Generierung → ECHTER App-Filter → ECHTE Physik): Dance p95 21,9→7,9 rad/s, max 31,5→8,0, Blick-Ruckler 179°→9°; Walk bleibt intakt (p50 3,5→3,0, p95 6,0→4,6) — die Referenz ist fahrbar geworden OHNE die Bewegung zu zerstören; Track-RMS unverändert gut (0,055).
+- TESTS: physics_filter_test.mjs NEU 42/42 (Rate-Klemme streng ≤8, pf-Marker + bitweise Idempotenz, zero-phase lag≤1, Hüft-Fit exakt 0,72 m + geerdete Füße + Klemme 1/maxFactor + Guards, pf-Roundtrip pack/unpack, 13 Verdrahtungs-Pins; 2 Erst-Fails waren Testfehler: Füße-Index, α-Erwartung). Pin-Updates: ardy_mirror 12/12 + ardy_retry 35/35 (VERSION 2.28.5/46, Import-Kette), ghost_ground 30/30, qpos 52/52, motionset 49/49, ui_v2260/ui_v2270 (OR-Ketten +2.28.5/46).
+- REGRESSIONEN ALLE GRÜN: physics_filter 42/42 · ardy_mirror 12/12 · ardy_retry 35/35 · ardy_math 17/17 · ardy_sanitize 12/12 · ardy_runtime 18/18 · ghost_ground 30/30 · ghost_drive 17/17 · qpos 52/52 · motionset 49/49 · motion_ctrl · ui_v2260 · ui_v2270 · ardy_live = 14 Suiten.
+- BUILD: Daemon-Verfahren (nohup-Hintergrund wurde von der Shell getötet, Daemon vollendete 06:14; vordergründiger Bestätigungslauf lief in den Daemon-Lock-Timeout → APK direkt verifiziert): aapt versionCode 46 / versionName 2.28.5 · apksigner SHA-256 1c0422b9251e47ce… IDENTISCH (CN=Trainrobot OU=Testfeld07) · APK 28.132.617 bytes · Code-Marker (smoothMotionPhysics 4×, fitSrcPosToRobot 4×, PHYS_FILTER_VERSION 5×, BC-Autostart, pf) nachweislich in assets/www/js.
+
+Stage Summary:
+- v2.28.5 / versionCode 46: DREI Wurzeln des „Roboter kämpft mit sich selbst" behoben: (1) ARDY-Referenz physikalisch fahrbar gemacht (Raten ≤8 rad/s, Ruckler weg), (2) grünes Skelett auf Geist-Größe gefittet, (3) frische ARDY-Clips imitieren die Referenz automatisch (BC), bevor PPO übernimmt.
+- Geist hat nachweislich NIE Physik gehabt — die Referenz selbst verstieß gegen die Physik; Balance muss die Policy lernen (ideal-Tracker stürzt bei jeder Referenz — auch GLB).
+- Wichtig für den Nutzer: Nach dem Update alte ARDY-Clips einfach nochmal antippen (Migration läuft beim Aktivieren) oder neu generieren.
