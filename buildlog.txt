@@ -1,86 +1,10 @@
-To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.7/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
-Daemon will be stopped at the end of the build 
-Checking the license for package Android SDK Platform-Tools in /home/z/tools/android-sdk/licenses
-License for package Android SDK Platform-Tools accepted.
-Preparing "Install Android SDK Platform-Tools v.37.0.1".
-"Install Android SDK Platform-Tools v.37.0.1" ready.
-Installing Android SDK Platform-Tools in /home/z/tools/android-sdk/platform-tools
-"Install Android SDK Platform-Tools v.37.0.1" complete.
-"Install Android SDK Platform-Tools v.37.0.1" finished.
-> Task :app:preBuild UP-TO-DATE
-> Task :app:preReleaseBuild UP-TO-DATE
-> Task :app:javaPreCompileRelease
-> Task :app:generateReleaseResValues
-> Task :app:checkReleaseAarMetadata
-> Task :app:mapReleaseSourceSetPaths
-> Task :app:generateReleaseResources
-> Task :app:packageReleaseResources
-> Task :app:mergeReleaseResources
-> Task :app:createReleaseCompatibleScreenManifests
-> Task :app:extractDeepLinksRelease
-> Task :app:parseReleaseLocalResources
+Lade echte ONNX-Sessions (fp32) …
+  Sessions geladen in 1.7 s
 
-> Task :app:processReleaseMainManifest
-package="com.trainrobot.app" found in source AndroidManifest.xml: /home/z/my-project/app/src/main/AndroidManifest.xml.
-Setting the namespace via the package attribute in the source AndroidManifest.xml is no longer supported, and the value is ignored.
-Recommendation: remove package="com.trainrobot.app" from the source AndroidManifest.xml: /home/z/my-project/app/src/main/AndroidManifest.xml.
-
-> Task :app:processReleaseManifest
-> Task :app:processReleaseManifestForPackage
-> Task :app:extractProguardFiles
-> Task :app:mergeReleaseJniLibFolders
-> Task :app:mergeReleaseNativeLibs NO-SOURCE
-> Task :app:stripReleaseDebugSymbols NO-SOURCE
-> Task :app:extractReleaseNativeSymbolTables NO-SOURCE
-> Task :app:mergeReleaseNativeDebugMetadata NO-SOURCE
-> Task :app:processReleaseResources
-> Task :app:checkReleaseDuplicateClasses
-
-> Task :app:compileReleaseJavaWithJavac
-Java compiler version 21 has deprecated support for compiling with source/target version 8.
-Try one of the following options:
-    1. [Recommended] Use Java toolchain with a lower language version
-    2. Set a higher source/target version
-    3. Use a lower version of the JDK running the build (if you're not using Java toolchain)
-For more details on how to configure these settings, see https://developer.android.com/build/jdks.
-To suppress this warning, set android.javaCompile.suppressSourceTargetDeprecationWarning=true in gradle.properties.
-warning: [options] source value 8 is obsolete and will be removed in a future release
-warning: [options] target value 8 is obsolete and will be removed in a future release
-warning: [options] To suppress warnings about obsolete options, use -Xlint:-options.
-Note: /home/z/my-project/app/src/main/java/com/trainrobot/app/MainActivity.java uses or overrides a deprecated API.
-Note: Recompile with -Xlint:deprecation for details.
-3 warnings
-
-> Task :app:generateReleaseLintVitalReportModel
-> Task :app:dexBuilderRelease
-> Task :app:desugarReleaseFileDependencies
-> Task :app:mergeReleaseStartupProfile
-> Task :app:lintVitalAnalyzeRelease
-> Task :app:lintVitalReportRelease
-> Task :app:lintVitalRelease
-> Task :app:mergeExtDexRelease
-> Task :app:mergeReleaseArtProfile
-> Task :app:mergeDexRelease
-> Task :app:mergeReleaseGlobalSynthetics
-> Task :app:mergeReleaseShaders
-> Task :app:compileReleaseArtProfile
-> Task :app:compileReleaseShaders NO-SOURCE
-> Task :app:generateReleaseAssets UP-TO-DATE
-> Task :app:mergeReleaseAssets
-> Task :app:extractReleaseVersionControlInfo
-> Task :app:processReleaseJavaRes NO-SOURCE
-> Task :app:mergeReleaseJavaResource
-> Task :app:optimizeReleaseResources
-> Task :app:collectReleaseDependencies
-> Task :app:sdkReleaseDependencyData
-> Task :app:validateSigningRelease
-> Task :app:writeReleaseAppMetadata
-> Task :app:writeReleaseSigningConfigVersions
-> Task :app:compressReleaseAssets
-> Task :app:packageRelease
-> Task :app:createReleaseApkListingFileRedirect
-> Task :app:assembleRelease
-
-BUILD SUCCESSFUL in 1m 7s
-43 actionable tasks: 43 executed
-EXIT 0
+Prompt: „a person stands still, idle“ · Seed 7 · 4 s
+  denoise 1/20 (0 s)
+  denoise 2/20 (1 s)
+  denoise 3/20 (1 s)
+  denoise 4/20 (1 s)
+  denoise 5/20 (1 s)
+  denoise 6/20 (1 s)
