@@ -1077,3 +1077,44 @@ Work Log:
 Stage Summary:
 - Release v2.28.8 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.8/lertrain.apk
 - Knochenlängen-Transfer: Das grüne ARDY-Skelett trägt jetzt die G1-Gliedmaßen (Δ ≤ 1,3 cm) — kein Exoskelett mehr. Neue ARDY-Generierungen zeigen es sofort; Rest-Abweichungen im Bewegungsablauf sind POSE-Differenz (Lehrer vs. IK), nicht Proportion.
+
+---
+Task ID: 61
+Agent: Super Z (Hauptagent)
+Task: v2.28.9 — Nutzer (Screenshot + Report E): „Sieht aus als ob beine und Hände nicht am Skelett sind. Oder falsch. Sie bewegen sich hin und her und überkreuzen sich und bewegen sich auch wenn skellet sich nicht bewegt. Kann sein das du eventuell Policy an Geist angeschlossen hat??? Der Geist sollte rohe Ausgabe von ardy sein"
+
+Work Log:
+- DIAGNOSE an der ECHTEN KETTE (fp32-Modell + echte G1-Sim, CPU; neue Skripte ardy_limb_diag/_diag2/ardy_wobble_probe/mirror_fk_debug2):
+  (1) Geist-Datenquelle VERIFIZIERT: der cyan-Geist wird kinematisch aus clip.q (Retargeting-Replay) getrieben, das grüne Skeleton aus srcPos — beide aus der ROHEN ARDY-Referenz, NICHT aus der Policy (Policy trieb nur den grauen Roboter). Der Nutzer-Verdacht „Policy am Geist" war also falsch — aber der Eindruck (Geist zappelt autonom) war real.
+  (2) SEITEN-SWAP GEMESSEN: nach der v2.28.4er X-Spiegelung liegen ALLE „linken" Rollen lateral auf der FALSCHEN Seite (0/5 auf MJC-+y; Separation −0,33 m = volle Standbreite) — das Skelett überkreuzte den Roboter, die Geist-Beine wurden nach innen gezogen (Fuß y-Mitte 0,037 statt 0,104 m).
+  (3) WURZEL 1 IDENTIFIZIERT: der v2.28.4er X-Spiegel beruhte auf einem Kreuzprodukt-Fehler — ardy_walk_probe + ardy_mirror_test benutzten right = up × drift (das ist anatomisch LINKS); korrekt ist right = fwd × up. Am echten Decoder gemessen: „RightUpLeg" liegt ANATOMISCH RECHTS (+Z, +0,095 m) — die Mixamo-Namen der rohen Decoder-Ausgabe sind KORREKT, der Spiegel vertauschte sie seit v2.28.4.
+  (4) WURZEL 2 IDENTIFIZIERT: Schulter-Twist-Drift — shoulder_yaw ist im Richtungs-Fehler fast unsichtbar (Achse ≈ Oberarmachse), der Look-Ahead-Re-Anker (eWarm−eFull > 0,05) feuerte nie, der Twist driftete frei im flachen Tal (gemessen idle Seed 7: left −2,4° → −45,3°, seamBlend zerrte am Clip-Ende zurück) = „Arme bewegen sich hin und her". triadYaw/baseQ waren NICHT die Quelle (≤1,2°).
+- FIX 1 (ardy.js): mirrorArdyOutputX aus generate() ENTFERNT — die rohe Decoder-Ausgabe ist bereits konventionsrichtig; die Funktion bleibt als reine Mathematik exportiert (Diag/Migration).
+- FIX 2 (retarget.js): TWIST-LEINE — die Abweichung von shoulder_yaw zum Minimal-Twist-Seed wird je Frame auf ±0,15 rad begrenzt (echte Twist-Bewegungen laufen über den Seed, der der Zielrichtung folgt). Ein weicher 0,02-rad-Zug-Anker war zu schwach (Descent-Züge bis 0,3 rad/Frame) und wurde verworfen.
+- FIX 3 (retarget.js + glbstore.js + main.js): MIGRATION ALTER CLIPS — mirrorMotionY spiegelt gespeicherte ARDY-Motion zurück (q: left↔right-Tausch mit Vorzeichen aus den ECHTEN Gelenk-Weltachsen je Paar, d = sign((M·uL)·uR), Hinge flippt/Slide nicht; baseQ (x,y,z,w)→(−x,y,−z,w); yaw/triadYaw/rawYaw → −Wert; root/srcPos lateral → −y; h unverändert). mv-Marker (ARDY_MV=2) in packMotion/unpackMotion; activateClip migriert ARDY-Clips mit mv<2 EINMALIG beim Aktivieren und persistiert sofort — bestehende Clips (inkl. des Idle-Clips des Nutzers) reparieren sich SELBST beim Laden.
+- TESTFEHLER-JAGD: der FK-Beweis schlug zunächst fehl — (a) der Test verglich Körper-Indizes 1:1, der Spiegel mappt aber left↔right (Korrektur: Seiten-Paarung per mj_id2name); (b) makeGhostData() liefert eine GECACHTE SINGLETON-Instanz — gA und gB waren dasselbe Objekt und der Vergleich las zweimal dieselbe Pose (Korrektur: Posen nach jedem setGhostPose in lokale Puffer kopieren). Danach exakt.
+- BEWEIS (scripts/ardy/ardy_fix_proof.mjs, komplette App-Pipeline incl. pack/unpack, idle Seed 7): Seiten 5/5 links=+y · Bein-Überkreuzung 0/80 Frames (min Separation +0,325 m statt −0,33) · Schulter-Twist-Range 0,049/0,004 rad (vorher 0,37/0,64) · Geist-Fuß-Schwingen 0,097 m (Lehrer-Sway) · Hände 0,0 % Abriss. BEWEISBILD: download/ardy_side_fix.png (4 Frames, Skeleton seitenrichtig AUF dem G1).
+- TESTS: ardy_side_test NEU (10 Checks: ARDY_MV, FK-Beweis über alle Körper <2e-4 m, Regeln, Involution, Marker, Guards, Real-Pins Seiten+Leine) · ardy_mirror_test KORRIGIERT (Anatomie-Deutung umgekehrt: roh = korrekt, gespiegelt = der alte Defekt; Pins: generate() spiegelt nicht mehr, VERSION 2.28.9/50) · Versions-Pins aller Suiten auf 2.28.9/50 erweitert (pins_2289.py) · Import-Pins an ARDY_MV/mirrorMotionY angepasst.
+- REGRESSIONEN GRÜN (18 Suiten): ardy_side 10 · ardy_mirror 15 · src_skeleton 90 · physics_filter 42 · ardy_retry 35 · qpos 52 · ghost_ground 30 · motionset 49 · ui_v2260 · ui_v2270 · motion_ctrl · ardy_live · ardy_probe 22 · ardy_math 17 · ardy_sanitize 12 · ardy_runtime 18 · canvas_v2200 84 · ghost_drive 17 · moe/dr/parallel/recovery/test_v2140 grün. (ground_settle/duck_browser/glb_browser: vorbestehende Umgebungsausfälle, unverändert.)
+- BUILD: app-release.apk 28.145.549 bytes · aapt versionCode 50 / versionName 2.28.9 · apksigner SHA-256 1c0422b9… IDENTISCH (CN=Trainrobot) · APK-Marker (mirrorMotionY 4× retarget.js, 5× main.js, VERSION 2.28.9, KEINE X-Spiegelung, TWIST-LEINE) ✓.
+
+Stage Summary:
+- v2.28.9 / versionCode 50: Das ARDY-Skeleton/der Geist trägt wieder SEITENRICHTIGE Daten — der v2.28.4er Spiegel (Kreuzprodukt-Fehler) ist behoben; alte Clips migrieren sich beim Laden selbst (FK-bewiesener Y-Spiegel). Die Schulter-Arme driften nicht mehr (Twist-Leine). Der Geist bleibt die ROHE ARDY-Ausgabe (Retargeting-Replay, keine Policy).
+- Nutzer-Hinweis: bestehende ARDY-Clips werden beim ersten Aktivieren automatisch seitenrepariert (Log: „Seiten-Reparatur …"); für frische Ergebnisse können Clips jederzeit neu generiert werden.
+
+---
+Task ID: 61-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.9 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35593308657 + Tag-Run 35593310612 BEIDE success
+- Release automatisch durch den Workflow: v2.28.9, id 392898748, published 2026-09-21T11:19:20Z, Asset lertrain.apk 28.145.549 bytes (state uploaded — Größe exakt = lokaler Build)
+- Integrität: Asset ANONYM geladen → aapt versionCode 50 / versionName 2.28.9 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot) ✓ · Code-Stichprobe: VERSION '2.28.9', mirrorMotionY/ARDY_MV (retarget.js 4 Zeilen, main.js 5 Zeilen), TWIST-LEINE ✓
+- Beweisbild: download/ardy_side_fix.png (Skeleton seitenrichtig auf dem G1, 4 idle-Frames)
+
+Stage Summary:
+- Release v2.28.9 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.9/lertrain.apk
+- Seiten-Reparatur: Der v2.28.4er Spiegel-Defekt (Kreuzprodukt-Fehler) ist behoben — neue Generierungen sind seitenrichtig, bestehende Clips migrieren sich beim ersten Aktivieren selbst (FK-bewiesener Y-Spiegel mirrorMotionY, mv-Marker).
+- Twist-Leine: Schulter-Yaw driftet nicht mehr (Range 0,37 → 0,05 rad) — „Arme bewegen sich hin und her" behoben.
+- Geist bleibt ROHE ARDY-Ausgabe (kinematisches Retargeting-Replay aus clip.q, keine Policy).
