@@ -1206,6 +1206,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
               }
               return e;
             } : () => 0;
+            let seedYawGoal = NaN; // v2.28.9: Minimal-Twist-Yaw für den Soft-Anker
             if (G.hasArm) {
               // Seed: [pitch, roll, yaw]. v2.5.0-Fix („linker Arm zuckt“):
               // a) Die G1-Schulter hat DIESELBE Achsenkonvention wie die Hüfte
@@ -1228,6 +1229,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
               const ang = quatLogAxis(qTmp, axisTmp);
               const rvS = [axisTmp[0] * ang, axisTmp[1] * ang, axisTmp[2] * ang];
               const seedS = [rvS[1], rvS[0], rvS[2]]; // pitch←Y, roll←X, yaw←Z
+              seedYawGoal = seedS[2];
               if (f === 0) {
                 for (let j = 0; j < 3; j++) q[off2 + A[shNames[j]]] = clampA(shNames[j], seedS[j]);
               } else {
@@ -1253,6 +1255,22 @@ export function retargetToRobot(clip, sim, log = () => {}) {
             // Rettungsrunde (klemmt der Ellbogen, darf die Schulter auffangen)
             descend(off2, armErr, shEntries, 5);
             descend(off2, foreDirErr, elEntries, 6);
+            // v2.28.9 — TWIST-LEINE: Die Schulter-Yaw-Achse liegt nahe der
+            // Oberarm-Achse — der Richtungs-Fehler sieht den Twist fast nicht,
+            // der Look-Ahead-Re-Anker (eWarm − eFull > 0,05) feuert deshalb
+            // nie und der Twist DRIFTET frei im Fast-Flachen Tal (gemessen am
+            // echten Modell, idle Seed 7: −2,4° → −45,3°, seamBlend zerrte
+            // zurück = „Arme bewegen sich hin und her"). Fix: die Abweichung
+            // vom Minimal-Twist-Seed wird auf ±0,15 rad begrenzt — echte
+            // Twist-Bewegungen laufen über den Seed (der folgt der Ziel-
+            // richtung), der Freiheitsgrad kann nicht mehr wegdriften.
+            if (Number.isFinite(seedYawGoal)) {
+              const seedYaw = clampA(shNames[2], seedYawGoal);
+              const cur = q[off2 + A[shNames[2]]];
+              const dev = cur - seedYaw;
+              const LEASH = 0.15;
+              if (Math.abs(dev) > LEASH) q[off2 + A[shNames[2]]] = seedYaw + (dev > 0 ? LEASH : -LEASH);
+            }
           }
         }
         if (f === 0 && typeof process !== 'undefined' && process.env.RETARGET_DEBUG) {
@@ -1889,4 +1907,101 @@ export function fitSrcPosToRobot(motion, opts = {}) {
   if (Math.abs(F - 1) < 0.03) return 0; // passt schon (Idempotenz)
   for (let i = 0; i < motion.srcPos.length; i++) motion.srcPos[i] *= F;
   return F;
+}
+
+// ═══ v2.28.9 — SEITEN-REPARATUR (MIGRATION ALTER ARDY-CLIPS) ═══
+// v2.28.4–28.8 spiegelten die Decoder-Ausgabe auf Basis eines Kreuzprodukt-
+// Fehlers („right = up × drift" ist anatomisch LINKS; korrekt ist
+// right = fwd × up) — sämtliche in dieser Zeit generierten ARDY-Clips tragen
+// VERTAUSCHTE Seiten: das Skelett überkreuzt den Roboter, die Beine werden
+// nach innen gezogen (Nutzer-Report E + Screenshot). Diese Funktion spiegelt
+// eine GESPEICHERTE Motion zurück (Y-Spiegel in der MuJoCo-Welt):
+//   ▸ q: link↔right-Aktuatoren tauschen, Vorzeichen je Weltachse des Gelenks
+//     (Achse in der Spiegelebene X/Z → Vorzeichen flippt, Y-Achse → bleibt),
+//     unbesiegelte Yaw-Gelenke (waist_yaw) flippen
+//   ▸ baseQ: (x,y,z,w) → (−x, y, −z, w) · yaw/triadYaw/rawYaw → −Wert
+//   ▸ root: y → −y · srcPos: y → −y · h unverändert
+// Die Vorzeichenregel wird NICHT geraten: sie kommt aus den echten
+// Gelenk-Weltachsen in der Nullpose (d = sign((M·u_L)·u_R) des Paares).
+// ARDY_MV zählt die ARDY-Pipeline-Version (0/1 = alte Bestände → migrieren).
+export const ARDY_MV = 2;
+
+export function mirrorMotionY(motion, sim) {
+  if (!motion || !motion.q || !motion.n || !sim || !sim.model) return false;
+  const nu = motion.nu || (motion.q.length / motion.n);
+  const n = motion.n;
+  if (!nu || motion.q.length !== n * nu) return false;
+  // Nullpose-Achsen je Aktuator (Welt) — Gelenktyp (Hinge/Slide) beachten
+  const g0 = sim.makeGhostData();
+  sim._mjApi.mj_resetData(sim.model, g0);
+  sim._mjApi.mj_forward(sim.model, g0);
+  const wAxisOf = (a) => {
+    const jid = sim.actJoint[a];
+    const b = sim.model.jnt_bodyid[jid];
+    const ax = [sim.model.jnt_axis[3 * jid], sim.model.jnt_axis[3 * jid + 1], sim.model.jnt_axis[3 * jid + 2]];
+    const q = [g0.xquat[4 * b + 1], g0.xquat[4 * b + 2], g0.xquat[4 * b + 3], g0.xquat[4 * b]];
+    return rotVecByQuat(q, ax, [0, 0, 0]);
+  };
+  const typeOf = (a) => {
+    try { return sim.model.jnt_type[sim.actJoint[a]]; } catch (e) { return 3; } // 3 = hinge (Annahme)
+  };
+  const mirrorOf = (nm) => {
+    if (/^left/.test(nm)) return { other: sim.actByName[nm.replace(/^left/, 'right')], self: false };
+    if (/^right/.test(nm)) return { other: sim.actByName[nm.replace(/^right/, 'left')], self: false };
+    return { other: undefined, self: true };
+  };
+  // Ziel-Vorschrift je Aktuator: q'[a] = k[a] · q[src[a]]
+  const src = new Int32Array(nu);
+  const k = new Float64Array(nu);
+  for (let a = 0; a < nu; a++) {
+    const nm = sim.actName[a];
+    const { other, self } = mirrorOf(nm);
+    if (self || other === undefined) {
+      // unbesiegtes Gelenk: Spiegelebene X/Z → flippt, Y-Achse → bleibt
+      const u = wAxisOf(a);
+      const yDom = Math.abs(u[1]) > Math.max(Math.abs(u[0]), Math.abs(u[2]));
+      src[a] = a;
+      k[a] = yDom ? 1 : -1;
+      continue;
+    }
+    const uL = wAxisOf(a), uR = wAxisOf(other);
+    // d = sign((M·u_a)·u_other), M = diag(1,−1,1)
+    const d = (uL[0] * uR[0] - uL[1] * uR[1] + uL[2] * uR[2]) >= 0 ? 1 : -1;
+    const hinge = typeOf(a) === 3;
+    src[a] = other;
+    k[a] = hinge ? -d : d;
+  }
+  // q spiegeln (Spaltenwechsel + Vorzeichen) — je Frame über einen
+  // Zwischenpuffer, da links/rechts getauscht werden (in-place-sicher)
+  const qrow = new Float32Array(nu);
+  for (let f = 0; f < n; f++) {
+    const off = f * nu;
+    for (let a = 0; a < nu; a++) qrow[a] = motion.q[off + src[a]] * k[a];
+    motion.q.set(qrow, off);
+  }
+  // Basis-Orientierung: (x,y,z,w) → (−x, y, −z, w)
+  if (motion.baseQ && motion.baseQ.length === 4 * n) {
+    for (let f = 0; f < n; f++) {
+      const o = 4 * f;
+      motion.baseQ[o] = -motion.baseQ[o];
+      motion.baseQ[o + 2] = -motion.baseQ[o + 2];
+    }
+  }
+  // Root-Gier + Diagnose-Yaws: Vorzeichen flippen
+  if (motion.yaw && motion.yaw.length === n) for (let f = 0; f < n; f++) motion.yaw[f] = -motion.yaw[f];
+  if (motion.triadYaw && motion.triadYaw.length === n) for (let f = 0; f < n; f++) motion.triadYaw[f] = -motion.triadYaw[f];
+  if (motion.rawYaw && motion.rawYaw.length === n) for (let f = 0; f < n; f++) motion.rawYaw[f] = -motion.rawYaw[f];
+  // Root-Bahn: lateral spiegeln
+  if (motion.root && motion.root.length === 2 * n) {
+    for (let f = 0; f < n; f++) motion.root[2 * f + 1] = -motion.root[2 * f + 1];
+  }
+  // Lehrer-Skelett: lateral spiegeln (Komponente 1 = MJC y)
+  if (motion.srcPos && motion.srcJoints) {
+    const nR = motion.srcJoints.length;
+    if (motion.srcPos.length === 3 * n * nR) {
+      for (let i = 0; i < motion.srcPos.length; i += 3) motion.srcPos[i + 1] = -motion.srcPos[i + 1];
+    }
+  }
+  motion.mv = ARDY_MV;
+  return true;
 }

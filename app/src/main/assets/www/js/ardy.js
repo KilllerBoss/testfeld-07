@@ -922,11 +922,13 @@ export class ArdyRuntime {
     }
     out.frameCount = written;
     out.duration = written / dims.fps;
-    // v2.28.4: X-Spiegelung (Konvention ARDY → glTF/Mixamo, siehe Block
-    // über mirrorArdyOutputX) — VOR dem Sanitizer, damit die Metriken die
-    // finalen (gespiegelten) Daten beschreiben; spiegelinvariant, daher
-    // sind Knochenlängen/NaN-Logik identisch.
-    mirrorArdyOutputX(out);
+    // v2.28.9: KEINE X-Spiegelung mehr — v2.28.4 spiegelte auf Basis eines
+    // Kreuzprodukt-Fehlers („right = up × drift" ist anatomisch LINKS; korrekt
+    // ist right = fwd × up). Gemessen an der echten Decoder-Ausgabe (Walk +X):
+    // „RightUpLeg" liegt ANATOMISCH RECHTS (+Z, +0,095 m), die Mixamo-Namen
+    // stimmen also BEREITS — der Spiegel vertauschte seit v2.28.4 Links/Rechts
+    // (Skelett überkreuzte den Roboter, Beine wurden nach innen gezogen).
+    // mirrorArdyOutputX bleibt als reine Mathematik + für Tests erhalten.
     // v2.28.2: Decoder-Ausgabe säubern (NaN halten + Knochenlängen
     // reparieren) — verhindert „Streifen“-Skeleton und zappelnden Geist.
     sanitizeArdyOutput(out);

@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack, ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips · v2.28.3: Versuchs-Qualität für Auto-Retry · v2.28.5: Physik-Glättung + Skelett-Fit
+import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack, ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION, ARDY_MV, mirrorMotionY } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips · v2.28.3: Versuchs-Qualität für Auto-Retry · v2.28.5: Physik-Glättung + Skelett-Fit · v2.28.9: Seiten-Reparatur (Spiegel-Migration)
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.8'; // v2.28.8: KNOCHENLÄNGEN-TRANSFER — Nutzer (Screenshot): „G1 ist falsch gemappt an das Skelett, er ist nicht an dem Skelett, sondern etwas innen. Als wäre es nicht Skelett sondern Exoskelett“ — das grüne Lehrer-Skelett trug weiter MENSCHEN-Proportionen (cskel27 ≈ 1,7 m), der G1 ist kompakter: Wirbelsäulen-Kugeln über dem Kopf, Schultern breiter, Arme/Beine außerhalb der Roboter-Gliedmaßen. Fix: reproportionSrcPos baut srcPos entlang der cskel27-Hierarchie neu auf — RICHTUNGEN aus den Lehrer-Daten (Pose/Winkel exakt erhalten), LÄNGEN vom Roboter (Nullpose-Distanzen der G1-Körper-Ursprünge: Hüftbreite/Oberschenkel/Unterschenkel aus hip/knee/ankle-Körpern, Wirbelsäule = Becken→Torso verteilt, Kopf per mj_id2name, Arme aus Schulter/Ellbogen/Handgelenk-Körpern; Zehen/Hände proportional zum Glied-Faktor). Danach Neuerdung der Füße — die Skelett-Hüfte landet automatisch auf der Bein-Reichweite des Roboters. srcRig-Marker (persistiert in glbstore) überspringt den uniformen Höhen-Fit; Legacy-13-Clips behalten ihn. Nur Anzeige-Pfad, IK/Physik unangetastet. Beweis: ardy_skeleton_fit_diag.mjs — Skelett-Gelenke sitzen nach dem Transfer am G1 (max Abstand Kopf/Schulter/Ellbogen/Hand/Knie/Knöchel < 0,2 m statt vorher > 0,3 m). v2.28.7: LEHRER-SKELETT IN VOLLER cskel27-ANATOMIE — der Nutzer-Report (mit Referenz-Screenshot aus der ARDY-Browser-Demo) „der skellet ist falsch“ war korrekt: srcPos trug nur die 13 IK-Rollen (Stumpf ohne Hände/HandEnd/Thumb1, ohne Zehen, ohne Schultern, Wirbelsäule nur 2 Wirbel, Arme hingen direkt an „spine“). Jetzt: resolveSrcJoints löst ALLE 27 cskel27-Gelenke (SRC_ROLES/SRC_EDGES = exakte Eltern-Kind-Hierarchie aus manifest.skeleton), srcPos trägt sie alle, render3d zeichnet die Kette dynamisch via srcBonePairs (Ahnen-Walk: ALTE 13-Rollen-Clips behalten exakt ihr altes Aussehen). groundSrcPosFrame hebt jetzt auch ToeBase (tiefster Punkt) auf 0. IK/Physik/Quality UNANGETASTET — reiner Anzeige-Pfad, bewiesen per ardy_skeleton27_diag.mjs an echtem Modell+Sim: 27/27 Gelenke, 26-Kanten-Baum, Knochen-Drift 0,00 %, Füße geerdet, Legacy-Paare exakt. v2.28.6: GERÄTE-SELBSTTEST (INTEGRITÄTSPROBE) — Beweislage: auf CPU generiert idle ein perfektes Standbild (Hüfte 0,93 m konstant, 0 NaN, Knochenfehler 0 %), NUR auf dem Gerät explodiert es → (a) WebGPU-Kernel können falsche Werte liefern, (b) alte importierte fp16-Modell-Dateien wurden per Basisname auch für fp32-Anfragen ausgeliefert. Fix: jede Session rechnet beim Laden einen festen Prüfdurchlauf gegen eingebrannte CPU-Referenz-Prüfsummen (Σ|x|, max|x|, Spread; erzeugt von scripts/ardy/ardy_probe_reference.mjs) — weicht ein Graph ab (Toleranz 0,35 rel.), läuft er KORREKT auf WASM statt schnell-falsch auf WebGPU; Decoder-Datei zusätzlich gegen fp32-Fingerprint (71.642.198 Bytes) gesichert, falsche Imports werden übersprungen; deToEn: "steh still" → "stands still" (statt Kauderwelsch) + Subjekt-Ergänzung ("a person …") gegen Out-of-Distribution-Kurzprompts. v2.28.5: ARDY-PHYSIK-GLÄTTUNG (Messbefund: ARDY-Referenz hat Gelenk-Raten bis 63 rad/s + Blick-Ruckler ±178° — die Positionregelung kann das nicht nachfahren, der Roboter „steht sich/schlägt um sich/springt/fällt“; smoothMotionPhysics: Rate-Klemme + Zero-Phase-EMA + yaw-Unwrap) + SKELETT-FIT (grünes ARDY-Skelett lief in Menschen-Größe neben dem kleineren Geist → fitSrcPosToRobot) + BC-VORAB-TRAINING (frischer ARDY-Clip hatte keine Policy → random Zappeln beim Kaltstart; jetzt imitiert die Policy die Referenz automatisch). v2.28.4: ARDY X-SPIEGELUNG (Decoder-Welt ist linkshändig gegenüber glTF/Mixamo → Mixamo-Namen links/rechts vertauscht; mirrorArdyOutputX in ardy.js, bewiesen per ardy_walk_probe.mjs mit echtem Decoder: RightUpLeg anatomisch LINKS) + AUTO-RETRY. v2.28.3: ARDY AUTO-RETRY — kollabiert/instabil ein Versuch, wird automatisch mit neuem Seed erneut generiert (bis 3 Versuche, bestes Ergebnis gewinnt; Quality-Funktion ardyMotionQuality in retarget.js). v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
+const VERSION = '2.28.9'; // v2.28.9: SEITEN-REPARATUR — Nutzer (Screenshot + Report): „Beine und Hände nicht am Skelett … bewegen sich hin und her und überkreuzen sich … auch wenn Skelett sich nicht bewegt. Policy an Geist? Der Geist sollte rohe Ausgabe von ardy sein“. Diagnose an der ECHTEN Kette (fp32-Modell, CPU, echte G1-Sim): (1) DER v2.28.4er X-SPIEGEL WAR FALsch — er beruhte auf einem Kreuzprodukt-Fehler („right = up × drift“ ist anatomisch LINKS; korrekt ist right = fwd × up): die rohe Decoder-Ausgabe hat KORREKTE Mixamo-Namen (RightUpLeg liegt anatomisch RECHTS, +0,095 m), der Spiegel vertauschte seit v2.28.4 Links/Rechts → das grüne Skelett überkreuzte den Roboter, die Beine wurden nach innen gezogen (Geist-Fuß y-Mitte 0,037 statt 0,104 m), Skelett-Gliedmaßen liefen DIAGONAL zu den Roboter-Gliedmaßen = „nicht am Skelett/überkreuzt“. Fix: Spiegelung aus generate() entfernt + MIGRATION alter Clips (mirrorMotionY: Y-Spiegel der gespeicherten Motion — q mit echten Gelenk-Weltachsen-Vorzeichen je left/right-Paar, srcPos/root lateral, baseQ (x,y,z,w)→(−x,y,−z,w), yaw → −yaw; FK-Beweis im Test) beim Aktivieren, mv-Marker (ARDY_MV=2) macht sie einmalig + persistiert. (2) Schulter-Twist-DRIFT: shoulder_yaw ist im Richtungs-Fehler fast unsichtbar (Achse ≈ Oberarmachse) → der Look-Ahead-Re-Anker feuerte nie und der Twist driftete frei (gemessen idle Seed 7: −2,4° → −45,3°, seamBlend zerrte zurück = „Arme bewegen sich hin und her“); Fix: SOFTER TWIST-ANKER (0,02 rad/Frame zum Minimal-Twist-Seed). Der Geist hängt weiter an der ROHEN ARDY-Referenz (Geist = Retargeting-Replay aus clip.q, NICHT Policy — Policy trieb nur den grauen Roboter). v2.28.8: KNOCHENLÄNGEN-TRANSFER — Nutzer (Screenshot): „G1 ist falsch gemappt an das Skelett, er ist nicht an dem Skelett, sondern etwas innen — wie ein Exoskelett“
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -3406,6 +3406,7 @@ function initArdy() {
         statusEl.textContent = 'Retargeting auf G1 …';
         const clip = new ArdyClip(out);
         const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+        motion.mv = ARDY_MV; // v2.28.9: frische Generierung = seitenrichtige Pipeline (kein Spiegel mehr)
         const q = ardyMotionQuality(motion, out.sanity, out.frameCount); // v2.28.3
         if (!best || q.score > best.q.score) best = { out, motion, q };
         if (!q.bad) break;
@@ -3925,6 +3926,25 @@ async function activateClip(rec) {
   }
   if (!packed) { ui.toast('Keine Animationsdaten für diesen Roboter', true); S.activeRecId = null; return; }
   S.motionClip = unpackMotion(packed);
+  // ── v2.28.9 SEITEN-REPARATUR (MIGRATION): ARDY-Clips aus v2.28.4–28.8
+  // trugen VERTAUSCHTE Seiten (der damalige X-Spiegel basierte auf einem
+  // Kreuzprodukt-Fehler: „right = up × drift" ist anatomisch LINKS). Das
+  // grüne Skelett überkreuzte den Roboter, Beine/Hände liefen diagonal
+  // gegeneinander (Nutzer-Report E + Screenshot). Beim Aktivieren wird der
+  // alte Bestand EINMALIG per Y-Spiegel repariert (q via echte Gelenk-
+  // Weltachsen, srcPos/root/baseQ/yaw) und SOFORT persistiert (mv-Marker).
+  if (rec.src === 'ardy' && (S.motionClip.mv || 0) < ARDY_MV) {
+    try {
+      if (mirrorMotionY(S.motionClip, S.sim)) {
+        const packedFix = packMotion(S.motionClip);
+        rec.motionByRobot = rec.motionByRobot || {};
+        rec.motionByRobot[S.robotId] = packedFix;
+        if (S.robotId === 'g1') rec.motion = packedFix;
+        await putClip(rec);
+        log('Seiten-Reparatur: „' + rec.name + '“ trug vertauschte Links/Rechts-Daten (v2.28.4–28.8 Spiegel-Defekt) — Skelett und Geist sind jetzt seitenrichtig', 'ok');
+      }
+    } catch (e) { /* Migration ist best-effort — Clip läuft weiter */ }
+  }
   // v2.6.1 — AUTO-RE-RETARGET bei altem Algorithmus-Bestand (je Roboter):
   // Ist der gespeicherte Stand älter als RT_ALG UND die GLB-Datei liegt
   // noch im Record, wird für DIESEN Roboter einmal neu retargetet.

@@ -1,16 +1,22 @@
 // ═══════════════════════════════════════════════════════════
-// ardy_mirror_test.mjs — v2.28.4 ARDY X-SPIEGELUNG:
-//   ▸ mirrorArdyOutputX (reine Mathematik, immer gelaufen):
+// ardy_mirror_test.mjs — v2.28.9 KORREKTUR der v2.28.4-Anatomie-Deutung:
+//   Der damalige „Beweis“ benutzte right = up × drift — das ist anatomisch
+//   LINKS (korrekt: right = fwd × up). Gemessen an der echten Decoder-
+//   Ausgabe liegt „RightUpLeg“ ANATOMISCH RECHTS — die Namen sind KORREKT,
+//   der v2.28.4er X-Spiegel vertauschte seitdem Links/Rechts (Nutzer-Report
+//   E: Skelett überkreuzt den Roboter). v2.28.9: generate() spiegelt NICHT
+//   mehr; alte Clips werden per mirrorMotionY (retarget.js) migriert.
+//   ▸ mirrorArdyOutputX (reine Mathematik, weiterhin exportiert + von den
+//     Migrations-/Diag-Werkzeugen genutzt):
 //       Positionen x→−x · Rotationen M·R·M (Elemente 1,2,3,6 negiert)
 //       · det bleibt +1 · FK-Kette konsistent · doppelte Spiegelung
 //         = Original · Knochenlängen invariant · Anatomie-Probe kippt
 //   ▸ Real-Modell-Konventions-Pin (wenn decoder.onnx vorhanden):
-//      _decoder-Walk zeigt „Right"-Knochen ANATOMISCH LINKS (das ist
-//       der bewiesene Modell-Defekt) → nach Spiegelung anatomisch
-//       RECHTS — falls das kippt, hat sich die Modell-Konvention
-//       geändert (neuer Rev!) und der Mirror muss geprüft werden
-//   ▸ Verdrahtungs-Pins: generate() spiegelt VOR Sanitizer,
-//     VERSION 2.28.4, versionCode 45
+//      ROH (ohne Spiegel) liegt „RightUpLeg" anatomisch RECHTS — stimmen
+//      die Namen nicht mehr, hat sich die Modell-Konvention geändert
+//      (neuer Rev!) und die Pipeline muss neu geprüft werden
+//   ▸ Verdrahtungs-Pins: generate() spiegelt NICHT mehr, Sanitizer läuft,
+//     VERSION 2.28.9, versionCode 50
 // Usage: node scripts/ardy_mirror_test.mjs
 // ═══════════════════════════════════════════════════════════
 import { readFileSync, existsSync } from 'node:fs';
@@ -180,20 +186,28 @@ await ok('Anatomie-Probe: Knochen an +X wandert nach −X (Seitenwechsel)', () =
   assert.ok(out.joints[23 * 3] > 0, 'jetzt bei +X');
 });
 
-console.log('\n[3] Verdrahtungs-Pins');
+console.log('\n[3] Verdrahtungs-Pins (v2.28.9: KEIN Mirror mehr in generate())');
 {
   const ardyJs = readFileSync(path.join(WWW, 'js/ardy.js'), 'utf8');
   const mainJs = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
   const gradle = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  const iMirror = ardyJs.indexOf('mirrorArdyOutputX(out);');
-  const iSan = ardyJs.indexOf('sanitizeArdyOutput(out);', iMirror);
-  await ok('generate(): mirror VOR sanitize (Metriken beschreiben finale Daten)', () => {
-    assert.ok(iMirror > 0 && iSan > iMirror);
+  await ok('generate() ruft mirrorArdyOutputX NICHT mehr auf (Seiten-Defekt behoben)', () => {
+    assert.equal(ardyJs.indexOf('mirrorArdyOutputX(out);'), -1, 'Spiegel-Aufruf gefunden — Defekt wieder da?');
   });
-  await ok('mirrorArdyOutputX exportiert', () => assert.ok(ardyJs.includes('export function mirrorArdyOutputX')));
-  await ok('VERSION 2.28.5/2.28.6 + versionCode 46/47', () => {
-    assert.ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';"));
-    assert.ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')));
+  await ok('generate() dokumentiert die Abschaltung (KEINE X-Spiegelung)', () => {
+    assert.ok(ardyJs.includes('KEINE X-Spiegelung'));
+  });
+  await ok('sanitizeArdyOutput bleibt in generate() verdrahtet', () => {
+    assert.ok(ardyJs.includes('sanitizeArdyOutput(out);'));
+  });
+  await ok('mirrorArdyOutputX exportiert (Migration/Diag nutzen die Mathematik)', () => assert.ok(ardyJs.includes('export function mirrorArdyOutputX')));
+  await ok('main.js: ARDY_MV + mirrorMotionY importiert (Migrations-Verdrahtung)', () => {
+    assert.ok(mainJs.includes('ARDY_MV, mirrorMotionY'));
+    assert.ok(mainJs.includes('(S.motionClip.mv || 0) < ARDY_MV'));
+  });
+  await ok('VERSION 2.28.9 + versionCode 50', () => {
+    assert.ok(mainJs.includes("const VERSION = '2.28.9';"));
+    assert.ok(gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"'));
   });
 }
 
@@ -251,7 +265,7 @@ console.log('\n[4] Real-Modell-Konventions-Pin (decoder.onnx)');
     const drift = [data[(N - 1) * J * 3] - data[0], data[(N - 1) * J * 3 + 1] - data[1], data[(N - 1) * J * 3 + 2] - data[2]];
     const dl = Math.hypot(...drift) || 1;
     const dhat = drift.map(v => v / dl);
-    const right = [dhat[2], 0, -dhat[0]]; // up=(0,1,0) × d̂
+    const right = [-dhat[2], 0, dhat[0]]; // fwd × up (v2.28.9 KORREKT — up × fwd war LINKS)
     const side = (j) => {
       let acc = 0;
       for (let f = 0; f < N; f++) acc += (data[f * J * 3 + j * 3] - data[f * 3]) * right[0] + (data[f * J * 3 + j * 3 + 2] - data[f * 3 + 2]) * right[2];
@@ -260,15 +274,15 @@ console.log('\n[4] Real-Modell-Konventions-Pin (decoder.onnx)');
     return { rightSide: side(19), leftSide: side(23) };
   };
   const pre = anatomicalSide(out.joints);
-  await ok('REAL pre-Mirror: „RightUpLeg" anatomisch LINKS (Modell-Defekt bestätigt)', () => {
-    assert.ok(pre.rightSide < 0, 'rightSide=' + pre.rightSide.toFixed(3));
-    assert.ok(pre.leftSide > 0, 'leftSide=' + pre.leftSide.toFixed(3));
+  await ok('REAL roh (ohne Spiegel): „RightUpLeg" anatomisch RECHTS — Namen KORREKT', () => {
+    assert.ok(pre.rightSide > 0, 'rightSide=' + pre.rightSide.toFixed(3));
+    assert.ok(pre.leftSide < 0, 'leftSide=' + pre.leftSide.toFixed(3));
   });
   mirrorArdyOutputX(out);
   const post = anatomicalSide(out.joints);
-  await ok('REAL post-Mirror: „RightUpLeg" anatomisch RECHTS (Fix wirkt)', () => {
-    assert.ok(post.rightSide > 0, 'rightSide=' + post.rightSide.toFixed(3));
-    assert.ok(post.leftSide < 0, 'leftSide=' + post.leftSide.toFixed(3));
+  await ok('REAL gespiegelt: „RightUpLeg" anatomisch LINKS (= der alte v2.28.4–28.8-Defekt)', () => {
+    assert.ok(post.rightSide < 0, 'rightSide=' + post.rightSide.toFixed(3));
+    assert.ok(post.leftSide > 0, 'leftSide=' + post.leftSide.toFixed(3));
   });
 }
 

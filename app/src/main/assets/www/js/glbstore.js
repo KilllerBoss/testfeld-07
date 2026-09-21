@@ -67,6 +67,7 @@ export function packMotion(motion) {
     alg: motion.alg || 0, // Retargeting-Algorithmus-Version (Auto-Re-Retarget, v2.6.1)
     pf: motion.pf || 0, // v2.28.5: Physik-Filter-Version (Idempotenz der ARDY-Glättung)
     srcRig: motion.srcRig || 0, // v2.28.8: 1 = srcPos trägt Roboter-Knochenlängen
+    mv: motion.mv || 0, // v2.28.9: ARDY-Pipeline-Version (Seiten-Reparatur-Migration)
   };
   if (motion.root) out.root = Array.from(motion.root);
   if (motion.yaw) out.yaw = Array.from(motion.yaw);
@@ -88,6 +89,7 @@ export function unpackMotion(rec) {
     alg: rec.alg || 0, // alte Datensätze: 0 (< RT_ALG) → activateClip re-retargetet
     pf: rec.pf || 0, // v2.28.5: Physik-Filter-Version (0 = ungefiltert → Migration)
     srcRig: rec.srcRig || 0, // v2.28.8: 1 = Skelett mit Roboter-Knochenlängen (uniformer Fit übersprungen)
+    mv: rec.mv || 0, // v2.28.9: ARDY-Pipeline-Version (0 = alter gespiegelter Bestand → Migration)
     robotId: rec.robotId || null, // v2.15.0: Ziel-Roboter der Retargeting-Variante
     locomotion: rec.locomotion !== false, // alte Datensätze: Rebase wie bisher an
   };

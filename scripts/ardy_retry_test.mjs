@@ -126,11 +126,11 @@ console.log('\n[6] Verdrahtungs-Pins (main.js)');
   ok(mainJs.includes('sauberes Ergebnis nach '), 'Log: sauberes Ergebnis nach n Versuchen');
   ok(mainJs.includes('if (best.q.collapsed) {'), 'Kollaps-Warnung am GEWÄHLTEN Ergebnis (nach Retry)');
   ok(mainJs.includes('attemptsUsed'), 'Warnung nennt die Versuchsanzahl');
-  ok(mainJs.includes('ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from'), 'Import: ardyMotionQuality aus retarget.js');
+  ok(mainJs.includes('ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot') && mainJs.includes('PHYS_FILTER_VERSION, ARDY_MV, mirrorMotionY } from'), 'Import: ardyMotionQuality aus retarget.js');
   ok(retJs.includes('export function ardyMotionQuality'), 'retarget.js: ardyMotionQuality exportiert');
-  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';"), 'VERSION 2.28.5-2.28.8');
+  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';") || mainJs.includes("const VERSION = '2.28.9';"), 'VERSION 2.28.5-2.28.9');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')), 'versionCode 46-49 / versionName 2.28.5-2.28.8');
+  ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')) || (gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')), 'versionCode 46-50 / versionName 2.28.5-2.28.9');
 }
 
 console.log('\n═══ Ergebnis: ' + pass + ' bestanden, ' + fail + ' fehlgeschlagen ═══');

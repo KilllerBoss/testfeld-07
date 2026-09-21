@@ -182,10 +182,10 @@ console.log('■ 6) Verdrahtung v2.28.6');
   await ok('main.js: ardyProbeNotes importiert + geloggt', () => {
     assert.ok(mainSrc.includes('ardyProbeNotes'), 'Import/Verwendung');
     assert.ok(mainSrc.includes('Integritätsprobe bestanden'), 'Erfolgs-Log');
-    assert.ok(mainSrc.includes("const VERSION = '2.28.6';") || mainSrc.includes("const VERSION = '2.28.7';") || mainSrc.includes("const VERSION = '2.28.8';"), 'VERSION 2.28.6-2.28.8');
+    assert.ok(mainSrc.includes("const VERSION = '2.28.6';") || mainSrc.includes("const VERSION = '2.28.7';") || mainSrc.includes("const VERSION = '2.28.8';") || mainSrc.includes("const VERSION = '2.28.9';"), 'VERSION 2.28.6-2.28.9');
   });
   await ok('gradle: versionCode 47 / versionName 2.28.6', () => {
-    assert.ok((gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')));
+    assert.ok((gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')) || (gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')));
   });
   await ok('Referenz-Struktur: 3 Graphen, Decoder 2 Teile, endlich', () => {
     const r = ardy.ARDY_PROBE_REFERENCE;
