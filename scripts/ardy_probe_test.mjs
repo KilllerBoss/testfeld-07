@@ -26,7 +26,17 @@ async function ok(name, fn) {
 
 // ── ORT (node) laden BEVOR ardy.js genutzt wird (setOrtTensorClass) ──
 // onnxruntime-node liegt unter scripts/ardy/node_modules — absolut importieren.
-const ort = (await import('file:///home/z/my-project/scripts/ardy/node_modules/onnxruntime-node/dist/index.js')).default;
+// onnxruntime-node robust laden (Environment-Resets verschieben node_modules):
+// 1) scripts/ardy/node_modules (historisch) · 2) /home/z/node_modules · 3) bare
+let ort = null;
+for (const cand of [
+  'file:///home/z/my-project/scripts/ardy/node_modules/onnxruntime-node/dist/index.js',
+  'file:///home/z/node_modules/onnxruntime-node/dist/index.js',
+  'onnxruntime-node',
+]) {
+  try { ort = (await import(cand)).default; break; } catch (e) { /* nächster Kandidat */ }
+}
+if (!ort) throw new Error('onnxruntime-node nicht gefunden (weder scripts/ardy/node_modules noch /home/z/node_modules)');
 const ardy = await import(path.join(WWW, 'js/ardy.js'));
 ardy.setOrtTensorClass(ort.Tensor);
 const manifest = JSON.parse(readFileSync(path.join(ARDY_DIR, 'model.json'), 'utf8'));
@@ -182,10 +192,10 @@ console.log('■ 6) Verdrahtung v2.28.6');
   await ok('main.js: ardyProbeNotes importiert + geloggt', () => {
     assert.ok(mainSrc.includes('ardyProbeNotes'), 'Import/Verwendung');
     assert.ok(mainSrc.includes('Integritätsprobe bestanden'), 'Erfolgs-Log');
-    assert.ok(mainSrc.includes("const VERSION = '2.28.6';") || mainSrc.includes("const VERSION = '2.28.7';") || mainSrc.includes("const VERSION = '2.28.8';") || mainSrc.includes("const VERSION = '2.28.9';") || mainSrc.includes("const VERSION = '2.28.10';"), 'VERSION 2.28.6-2.28.10');
+    assert.ok(mainSrc.includes("const VERSION = '2.28.6';") || mainSrc.includes("const VERSION = '2.28.7';") || mainSrc.includes("const VERSION = '2.28.8';") || mainSrc.includes("const VERSION = '2.28.9';") || mainSrc.includes("const VERSION = '2.28.10';") || mainSrc.includes("const VERSION = '2.28.11';"), 'VERSION 2.28.6-2.28.11');
   });
   await ok('gradle: versionCode 47 / versionName 2.28.6', () => {
-    assert.ok((gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')) || (gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')) || (gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"')));
+    assert.ok((gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')) || (gradle.includes('versionCode 49') && gradle.includes('versionName "2.28.8"')) || (gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')) || (gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"')) || (gradle.includes('versionCode 52') && gradle.includes('versionName "2.28.11"')));
   });
   await ok('Referenz-Struktur: 3 Graphen, Decoder 2 Teile, endlich', () => {
     const r = ardy.ARDY_PROBE_REFERENCE;

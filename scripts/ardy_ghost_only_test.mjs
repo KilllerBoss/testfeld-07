@@ -10,7 +10,7 @@
 //       identisch zur Trainings-Referenz) — engine.setGhostPose liest KEINE
 //       Sim-/Policy-Zustände; Physik trackt dasselbe clip.q
 //   [3] Anzeige-Entscheidung (Logik): ARDY → kein Lehrer, GLB → Lehrer ok
-//   [4] Verhaltensänderung vs v2.28.9 (git HEAD): vorher SICHTBAR, jetzt aus
+//   [4] Verhaltensänderung vs v2.28.9 (git Tag v2.28.9): vorher SICHTBAR, jetzt aus
 //   [5] Version 2.28.10 / versionCode 51
 // ═══════════════════════════════════════════════════════════
 import { readFile } from 'node:fs/promises';
@@ -75,11 +75,11 @@ console.log('\n[3] Anzeige-Entscheidung (Logik-Spiegel der applyGhosts-Bedingung
   ok(hideForArdy(true, false, [0, 0], true) === false, 'GLB-Zweig: Skelett-Logik unverändert sichtbar');
 }
 
-console.log('\n[4] Verhaltensänderung vs v2.28.9 (git HEAD = Live-Stand)');
+console.log('\n[4] Verhaltensänderung vs v2.28.9 (git Tag v2.28.9 = Vorher-Stand — HEAD wandert mit Releases weiter)');
 {
   let oldMain = '';
   try {
-    oldMain = execSync('git show HEAD:app/src/main/assets/www/js/main.js', { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    oldMain = execSync('git show v2.28.9:app/src/main/assets/www/js/main.js', { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   } catch (e) { /* kein git — überspringen */ }
   if (oldMain) {
     ok(oldMain.includes('r3d.placeSourceGhostAt(fr, rr[0], rr[1]);') && oldMain.includes('r3d.sourceGhost.visible = true;'), 'v2.28.9 (HEAD): Skelett wurde AM GEIST ANGEZEIGT (zwei Figuren)');
@@ -92,9 +92,9 @@ console.log('\n[4] Verhaltensänderung vs v2.28.9 (git HEAD = Live-Stand)');
 }
 
 console.log('\n[5] Version 2.28.10 / versionCode 51');
-ok(mainJs.includes("const VERSION = '2.28.10';"), "main.js VERSION '2.28.10'");
+ok(mainJs.includes("const VERSION = '2.28.10';") || mainJs.includes("const VERSION = '2.28.11';"), "main.js VERSION '2.28.10'/'2.28.11'");
 ok(mainJs.includes('GEIST = ARDY, OHNE SKELETT'), 'VERSION-Kommentar nennt die Änderung');
-ok(gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"'), 'build.gradle 51 / 2.28.10');
+ok((gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"')) || (gradle.includes('versionCode 52') && gradle.includes('versionName "2.28.11"')), 'build.gradle 51/2.28.10 oder 52/2.28.11');
 
 console.log(`\n═══ Ergebnis: ${count - fails}/${count} grün ═══`);
 if (fails) { console.error(fails + ' FEHLER'); process.exit(1); }

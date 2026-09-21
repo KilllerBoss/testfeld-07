@@ -206,8 +206,8 @@ console.log('\n[3] Verdrahtungs-Pins (v2.28.9: KEIN Mirror mehr in generate())')
     assert.ok(mainJs.includes('(S.motionClip.mv || 0) < ARDY_MV'));
   });
   await ok('VERSION 2.28.9 + versionCode 50', () => {
-    assert.ok(mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';"));
-    assert.ok((gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')) || (gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"')));
+    assert.ok(mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';") || mainJs.includes("const VERSION = '2.28.11';"));
+    assert.ok((gradle.includes('versionCode 50') && gradle.includes('versionName "2.28.9"')) || (gradle.includes('versionCode 51') && gradle.includes('versionName "2.28.10"')) || (gradle.includes('versionCode 52') && gradle.includes('versionName "2.28.11"')));
   });
 }
 

@@ -186,7 +186,7 @@ console.log('\n[5] Verdrahtungs-Pins (main.js / render3d.js)');
   ok(mainJs.includes('r3d.sourceGhost.visible = false;') && !mainJs.includes('r3d.placeSourceGhostAt(fr,'), 'v2.28.10 Render-Loop: ARDY-Skelett AUS (Geist allein)');
   ok(mainJs.includes('r3d.updateSourceGhost(fr); // v2.28.1'), 'Render-Loop: updateSourceGhost NACH Anker-Wahl');
   ok(mainJs.includes('Bewegung kollabiert'), 'Kollaps-Warnung bei kollabierter Generierung');
-  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';") || mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';"), 'VERSION 2.28.5-2.28.10');
+  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';") || mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';") || mainJs.includes("const VERSION = '2.28.11';"), 'VERSION 2.28.5-2.28.11');
   ok(mainJs.includes('groundSrcPosTrack, ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot') && mainJs.includes('PHYS_FILTER_VERSION, ARDY_MV, mirrorMotionY } from'), 'Import der Reparatur-Helfer (+ v2.28.3 Qualität · v2.28.5 Physik-Filter)');
   ok(retJs.includes('export function groundSrcPosFrame') && retJs.includes('export function groundSrcPosTrack'), 'retarget.js: Reparatur-Helfer exportiert');
   ok(r3dJs.includes('placeSourceGhostAt(frame, x, y)') && r3dJs.includes('_srcRelative'), 'render3d: Overlay-API');

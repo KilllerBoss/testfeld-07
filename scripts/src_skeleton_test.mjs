@@ -210,10 +210,10 @@ console.log('■ 5) pack/unpack mit 27 Rollen');
 console.log('■ 6) Verdrahtungs-Pins');
 {
   const main = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
-  ok(/const VERSION = '2\.28\.7'/.test(main) || /const VERSION = '2\.28\.8'/.test(main) || /const VERSION = '2\.28\.9'/.test(main) || /const VERSION = '2\.28\.10'/.test(main), "main.js VERSION 2.28.7-2.28.10");
+  ok(/const VERSION = '2\.28\.7'/.test(main) || /const VERSION = '2\.28\.8'/.test(main) || /const VERSION = '2\.28\.9'/.test(main) || /const VERSION = '2\.28\.10'/.test(main) || /const VERSION = '2\.28\.11'/.test(main), "main.js VERSION 2.28.7-2.28.11");
   const grad = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(/versionCode 48/.test(grad) || /versionCode 49/.test(grad) || /versionCode 50/.test(grad) || /versionCode 51/.test(grad), 'build.gradle versionCode 48-51');
-  ok(/versionName "2\.28\.7"/.test(grad) || /versionName "2\.28\.8"/.test(grad) || /versionName "2\.28\.9"/.test(grad) || /versionName "2\.28\.10"/.test(grad), 'build.gradle versionName 2.28.7-2.28.10');
+  ok(/versionCode 48/.test(grad) || /versionCode 49/.test(grad) || /versionCode 50/.test(grad) || /versionCode 51/.test(grad) || /versionCode 52/.test(grad), 'build.gradle versionCode 48-52');
+  ok(/versionName "2\.28\.7"/.test(grad) || /versionName "2\.28\.8"/.test(grad) || /versionName "2\.28\.9"/.test(grad) || /versionName "2\.28\.10"/.test(grad) || /versionName "2\.28\.11"/.test(grad), 'build.gradle versionName 2.28.7-2.28.11');
   const rt = readFileSync(path.join(WWW, 'js/retarget.js'), 'utf8');
   ok(/export function resolveSrcJoints/.test(rt), 'retarget.js: resolveSrcJoints exportiert');
   ok(/export function srcBonePairs/.test(rt), 'retarget.js: srcBonePairs exportiert');
@@ -300,10 +300,10 @@ console.log('■ 7) srcRig-Marker + Persistenz');
 console.log('■ 8) Verdrahtungs-Pins');
 {
   const main = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
-  ok(/const VERSION = '2\.28\.8'/.test(main) || /const VERSION = '2\.28\.9'/.test(main) || /const VERSION = '2\.28\.10'/.test(main), "main.js VERSION '2.28.8'-'2.28.10'");
+  ok(/const VERSION = '2\.28\.8'/.test(main) || /const VERSION = '2\.28\.9'/.test(main) || /const VERSION = '2\.28\.10'/.test(main) || /const VERSION = '2\.28\.11'/.test(main), "main.js VERSION '2.28.8'-'2.28.11'");
   const grad = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(/versionCode 49/.test(grad) || /versionCode 50/.test(grad) || /versionCode 51/.test(grad), 'build.gradle versionCode 49-51');
-  ok(/versionName "2\.28\.8"/.test(grad) || /versionName "2\.28\.9"/.test(grad) || /versionName "2\.28\.10"/.test(grad), 'build.gradle versionName 2.28.8-2.28.10');
+  ok(/versionCode 49/.test(grad) || /versionCode 50/.test(grad) || /versionCode 51/.test(grad) || /versionCode 52/.test(grad), 'build.gradle versionCode 49-52');
+  ok(/versionName "2\.28\.8"/.test(grad) || /versionName "2\.28\.9"/.test(grad) || /versionName "2\.28\.10"/.test(grad) || /versionName "2\.28\.11"/.test(grad), 'build.gradle versionName 2.28.8-2.28.11');
   const rt = readFileSync(path.join(WWW, 'js/retarget.js'), 'utf8');
   ok(/export function reproportionSrcPos/.test(rt), 'retarget.js: reproportionSrcPos exportiert');
   ok(/if \(motion\.srcRig\) return 0;/.test(rt), 'fitSrcPosToRobot: srcRig-Skip');

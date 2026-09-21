@@ -89,6 +89,79 @@ function wrapAngle(a) {
   return a;
 }
 
+// ── v2.28.11 PLAYBACK-GLÄTTUNG (Nutzer: „Perfekt. Zittert aber.“) ──────
+// Der ARDY-Mini-Space auf HuggingFace glättet NICHT im Decoder-Stream
+// (kein EMA/Low-Pass, kein Fenster-Naht-Blending — die Kohärenz zwischen
+// Generierungs-Fenstern leistet das Modell über seine History-Tokens),
+// sondern ausschließlich beim ABSPIELEN: ein GLEITENDER Frame-Cursor
+// (elapsed · fps, Float) wird zwischen den benachbarten 20-Hz-Frames
+// interpoliert — Positionen linear (Lerp), Rotationen kürzester Weg
+// (Slerp). Quelle: assets/index-DHzs1hy7.js.map → src/vrm-retarget.ts
+// (sampleJointPosition: Lerp, sampleRotationTrack: slerpQuaternions,
+// DEFAULT_MOTION_FPS = 20).
+//
+// Die App hatte bis v2.28.11 hartes Nearest-Frame-Sampling in der ANZEIGE
+// (main.js: fr = Math.floor(phase · clip.n)) — bei 20-Hz-Motion und
+// 60-Hz-Rendering sprang der Geist 20× pro Sekunde zwischen diskreten
+// Posen = das vom Nutzer gesehene Zittern. sampleArdyDisplay behält die
+// Anzeige-Skala (t = phase·n — volle Timeline in n/fps Sekunden, wie der
+// „Perfekt“-Stand v2.28.10) und ersetzt nur den harten Schnitt durch
+// Lerp/Slerp. GLB-Clips bleiben im Nearest-Frame (Original-Mesh-Pfad
+// unverändert).
+
+// Quaternion-Slerp, kürzester Pfad (d < 0 → Vorzeichen-Flip), nähert bei
+// fast parallelen Quats linear ab (d > 0,9995), danach Normierung.
+function slerpQ(a, b, u, out) {
+  let ax = a[0], ay = a[1], az = a[2], aw = a[3];
+  let d = ax * b[0] + ay * b[1] + az * b[2] + aw * b[3];
+  if (d < 0) { ax = -ax; ay = -ay; az = -az; aw = -aw; d = -d; }
+  if (d > 0.9995) {
+    out[0] = ax + (b[0] - ax) * u;
+    out[1] = ay + (b[1] - ay) * u;
+    out[2] = az + (b[2] - az) * u;
+    out[3] = aw + (b[3] - aw) * u;
+  } else {
+    const th = Math.acos(Math.min(1, d)), s = Math.sin(th);
+    const wa = Math.sin((1 - u) * th) / s, wb = Math.sin(u * th) / s;
+    out[0] = ax * wa + b[0] * wb;
+    out[1] = ay * wa + b[1] * wb;
+    out[2] = az * wa + b[2] * wb;
+    out[3] = aw * wa + b[3] * wb;
+  }
+  const n = Math.hypot(out[0], out[1], out[2], out[3]) || 1;
+  out[0] /= n; out[1] /= n; out[2] /= n; out[3] /= n;
+}
+
+/**
+ * v2.28.11: Geist-Anzeige-Pose zur (kontinuierlichen) Phase — SUB-FRAME-
+ * Interpolation zwischen den 20-Hz-Clip-Frames statt hartem Math.floor.
+ * Skala: phase ist der Loop-Anteil (0..1, task.phase) — t = phase·n läuft
+ * über die GESAMTE Timeline (wie die Anzeige seit v2.28.10: fr = floor(
+ * phase·n)); nur der STARKE Schnitt wird durch Lerp/Slerp ersetzt.
+ * BEFUND (separat, unverändert gelassen): die Physik-Referenz sampleRef
+ * rechnet mit t = phase·fps (Skala „Sekunden“, API-Vertrag qpos_v2220-
+ * Test) — bei n ≠ fps läuft die Referenz zeitgestreckt (Faktor n/fps) und
+ * springt mitten in der Motion. Das betrifft Policy-Semantik (Training)
+ * und wird NICHT heimlich hier umgestellt — dokumentiert im Worklog.
+ * outQ[nu] = Gelenk-Lerp · outH[0] = Höhen-Lerp · outBQ = baseQ-Slerp.
+ * Rückgabe: baseQ-Array (oder null, wenn der Clip keine baseQ hat) —
+ * der Aufrufer reicht sie direkt an sim.setGhostPose weiter.
+ */
+export function sampleArdyDisplay(clip, phase, outQ, outH, outBQ) {
+  const c = clip, nu = c.nu;
+  const t = (phase * c.n) % c.n;
+  const i0 = Math.floor(t), i1 = (i0 + 1) % c.n, u = t - i0;
+  for (let j = 0; j < nu; j++) {
+    outQ[j] = c.q[i0 * nu + j] * (1 - u) + c.q[i1 * nu + j] * u;
+  }
+  if (outH) outH[0] = c.h[i0] * (1 - u) + c.h[i1] * u;
+  if (outBQ && c.baseQ) {
+    slerpQ(c.baseQ.subarray(4 * i0, 4 * i0 + 4), c.baseQ.subarray(4 * i1, 4 * i1 + 4), u, outBQ);
+    return outBQ;
+  }
+  return null;
+}
+
 export function makeMotionTask(cfg, clip, sim) {
   const nu = cfg.nu;
   const span = cfg.actSpan;
@@ -268,11 +341,15 @@ export function makeMotionTask(cfg, clip, sim) {
       if (this.refMode === 'folgt' && robotPos) {
         if (hasRoot) {
           const c = clip;
+          // v2.28.11: auch der ANKER interpoliert (vorher Math.floor →
+          // 20-Hz-Treppen im 'folgt'-Offset = sichtbares Geist-Zittern am
+          // Roboter); gleiche Mathematik wie refRoot (Wrap bei yaw).
           const t = (phase * c.fps) % c.n;
-          const i = Math.floor(t);
-          out[0] = robotPos[0] + (c.root[2 * i] - c.root[0]);
-          out[1] = robotPos[1] + (c.root[2 * i + 1] - c.root[1]);
-          out[2] = robotYaw + wrapAngle((c.yaw[i] || 0) - (c.yaw[0] || 0));
+          const i0 = Math.floor(t), i1 = (i0 + 1) % c.n, u = t - i0;
+          out[0] = robotPos[0] + (c.root[2 * i0] * (1 - u) + c.root[2 * i1] * u - c.root[0]);
+          out[1] = robotPos[1] + (c.root[2 * i0 + 1] * (1 - u) + c.root[2 * i1 + 1] * u - c.root[1]);
+          const y0 = c.yaw[i0] || 0, y1 = c.yaw[i1] || 0;
+          out[2] = robotYaw + wrapAngle((y0 + wrapAngle(y1 - y0) * u) - (c.yaw[0] || 0));
         } else { out[0] = robotPos[0]; out[1] = robotPos[1]; out[2] = robotYaw; }
         return out;
       }

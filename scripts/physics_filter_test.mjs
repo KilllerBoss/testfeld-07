@@ -188,7 +188,7 @@ console.log('\n[5] Verdrahtung (main.js / glbstore.js / build.gradle)');
 {
   const main = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
   ok(main.includes("smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION") && main.includes("ARDY_MV, mirrorMotionY } from './retarget.js'"), 'main.js importiert die drei neuen Exporte');
-  ok(main.includes("const VERSION = '2.28.5'") || main.includes("const VERSION = '2.28.6'") || main.includes("const VERSION = '2.28.7'") || main.includes("const VERSION = '2.28.8'") || main.includes("const VERSION = '2.28.9'") || main.includes("const VERSION = '2.28.10'"), 'main.js VERSION 2.28.5-2.28.10');
+  ok(main.includes("const VERSION = '2.28.5'") || main.includes("const VERSION = '2.28.6'") || main.includes("const VERSION = '2.28.7'") || main.includes("const VERSION = '2.28.8'") || main.includes("const VERSION = '2.28.9'") || main.includes("const VERSION = '2.28.10'") || main.includes("const VERSION = '2.28.11'"), 'main.js VERSION 2.28.5-2.28.11');
   ok(main.includes('v2.28.5 ARDY-MIGRATION: PHYSIK-GLÄTTUNG + SKELETT-FIT'), 'activateClip: Migrationsblock vorhanden');
   ok(main.includes('smoothMotionPhysics(S.motionClip)'), 'Migration ruft smoothMotionPhysics');
   ok(main.includes('fitSrcPosToRobot(S.motionClip)'), 'Migration ruft fitSrcPosToRobot');
@@ -197,8 +197,8 @@ console.log('\n[5] Verdrahtung (main.js / glbstore.js / build.gradle)');
   ok(main.includes('runBC().catch'), 'BC-Autostart ruft runBC (bestehendes Supervised-Training)');
   ok(main.includes('Imitations-Vorab-Training'), 'BC-Autostart mit klarer deutscher Meldung');
   const grad = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(grad.includes('versionCode 46') || grad.includes('versionCode 47') || grad.includes('versionCode 48') || grad.includes('versionCode 49') || grad.includes('versionCode 50') || grad.includes('versionCode 51'), 'build.gradle versionCode 46-51');
-  ok(grad.includes('versionName "2.28.5"') || grad.includes('versionName "2.28.6"') || grad.includes('versionName "2.28.7"') || grad.includes('versionName "2.28.8"') || grad.includes('versionName "2.28.9"') || grad.includes('versionName "2.28.10"'), 'build.gradle versionName 2.28.5-2.28.10');
+  ok(grad.includes('versionCode 46') || grad.includes('versionCode 47') || grad.includes('versionCode 48') || grad.includes('versionCode 49') || grad.includes('versionCode 50') || grad.includes('versionCode 51') || grad.includes('versionCode 52'), 'build.gradle versionCode 46-52');
+  ok(grad.includes('versionName "2.28.5"') || grad.includes('versionName "2.28.6"') || grad.includes('versionName "2.28.7"') || grad.includes('versionName "2.28.8"') || grad.includes('versionName "2.28.9"') || grad.includes('versionName "2.28.10"') || grad.includes('versionName "2.28.11"'), 'build.gradle versionName 2.28.5-2.28.11');
   // ardyMotionQuality weiter exportiert (v2.28.3-Vertrag)
   ok(typeof ardyMotionQuality === 'function', 'ardyMotionQuality unverändert exportiert (v2.28.3-Vertrag)');
 }
