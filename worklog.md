@@ -1024,3 +1024,19 @@ Stage Summary:
 - v2.28.7 / versionCode 48: Das grüne ARDY-Lehrer-Skelett hat jetzt die VOLLSTÄNDIGE cskel27-Anatomie wie in der ARDY-Browser-Demo (Nutzer-Referenzbild): 27 Gelenke, 26 Knochen — Hände mit HandEnd+Thumb1, Zehen, Schultern, 7-Gelenk-Wirbelsäule, Hals. Die Knochenkette wird dynamisch aus der echten Hierarchie gezeichnet statt aus 12 Hartkodier-Paaren.
 - IK/Physik/Quality-Kette UNANGETASTET (reiner Anzeige-Pfad + Boden-Garantie-Erweiterung): Alle 16 Regressionssuiten grün, Verhaltens-Pfade (Spiegelung, Physik-Filter, Auto-Retry, Probe) durch Pins gesichert.
 - ALTE gespeicherte Clips behalten ihr gewohntes Aussehen (Ahnen-Walk reproduziert das 13-Rollen-Layout bitgenau); jede NEUE ARDY-Generierung zeigt das volle Skelett. GLB-Clips mit Mixamo-Rig profitieren ebenfalls (27 Rollen per Präfix-Aliase).
+
+---
+Task ID: 59-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.7 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35576174546 + Tag-Run 35576174760 BEIDE success
+- Release automatisch durch den Workflow: v2.28.7, id 392783677, published 2026-09-21T08:07:51Z, Asset lertrain.apk 28.139.953 bytes (state uploaded — Größe exakt = lokaler Build)
+- Integrität: Asset ANONYM geladen → aapt versionCode 48 / versionName 2.28.7 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot OU=Testfeld07) ✓ · Code-Stichprobe: resolveSrcJoints (retarget.js + main.js), const VERSION = '2.28.7' ✓
+- Beweisbilder für den Nutzer: download/ardy_skeleton27_frame0.png · ardy_skeleton27_mitte.png · ardy_skeleton27_gefitted.png (Front/Seite/¾, Struktur = Referenz-Screenshot; idle: Arme hängen, T-Pose im Screenshot ist die Demo-Ruhelage)
+
+Stage Summary:
+- Release v2.28.7 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.7/lertrain.apk
+- Das grüne ARDY-Lehrer-Skelett hat jetzt die volle cskel27-Anatomie wie im Referenzbild des Nutzers: 27 Gelenke / 26 Knochen (Hände+Daumen, Zehen, Schultern, 7-Gelenk-Wirbelsäule, Hals), dynamisch aus der echten Hierarchie gezeichnet.
+- Wichtig für den Nutzer: Jede NEUE ARDY-Generierung zeigt das volle Skelett; ALTE gespeicherte Clips behalten ihr gewohntes (stummeliges) Aussehen — einfach neu generieren für den neuen Look.
