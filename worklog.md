@@ -905,3 +905,26 @@ Work Log:
 Stage Summary:
 - Release v2.28.3 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.3/lertrain.apk
 - Beide ARDY-Fehlbilder abgedeckt: NaN-„Streifen" (v2.28.2: fp32-Decoder + Sanitizer) und Pose-Kollaps (v2.28.3: Auto-Retry bis 3 Versuche, bestes Ergebnis gewinnt)
+
+---
+Task ID: 56
+Agent: Super Z (Hauptagent)
+Task: v2.28.4 — Nutzer: „Immernoch das gleiche. Entweder Koordinaten der Muskeln vertauscht/gespiegelt, oder komplett falsches Skelett" — ARDY X-SPIEGELUNG (Wurzelursache gefunden und bewiesen)
+
+Work Log:
+- LAGE: v2.28.3 hatte 0 Downloads (Nutzer hatte NUR v2.28.2 installiert, +1 Download heute) — der Bug besteht mit fp32-Decoder + Sanitizer WEITERHIN, aber das Symptom hat sich verändert (keine „Streifen" mehr — jetzt „vertauscht/gespiegelt oder falsches Skelett") → Konventions-Bug, kein NaN-Bug.
+- KONVENTIONS-FAHNDUNG mit echtem fp32-Decoder (neu: scripts/ardy/ardy_convention_diag.mjs + ardy_walk_probe.mjs; decoder.onnx 66 MB + onnxruntime-node 1.30 lokal):
+  1) Rotations-Verkettung G = Gp·L (row-major M·v) BESTÄTIGT (Δ=3.6e-7) — mat3ToQuat/ardyclip.js-Konvention korrekt.
+  2) Y-up bestätigt (Hips y=0.90, Head 1.61). Kopf lokal +Y, Fuß lokal −Y.
+  3) WALK-PROBE (Root-Feature X rampt 0→1 m = kommandierte Geh-Fahrt): Drift +X Welt, Blick in Hüft-lokal = +Z (Figur läuft dahin, wo sie schaut — korrekt) — ABER: „RightUpLeg" liegt ANATOMISCH LINKS (−0.095 m relativ zu rechts=up×drift), „LeftUpLeg" rechts (+0.091). → Die ARDY-Datenwelt ist X-GESPIEGELT (linkshändig) gegenüber glTF/Mixamo; die Mixamo-Namen sind dadurch links/rechts VERTAUSCHT.
+  4) Warum unentdeckt: Knochenlängen UND Hüftenhöhen sind SPIEGELINVARIANT — der komplette v2.28.2-Check („10/10 sauber") konnte den Defekt prinzipbedingt nicht sehen.
+  5) Folge im App-Pfad: retargetToG1 löst per NAME (BONE_ALIASES) — data-„RightFoot" (anatomisch links) landete auf dem G1-LINKS-Ziel → Beine/Arme kreuzten sich je Frame → „vertauscht/gespiegelt, komplett falsches Skelett". EXAKT der Nutzer-Report.
+- FIX (ardy.js): mirrorArdyOutputX(out) — Decoder-AUSGABE an X spiegeln: Positionen x→−x, rootPositions x→−x, Rotationen als Konjugation M·R·M (M=diag(−1,1,1); Elemente 1,2,3,6 negieren — det bleibt +1, FK-Kette (M·Gp·M)(M·Lj·M)=M·(Gp·Lj)·M bleibt konsistent). generate() ruft ihn VOR sanitizeArdyOutput (Metriken beschreiben finale Daten; Spiegel ist isometrisch → Sanitizer-Logik unberührt). Modelleingaben (Latents/Root-Features/Heading) UNBERÜHRT — nur die Ausgabekonvention wird an glTF angeglichen. footContacts bewusst unangetastet (kein Konsument, Kanalordnung undokumentiert).
+- TESTS: ardy_mirror_test.mjs NEU 12/12 — x-Negation, M·R·M-Elementmapping, det+1 (f32-Toleranz 1e-6 gelernt), FK-Konsistenz der Spiegelung, Involution (2×=Original), Knochenlängen invariant, Anatomie-Seitenwechsel, Pins (mirror VOR sanitize, VERSION 2.28.4, versionCode 45) + REAL-MODELL-KONVENTIONS-PINS mit echtem Decoder: pre-Mirror RightUpLeg anatomisch LINKS (Modell-Defekt dokumentiert), post-Mirror RECHTS (Fix wirkt) — falls ein künftiger Modell-Rev die Konvention ändert, schlägt dieser Pin sichtbar fehl. Test-Infra: onnxruntime-node via createRequire aus scripts/ardy (node_modules dort).
+- REGRESSIONEN ALLE GRÜN: ardy_mirror 12/12 · ardy_retry 35/35 · ardy_math 17/17 · ardy_sanitize 12/12 · ardy_runtime 18/18 · ghost_ground 30/30 · ghost_drive 17/17 · qpos 52/52 · motionset 49/49 · motion_ctrl · ui_v2260/ui_v2270 · ardy_live. Version 2.28.4/versionCode 45, Pins überall aktualisiert.
+- BUILD: Daemon-Verfahren (Timeout, dann APK 05:03 verifiziert): aapt versionCode 45 / 2.28.4 · apksigner SHA-256 1c0422b9… IDENTISCH · APK-Code-Marker (mirrorArdyOutputX, VERSION 2.28.4) nachgewiesen.
+- RELEASE: main e37f44a→6aa678e + Tag v2.28.4 gepusht (Token nur inline) → CI baut + released automatisch.
+
+Stage Summary:
+- WURZELURSACHE DER GESAMTEN ARDY-SAGEN: (1) v2.28.2 fp16-Decoder-NaN („Streifen"), (2) v2.28.4 linkshändige Decoder-Welt („vertauscht/gespiegelt/falsches Skelett"). Beide bewiesen, beide gefixt, beide mit Real-Modell-Pins verankert.
+- v2.28.4 / versionCode 45: ARDY-Skeleton und Geist laufen jetzt anatomisch korrekt (links bleibt links).
