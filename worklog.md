@@ -1062,3 +1062,18 @@ Stage Summary:
 - v2.28.8 / versionCode 49: Das grüne ARDY-Lehrer-Skelett trägt jetzt die ECHTEN G1-Gliedmaßen-Längen (Knochenlängen-Transfer, Δ ≤ 1,3 cm) bei unverändertem Lehrer-Pose — kein „Exoskelett" mehr: Wirbelsäule endet auf Schulter-Niveau, Arme/Beine liegen AUF den Roboter-Gliedmaßen, Füße am Boden, Kopf auf G1-Kopfniveau.
 - Nur Anzeige-Pfad: IK/Physik/Quality/Sanitizer UNANGETASTET; Legacy-13-Clips weiter beim uniformen Fit; Sprung-Frames bleiben unangetastet.
 - Hinweis für den Nutzer: NEUE ARDY-Generierung zeigen das angepasste Skelett; Rest-Abweichungen zwischen Skelett und Roboter im Bewegungsablauf = POSE-Differenz (Lehrer vs. nachgefahrenes IK), nicht mehr Proportions-Differenz.
+
+---
+Task ID: 60-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.8 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35580893498 + Tag-Run 35580892737 BEIDE success
+- Release automatisch durch den Workflow: v2.28.8, id 392814905, published 2026-09-21T09:01:57Z, Asset lertrain.apk 28.144.285 bytes (state uploaded — Größe exakt = lokaler Build)
+- Integrität: Asset ANONYM geladen → aapt versionCode 49 / versionName 2.28.8 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot) ✓ · Code-Stichprobe: const VERSION = '2.28.8' + reproportionSrcPos (retarget.js, main.js) ✓
+- Beweisbild: download/ardy_skeleton_fit.png (rot = Exoskelett VORHER, grün = NACHHER am G1)
+
+Stage Summary:
+- Release v2.28.8 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.8/lertrain.apk
+- Knochenlängen-Transfer: Das grüne ARDY-Skelett trägt jetzt die G1-Gliedmaßen (Δ ≤ 1,3 cm) — kein Exoskelett mehr. Neue ARDY-Generierungen zeigen es sofort; Rest-Abweichungen im Bewegungsablauf sind POSE-Differenz (Lehrer vs. IK), nicht Proportion.
