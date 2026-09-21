@@ -223,7 +223,7 @@ console.log('\n[5] Verdrahtung (main.js / index.html / ai.js / Doku / Notebook /
   ok(main.includes("from './qpos.js'"), 'main.js importiert qpos.js');
   ok(main.includes('async function onCsvFiles'), 'onCsvFiles vorhanden');
   ok(main.includes("getElementById('csvImportBtn')") && main.includes("getElementById('csvFile')"), 'CSV-Button/Input verdrahtet');
-  ok(main.includes("VERSION = '2.22.0'") || main.includes("VERSION = '2.27.0'") || main.includes("VERSION = '2.27.1'") || main.includes("VERSION = '2.28.0'") || main.includes("VERSION = '2.28.1'") || main.includes("VERSION = '2.28.4'") || main.includes("VERSION = '2.28.5'") || main.includes("VERSION = '2.28.6'"), 'VERSION (>= 2.22.0-Pin)');
+  ok(main.includes("VERSION = '2.22.0'") || main.includes("VERSION = '2.27.0'") || main.includes("VERSION = '2.27.1'") || main.includes("VERSION = '2.28.0'") || main.includes("VERSION = '2.28.1'") || main.includes("VERSION = '2.28.4'") || main.includes("VERSION = '2.28.5'") || main.includes("VERSION = '2.28.6'") || main.includes("VERSION = '2.28.7'"), 'VERSION (>= 2.22.0-Pin)');
   ok(main.includes('ARDY-Referenz aktiv'), 'Aktiv-Log nennt ARDY-Referenz');
   const html = await readFile(path.join(WWW, 'index.html'), 'utf8');
   ok(html.includes('id="csvImportBtn"') && html.includes('id="csvFile"') && html.includes('accept=".csv,text/csv"'), 'index.html: .csv (ARDY)-Button + Datei-Input');

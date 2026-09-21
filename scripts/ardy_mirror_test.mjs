@@ -192,8 +192,8 @@ console.log('\n[3] Verdrahtungs-Pins');
   });
   await ok('mirrorArdyOutputX exportiert', () => assert.ok(ardyJs.includes('export function mirrorArdyOutputX')));
   await ok('VERSION 2.28.5/2.28.6 + versionCode 46/47', () => {
-    assert.ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';"));
-    assert.ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')));
+    assert.ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';"));
+    assert.ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')));
   });
 }
 

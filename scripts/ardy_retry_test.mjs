@@ -128,9 +128,9 @@ console.log('\n[6] Verdrahtungs-Pins (main.js)');
   ok(mainJs.includes('attemptsUsed'), 'Warnung nennt die Versuchsanzahl');
   ok(mainJs.includes('ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from'), 'Import: ardyMotionQuality aus retarget.js');
   ok(retJs.includes('export function ardyMotionQuality'), 'retarget.js: ardyMotionQuality exportiert');
-  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';"), 'VERSION 2.28.5/2.28.6');
+  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';"), 'VERSION 2.28.5/2.28.6/2.28.7');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')), 'versionCode 46/47 / versionName 2.28.5/2.28.6');
+  ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')) || (gradle.includes('versionCode 48') && gradle.includes('versionName "2.28.7"')), 'versionCode 46/47/48 / versionName 2.28.5/2.28.6/2.28.7');
 }
 
 console.log('\n═══ Ergebnis: ' + pass + ' bestanden, ' + fail + ' fehlgeschlagen ═══');

@@ -53,7 +53,105 @@ const BONE_ALIASES = {
 };
 const ROLE_ORDER = ['hips', 'spine', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm', 'head'];
 // Rollen für den Lehrer-Ghost (Original-Figur) — Reihenfolge = srcPos-Layout
+// v2.28.7: LEGACY — nur noch Fallback für ALTE gespeicherte Clips (13 Rollen);
+// neue Generierungen benutzen SRC_ROLES (vollständige cskel27-Anatomie).
 export const GHOST_ROLES = ['hips', 'spine', 'head', 'leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot', 'leftArm', 'leftForeArm', 'rightArm', 'rightForeArm'];
+
+// ═══ v2.28.7 — LEHRER-SKELETT IN VOLLER cskel27-ANATOMIE ═══
+// Der Nutzer-Report (mit Referenz-Screenshot aus der ARDY-Browser-Demo):
+// „das Skelett ist falsch" — die App zeichnete nur einen 13-Gelenk-Stumpf
+// (keine Hände, keine HandEnd/Thumb1, keine Zehen, keine Schultern, keine
+// Nacken-/Brustwirbel; Arme hingen direkt an „spine"). Das ARDY-Modell
+// (manifest.skeleton, num_joints 27) liefert ALLE Gelenke als posedJoints —
+// sie wurden nur nie in srcPos übernommen. SRC_EDGES = exakte Eltern-Kind-
+// Hierarchie aus model.json (skeleton.parents); SRC_ROLES = feste Rolle für
+// jedes Gelenk (Reihenfolge = manifest.joint_names).
+export const SRC_EDGES = [
+  ['hips', 'spine'], ['spine', 'spine1'], ['spine1', 'spine2'], ['spine2', 'spine3'],
+  ['spine3', 'neck'], ['neck', 'head'],
+  ['spine3', 'rightShoulder'], ['rightShoulder', 'rightArm'], ['rightArm', 'rightForeArm'],
+  ['rightForeArm', 'rightHand'], ['rightHand', 'rightHandEnd'], ['rightHand', 'rightHandThumb1'],
+  ['spine3', 'leftShoulder'], ['leftShoulder', 'leftArm'], ['leftArm', 'leftForeArm'],
+  ['leftForeArm', 'leftHand'], ['leftHand', 'leftHandEnd'], ['leftHand', 'leftHandThumb1'],
+  ['hips', 'rightUpLeg'], ['rightUpLeg', 'rightLeg'], ['rightLeg', 'rightFoot'], ['rightFoot', 'rightToeBase'],
+  ['hips', 'leftUpLeg'], ['leftUpLeg', 'leftLeg'], ['leftLeg', 'leftFoot'], ['leftFoot', 'leftToeBase'],
+];
+export const SRC_ROLES = ['hips', 'spine', 'spine1', 'spine2', 'spine3', 'neck', 'head',
+  'rightShoulder', 'rightArm', 'rightForeArm', 'rightHand', 'rightHandEnd', 'rightHandThumb1',
+  'leftShoulder', 'leftArm', 'leftForeArm', 'leftHand', 'leftHandEnd', 'leftHandThumb1',
+  'rightUpLeg', 'rightLeg', 'rightFoot', 'rightToeBase',
+  'leftUpLeg', 'leftLeg', 'leftFoot', 'leftToeBase'];
+// Aliase NUR für die 14 Rollen, die nicht schon in BONE_ALIASES/ROLE_ORDER
+// stecken (Reihenfolge wie dort: Mixamo-Präfix zuerst für GLBs, dann plain
+// für cskel27/ARDY; normName stript alle Nicht-[a-z0-9]).
+const SRC_ROLE_ALIASES = {
+  spine1: ['mixamorig:spine1', 'spine1', 'spine_1', 'spine01', 'j_bip_c_spine1'],
+  spine2: ['mixamorig:spine2', 'spine2', 'spine_2', 'spine02', 'j_bip_c_spine2'],
+  spine3: ['mixamorig:spine3', 'spine3', 'spine_3', 'spine03', 'j_bip_c_spine3'],
+  neck: ['mixamorig:neck', 'neck', 'neck_01', 'j_bip_c_neck'],
+  rightShoulder: ['mixamorig:rightshoulder', 'rightshoulder', 'j_bip_r_shoulder', 'clavicle_r'],
+  leftShoulder: ['mixamorig:leftshoulder', 'leftshoulder', 'j_bip_l_shoulder', 'clavicle_l'],
+  rightHand: ['mixamorig:righthand', 'righthand', 'j_bip_r_hand', 'hand_r'],
+  leftHand: ['mixamorig:lefthand', 'lefthand', 'j_bip_l_hand', 'hand_l'],
+  rightHandEnd: ['mixamorig:righthandend', 'righthandend', 'right_hand_end'],
+  leftHandEnd: ['mixamorig:lefthandend', 'lefthandend', 'left_hand_end'],
+  rightHandThumb1: ['mixamorig:righthandthumb1', 'righthandthumb1', 'right_hand_thumb1'],
+  leftHandThumb1: ['mixamorig:lefthandthumb1', 'lefthandthumb1', 'left_hand_thumb1'],
+  rightToeBase: ['mixamorig:righttoebase', 'righttoebase', 'toe_r', 'j_bip_r_toe'],
+  leftToeBase: ['mixamorig:lefttoebase', 'lefttoebase', 'toe_l', 'j_bip_l_toe'],
+};
+/**
+ * v2.28.7: Löst die VOLLSTÄNDIGE cskel27-Rollenmenge auf einen Clip auf —
+ * ausschließlich für die Lehrer-Skelett-ANZEIGE (srcPos). Die IK-Rollen
+ * (bones aus resolveBones) bleiben unangetastet: Sie werden als Kern zuerst
+ * eingetragen, die 14 Zusatz-Rollen kommen per Alias dazu; ein Node wird
+ * NIE doppelt vergeben (Dedupe über used). Rückgabe: role → nodeIdx.
+ */
+export function resolveSrcJoints(clip, bones) {
+  const map = {};
+  const used = new Set();
+  for (const r of GHOST_ROLES) {
+    if (bones[r] !== undefined) { map[r] = bones[r]; used.add(bones[r]); }
+  }
+  for (const r of SRC_ROLES) {
+    if (map[r] !== undefined) continue;
+    const als = SRC_ROLE_ALIASES[r] || [];
+    for (const a of als) {
+      const idx = clip.bestNodeFor(a);
+      if (idx !== undefined && !used.has(idx)) { map[r] = idx; used.add(idx); break; }
+    }
+  }
+  return map;
+}
+/**
+ * v2.28.7: Knochen-Paare für die Skelett-Zeichnung aus SRC_EDGES, gefiltert
+ * auf vorhandene Rollen. Fehlt ein Zwischengelenk (altes 13-Rollen-Layout,
+ * schlankes GLB-Rig), wandert die Kante zum nächsten VORHANDENEN Ahnen —
+ * für das Legacy-Layout entsteht damit EXAKT die alte 12-Paare-Struktur
+ * (spine→head, spine→Arm …), für cskel27 der volle 26-Kanten-Baum.
+ * idxByRole: role → Index in srcJoints (oder nodeIdx — nur Präsenz zählt).
+ */
+export function srcBonePairs(idxByRole) {
+  const parentOf = {};
+  for (const [p, c] of SRC_EDGES) parentOf[c] = p;
+  const anchor = (role) => {
+    let cur = role;
+    for (let g = 0; g < 16; g++) {
+      const par = parentOf[cur];
+      if (par === undefined) return undefined; // Wurzel erreicht
+      if (idxByRole[par] !== undefined) return par;
+      cur = par;
+    }
+    return undefined;
+  };
+  const pairs = [];
+  for (const [p, c] of SRC_EDGES) {
+    if (idxByRole[c] === undefined) continue;
+    const a = idxByRole[p] !== undefined ? p : anchor(c);
+    if (a !== undefined && idxByRole[a] !== undefined) pairs.push([a, c]);
+  }
+  return pairs;
+}
 // Hilfsknochen-Namen, die KEIN echter Gelenk-Kandidat sind (assimp-Zerlegung,
 // Endblätter, IK-Hilfen) — in der Heuristik übersprungen.
 const BAD_NAME = /leaf|twist|roll|proxy|ik$|_ik|target|aim|effector|\$/;
@@ -246,10 +344,23 @@ export function retargetToRobot(clip, sim, log = () => {}) {
   const roleNames = ROLE_ORDER.filter(r => bones[r] !== undefined);
   log(`Knochen erkannt: ${roleNames.length}/${ROLE_ORDER.length} (${roleNames.map(r => clip.nodes[bones[r]].name).join(', ')})`);
 
+  // v2.28.7: Lehrer-Skelett in voller cskel27-Anatomie — resolveSrcJoints
+  // löst ALLE 27 Gelenke (NUR für die Anzeige; IK-Rollen unangetastet).
+  const srcMap = resolveSrcJoints(clip, bones);
+  let ghostRoles = SRC_ROLES.filter(r => srcMap[r] !== undefined);
+  if (ghostRoles.length < 8) {
+    // Absicherung (sollte kaum eintreten): Kern-Rollen erzwingen
+    for (const r of GHOST_ROLES) if (bones[r] !== undefined && srcMap[r] === undefined) srcMap[r] = bones[r];
+    ghostRoles = SRC_ROLES.filter(r => srcMap[r] !== undefined);
+  }
+  log(`Lehrer-Skelett: ${ghostRoles.length} Gelenke (${ghostRoles.length >= 20 ? 'volle cskel27-Anatomie' : 'reduziert — Rig liefert nicht alle Gelenke'})`);
+
   // Namen der gelösten Knochen für sampleWorld (normalisiert kompatibel)
   const wanted = roleNames.map(r => clip.nodes[bones[r]].name);
-  // Lehrer-Ghost: Rollen in fester Reihenfolge (nur vorhandene)
-  const ghostRoles = GHOST_ROLES.filter(r => bones[r] !== undefined);
+  for (const r of ghostRoles) {
+    const nm = clip.nodes[srcMap[r]].name;
+    if (!wanted.includes(nm)) wanted.push(nm);
+  }
 
   const nu = sim.nu;
   const A = sim.actByName;
@@ -529,6 +640,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
   const srcPos = new Float32Array(n * ghostRoles.length * 3);
   const srcJoints = ghostRoles.slice();
   const fiLFoot = ghostRoles.indexOf('leftFoot'), fiRFoot = ghostRoles.indexOf('rightFoot'); // v2.28.1
+  const fiLToe = ghostRoles.indexOf('leftToeBase'), fiRToe = ghostRoles.indexOf('rightToeBase'); // v2.28.7
   const worldPos = new Map();
   const FWD_GLB = [0, 0, 1]; // GLB: +Z ist Blickrichtung (Annahme wie Achsen-Mapping)
   const fwdTmp = [0, 0, 0];
@@ -628,8 +740,9 @@ export function retargetToRobot(clip, sim, log = () => {}) {
       console.log(`[RT f=${f}] hips=[${wq ? wq.map(v => v.toFixed(4)).join(',') : 'FEHLT'}] fwd=[${fwdTmp.map(v => v.toFixed(4)).join(',')}] rawYaw=${(rawYaw[f] * 180 / Math.PI).toFixed(2)}° scale=${scale} hipsIdx=${bones.hips}`);
     }
     // Lehrer-Ghost-Positionen (GLB Y-up → MuJoCo Z-up, skaliert auf m)
+    // v2.28.7: volle cskel27-Rollen via srcMap (IK-Rollen bleiben in bones)
     for (let gi = 0; gi < ghostRoles.length; gi++) {
-      const p = worldPos.get(bones[ghostRoles[gi]]);
+      const p = worldPos.get(srcMap[ghostRoles[gi]]);
       const o3 = (f * ghostRoles.length + gi) * 3;
       if (!p) { srcPos[o3] = srcPos[o3 + 1] = srcPos[o3 + 2] = NaN; continue; }
       srcPos[o3] = p[2] * scale; srcPos[o3 + 1] = p[0] * scale; srcPos[o3 + 2] = p[1] * scale;
@@ -642,7 +755,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
     // ist immer nahe 0 — der Lift ist dort ~0).
     // v2.28.1: Logik im exportierten groundSrcPosFrame — dieselbe Garantie
     // repariert auch GESPEICHERTE alte Clips beim Aktivieren (Migration).
-    groundSrcPosFrame(srcPos, f, ghostRoles.length, fiLFoot, fiRFoot);
+    groundSrcPosFrame(srcPos, f, ghostRoles.length, fiLFoot, fiRFoot, [fiLToe, fiRToe]);
   }
 
   // Lücken-Füllung (v2.5.0): Fehlt ein Zielrichtungs- oder Fußquat-Sample
@@ -1373,7 +1486,7 @@ function smooth(arr, win) {
 // Rollen, NaN-sicher). Sprünge (beide Füße über 0) bleiben unangetastet.
 // Wird von retargetToG1 je Frame UND von activateClip zur Reparatur alter
 // Bestände (vor der v2.28.0-Boden-Garantie generiert) benutzt.
-export function groundSrcPosFrame(srcPos, f, nR, fiL = -1, fiR = -1) {
+export function groundSrcPosFrame(srcPos, f, nR, fiL = -1, fiR = -1, extra = []) {
   const probe = (gi) => {
     const z = srcPos[(f * nR + gi) * 3 + 2];
     return Number.isFinite(z) ? z : Infinity;
@@ -1381,6 +1494,10 @@ export function groundSrcPosFrame(srcPos, f, nR, fiL = -1, fiR = -1) {
   let minZ = Infinity;
   if (fiL >= 0) minZ = Math.min(minZ, probe(fiL));
   if (fiR >= 0) minZ = Math.min(minZ, probe(fiR));
+  // v2.28.7: ToeBase-Gelenke sind der TATSÄCHLICH tiefste Punkt (Zehen
+  // liegen unter dem Fußgelenk) — ohne sie blieb die Zehenspitze ~1 cm
+  // im Boden hängen, sobald srcPos die volle cskel27-Anatomie trägt.
+  for (const ei of extra) if (ei >= 0) minZ = Math.min(minZ, probe(ei));
   if (!Number.isFinite(minZ)) {
     for (let gi = 0; gi < nR; gi++) minZ = Math.min(minZ, probe(gi));
   }
@@ -1396,9 +1513,10 @@ export function groundSrcPosFrame(srcPos, f, nR, fiL = -1, fiR = -1) {
 export function groundSrcPosTrack(srcPos, n, srcJoints) {
   const nR = srcJoints.length;
   const fiL = srcJoints.indexOf('leftFoot'), fiR = srcJoints.indexOf('rightFoot');
+  const fiLT = srcJoints.indexOf('leftToeBase'), fiRT = srcJoints.indexOf('rightToeBase'); // v2.28.7
   let lifted = 0;
   for (let f = 0; f < n; f++) {
-    if (groundSrcPosFrame(srcPos, f, nR, fiL, fiR) > 0) lifted++;
+    if (groundSrcPosFrame(srcPos, f, nR, fiL, fiR, [fiLT, fiRT]) > 0) lifted++;
   }
   return lifted;
 }

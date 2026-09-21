@@ -6,6 +6,7 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { resolveAppearance } from './appearance.js'; // v2.14.0: Aussehen-Editor
+import { srcBonePairs } from './retarget.js'; // v2.28.7: volle cskel27-Knochenkette
 
 // mjGEOM-Typen
 const G_PLANE = 0, G_HFIELD = 1, G_SPHERE = 2, G_CAPSULE = 3, G_ELLIPSOID = 4,
@@ -481,13 +482,11 @@ export class Renderer3D {
       this.sourceGhost.add(m);
       this._srcJointMeshes.push({ role, mesh: m });
     }
-    const PAIRS = [
-      ['hips', 'spine'], ['spine', 'head'],
-      ['hips', 'leftUpLeg'], ['leftUpLeg', 'leftLeg'], ['leftLeg', 'leftFoot'],
-      ['hips', 'rightUpLeg'], ['rightUpLeg', 'rightLeg'], ['rightLeg', 'rightFoot'],
-      ['spine', 'leftArm'], ['leftArm', 'leftForeArm'],
-      ['spine', 'rightArm'], ['rightArm', 'rightForeArm'],
-    ];
+    // v2.28.7: Knochenkette DYNAMISCH aus der cskel27-Hierarchie — neue
+    // Clips tragen 27 Gelenke (volle Anatomie mit Händen, Zehen, Schultern,
+    // dichter Wirbelsäule, wie ARDY-Browser-Demo); ALTE gespeicherte Clips
+    // (13 Rollen) bekommen per Ahnen-Walk exakt die alte 12-Paare-Struktur.
+    const PAIRS = srcBonePairs(this._srcIdx);
     const limbMat = new THREE.MeshStandardMaterial({ color: 0x3fcf92, roughness: 0.6, transparent: true, opacity: 0.7 });
     this._srcLimbs = [];
     for (const [a, b] of PAIRS) {
