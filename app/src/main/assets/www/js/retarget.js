@@ -1402,3 +1402,32 @@ export function groundSrcPosTrack(srcPos, n, srcJoints) {
   }
   return lifted;
 }
+
+// ═══ v2.28.3 — ARDY-VERSUCHS-QUALITÄT (für Auto-Retry) ═══
+// Bewertet EINEN Generierungsversuch rein funktional (testbar in Node):
+//   ▸ collapsed: die Hüftenhöhe (motion.h) sinkt unter die G1-Stehhöhe —
+//     der Geist würde als Haufen am Boden liegen (Nutzer-Screenshot 2026-09-21)
+//   ▸ sanityBad: der Sanitizer musste eingreifen (NaN-Frames gehalten oder
+//     > 15 % der Frames bone-repariert) — der Versuch ist verdächtig
+//   ▸ score: höher = besser; saubere Versuche schlagen immer kollabierte,
+//     unter Gleichen zählt höchste hMax, dann hMin (am wenigsten eingefallen)
+// Schwellen UNVERÄNDERT von der v2.28.1-Kollaps-Warnung übernommen
+// (minimale Parameter für maximale Konsistenz).
+export function ardyMotionQuality(motion, sanity, frameCount) {
+  let hMin = Infinity, hMax = -Infinity;
+  const h = motion && motion.h;
+  if (h && h.length) {
+    for (let i = 0; i < h.length; i++) {
+      const v = h[i];
+      if (Number.isFinite(v)) { if (v < hMin) hMin = v; if (v > hMax) hMax = v; }
+    }
+  }
+  if (!Number.isFinite(hMin) || !Number.isFinite(hMax)) { hMin = 0; hMax = 0; } // leer/NaN-Track = Kollaps
+  const collapsed = hMax < 0.55 || hMin < 0.32;
+  const fc = frameCount || 0;
+  const sanityBad = !!sanity && fc > 0 &&
+    (sanity.nanFrames > 0 || sanity.fixedFrames > fc * 0.15);
+  const bad = collapsed || sanityBad;
+  const score = (bad ? 0 : 1e9) + hMax * 1e3 + hMin;
+  return { hMin, hMax, collapsed, sanityBad, bad, score };
+}

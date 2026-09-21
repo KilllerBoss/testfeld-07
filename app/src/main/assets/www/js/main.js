@@ -13,7 +13,7 @@ import { UI } from './ui.js';
 import { PPO, SoftMoEPolicy, finiteArr } from './train.js';
 import { RNG } from './math.js';
 import { GlbClip } from './glb.js';
-import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips
+import { retargetToG1, retargetToRobot, RT_ALG, findFootGeoms, groundSrcPosTrack, ardyMotionQuality } from './retarget.js'; // v2.28.1: Boden-Reparatur für gespeicherte Clips · v2.28.3: Versuchs-Qualität für Auto-Retry
 import { makeMotionTask, MOTION_R } from './motiontask.js';
 import { makeRecoveryTask, RECOVERY_R } from './recoverytask.js';
 import { PluginHost, BUILTIN_PLUGINS, compilePlugin } from './plugins.js';
@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.2'; // v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
+const VERSION = '2.28.3'; // v2.28.3: ARDY AUTO-RETRY — kollabiert/instabil ein Versuch, wird automatisch mit neuem Seed erneut generiert (bis 3 Versuche, bestes Ergebnis gewinnt; Quality-Funktion ardyMotionQuality in retarget.js). v2.28.2: ARDY-EXPLOSIONS-FIX (Decoder IMMER fp32 — der echte fp16-Decoder erzeugt auf WebGPU-f16-Geräten explodierte posedJoints: „Streifen“-Skeleton + zappelnder Geist) + Sanitizer (NaN-Frames halten, Knochenlängen reparieren, Metriken) + Denoiser-Endlichkeits-Wache + klare Meldungen. v2.28.1: Boden-Reparatur + ARDY-Overlay + Geist-lenk-Standard. v2.28.0: Geist lenken + Boden-Garantie.
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -3350,35 +3350,62 @@ function initArdy() {
     try {
       const rt = await ensureRuntime();
       const seedRaw = seedEl.value.trim();
-      const seed = seedRaw ? (Number.isFinite(parseInt(seedRaw, 10)) ? parseInt(seedRaw, 10) : seedRaw) : undefined;
+      const seed0 = seedRaw ? (Number.isFinite(parseInt(seedRaw, 10)) ? parseInt(seedRaw, 10) : seedRaw) : undefined;
       const cfg = parseFloat(cfgEl.value);
       const seconds = parseFloat(durEl.value) || 5;
       const liveOn = liveEl ? !!liveEl.checked : false;
-      log('ARDY Mini: „' + prompt + '“ — ' + seconds + ' s' + (seed !== undefined ? ' · Seed ' + seed : '') + (Number.isFinite(cfg) ? ' · CFG ' + cfg : '') + (liveOn ? ' · LIVE-Steuerung an' : ''));
-      const out = await rt.generate({
-        prompt, seconds,
-        seed, cfgWeight: Number.isFinite(cfg) ? cfg : undefined,
-        signal: S.ardyAbort.signal,
-        // v2.26.0: LIVE — Prompt-Feld wird an jedem Fensteranfang gelesen;
-        // eine Änderung lenkt die laufende Bewegung sofort um.
-        getLivePrompt: liveOn ? () => deToEn(promptEl.value || '').trim() : undefined,
-        onProgress: (p) => {
-          if (p.stage === 'denoising') {
-            const frac = p.total > 0 ? p.completed / p.total : 0;
-            statusEl.textContent = 'Denoising ' + p.completed + '/' + p.total;
-            setBar(frac);
-            if (pctEl) pctEl.textContent = Math.round(frac * 100) + ' %';
-            if (genEl) genEl.textContent = 'Fenster ' + Math.ceil(p.completed / Math.max(1, p.total / Math.max(1, Math.ceil(seconds * rt.fps / 16)))) + '/' + Math.ceil(seconds * rt.fps / 16);
-          } else if (p.stage === 'decoding') {
-            statusEl.textContent = 'Decodieren … Frame ' + (p.frame || 0);
-            setBar(0.97);
-            if (pctEl) pctEl.textContent = '99 %';
-          } else if (p.stage === 'encoding-text') {
-            statusEl.textContent = 'Text kodieren … (Live-Prompt möglich)';
-          }
-        },
-      });
-      log('ARDY Mini: ' + out.frameCount + ' Frames @ ' + out.fps + ' FPS (' + out.duration.toFixed(1) + ' s)' + (out.promptsLive ? ' · Live umgelenkt auf „' + out.promptsLive + '“' : '') + ' — Retargeting cskel27 → G1 …');
+      log('ARDY Mini: „' + prompt + '“ — ' + seconds + ' s' + (seed0 !== undefined ? ' · Seed ' + seed0 : '') + (Number.isFinite(cfg) ? ' · CFG ' + cfg : '') + (liveOn ? ' · LIVE-Steuerung an' : ''));
+      // v2.28.3 AUTO-RETRY: kollabiert oder instabil (NaN/Reparatur) EIN Versuch,
+      // wird automatisch mit neuem Seed erneut generiert (bis 3 Versuche) — das
+      // BESTE Ergebnis wird übernommen. Der Nutzer sieht keinen Geist-Haufen
+      // mehr (Screenshot 2026-09-21), nur eine klare Meldung, falls ALLE
+      // Versuche kippen. Schwellen: unverändert v2.28.1-Kollaps-Warnung.
+      const ARDY_MAX_ATTEMPTS = 3;
+      let best = null, attemptsUsed = 0;
+      for (let attempt = 1; attempt <= ARDY_MAX_ATTEMPTS; attempt++) {
+        attemptsUsed = attempt;
+        const useSeed = attempt === 1 ? seed0 : (typeof seed0 === 'number' ? seed0 + attempt * 101 : undefined);
+        if (attempt > 1) {
+          const why = best && best.q && best.q.collapsed ? 'kollabiert' : 'instabil (Decoder)';
+          log('ARDY Mini: Versuch ' + attempt + '/' + ARDY_MAX_ATTEMPTS + ' mit neuem Seed' + (useSeed !== undefined ? ' ' + useSeed : ' (zufällig)') + ' — vorheriger Versuch ' + why);
+          statusEl.textContent = 'Neuer Versuch ' + attempt + '/' + ARDY_MAX_ATTEMPTS + ' …';
+          setBar(0);
+          if (pctEl) pctEl.textContent = '0 %';
+        }
+        const out = await rt.generate({
+          prompt, seconds,
+          seed: useSeed, cfgWeight: Number.isFinite(cfg) ? cfg : undefined,
+          signal: S.ardyAbort.signal,
+          // v2.26.0: LIVE — Prompt-Feld wird an jedem Fensteranfang gelesen;
+          // eine Änderung lenkt die laufende Bewegung sofort um.
+          getLivePrompt: liveOn ? () => deToEn(promptEl.value || '').trim() : undefined,
+          onProgress: (p) => {
+            if (p.stage === 'denoising') {
+              const frac = p.total > 0 ? p.completed / p.total : 0;
+              statusEl.textContent = 'Denoising ' + p.completed + '/' + p.total;
+              setBar(frac);
+              if (pctEl) pctEl.textContent = Math.round(frac * 100) + ' %';
+              if (genEl) genEl.textContent = 'Fenster ' + Math.ceil(p.completed / Math.max(1, p.total / Math.max(1, Math.ceil(seconds * rt.fps / 16)))) + '/' + Math.ceil(seconds * rt.fps / 16);
+            } else if (p.stage === 'decoding') {
+              statusEl.textContent = 'Decodieren … Frame ' + (p.frame || 0);
+              setBar(0.97);
+              if (pctEl) pctEl.textContent = '99 %';
+            } else if (p.stage === 'encoding-text') {
+              statusEl.textContent = 'Text kodieren … (Live-Prompt möglich)';
+            }
+          },
+        });
+        log('ARDY Mini: ' + out.frameCount + ' Frames @ ' + out.fps + ' FPS (' + out.duration.toFixed(1) + ' s)' + (out.promptsLive ? ' · Live umgelenkt auf „' + out.promptsLive + '“' : '') + ' — Retargeting cskel27 → G1 …');
+        statusEl.textContent = 'Retargeting auf G1 …';
+        const clip = new ArdyClip(out);
+        const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
+        const q = ardyMotionQuality(motion, out.sanity, out.frameCount); // v2.28.3
+        if (!best || q.score > best.q.score) best = { out, motion, q };
+        if (!q.bad) break;
+        log('ARDY Mini: Versuch ' + attempt + ' verworfen (' + (q.collapsed ? 'kollabiert, Hüftenhöhe ' + q.hMin.toFixed(2) + '–' + q.hMax.toFixed(2) + ' m' : 'instabile Decoder-Ausgabe — Sanitizer hätte eingreifen müssen') + ')', 'warn');
+      }
+      const out = best.out, motion = best.motion;
+      if (attemptsUsed > 1 && !best.q.bad) log('ARDY Mini: sauberes Ergebnis nach ' + attemptsUsed + ' Versuchen — übernommen', 'ok');
       // v2.28.2 SANITY-MELDUNG: der Sanitizer hat NaN-Frames gehalten /
       // Knochenlängen repariert — dem Nutzer KLAR sagen (trennt App-Fix
       // von Modell-Ausreißer) statt still weiterzuarbeiten.
@@ -3386,19 +3413,14 @@ function initArdy() {
         log('ARDY-Warnung: instabile Decoder-Ausgabe automatisch repariert (NaN-Frames ' + out.sanity.nanFrames + ', reparierte Frames ' + out.sanity.fixedFrames + '/' + out.frameCount + ', max. Knochenfehler ' + Math.round(out.sanity.maxBoneErr * 100) + ' %) — bitte anderen Prompt oder Seed probieren', 'warn');
         ui.toast('Generierung instabil — automatisch repariert', true, 4500);
       }
-      statusEl.textContent = 'Retargeting auf G1 …';
-      const clip = new ArdyClip(out);
-      const motion = retargetToG1(clip, S.sim, (m) => log('  ' + m));
       const name = (label ? 'ARDY · ' + label : 'ARDY · ' + prompt.slice(0, 24)) + ' (KI)';
       const packed = packMotion(motion);
-      // v2.28.1 KOLLAPS-WARNUNG: driftet die Generierung (ARDY Mini ist
-      // autoregressiv — lange/unübliche Prompts können kollabieren), sage
-      // es KLAR — der Nutzer soll App-Fehler von Modell-Ausreißern trennen.
-      let hMin = Infinity, hMax = -Infinity;
-      for (let i = 0; i < motion.h.length; i++) { hMin = Math.min(hMin, motion.h[i]); hMax = Math.max(hMax, motion.h[i]); }
-      if (hMax < 0.55 || hMin < 0.32) {
-        log('ARDY-Warnung: die generierte Bewegung kollabiert (Hüftenhöhe ' + hMin.toFixed(2) + '–' + hMax.toFixed(2) + ' m) — bitte anderen Prompt oder anderen Seed probieren', 'warn');
-        ui.toast('Bewegung kollabiert — anderen Prompt/Seed probieren', true, 4500);
+      // v2.28.1/3 KOLLAPS-MELDUNG: kollabiert die BESTE Generierung immer
+      // noch (ARDY Mini ist autoregressiv — lange/unübliche Prompts können
+      // kollabieren, Auto-Retry hat es schon 2× probiert), sage es KLAR.
+      if (best.q.collapsed) {
+        log('ARDY-Warnung: die generierte Bewegung kollabiert (Hüftenhöhe ' + best.q.hMin.toFixed(2) + '–' + best.q.hMax.toFixed(2) + ' m, ' + attemptsUsed + ' Versuche) — bitte anderen Prompt probieren', 'warn');
+        ui.toast('Bewegung kollabiert — anderen Prompt probieren', true, 4500);
       }
       const rec = {
         id: 'ardy_' + Date.now() + '_' + Math.floor(Math.random() * 1e4),
