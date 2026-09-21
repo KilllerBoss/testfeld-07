@@ -888,3 +888,20 @@ Stage Summary:
 - v2.28.3 / versionCode 44: ARDY AUTO-RETRY — kollabierte/instabile Generierungen werden jetzt automatisch 2× mit neuem Seed nachgeneriert; nur noch das beste Ergebnis landet im Geist.
 - Zusammen mit v2.28.2 (fp16-Decoder-Explosion) sind damit BEIDE ARDY-Fehlbilder abgedeckt: NaN-„Streifen" (fp32-Decoder + Sanitizer) und Pose-Kollaps (Auto-Retry + Best-Wahl).
 - Hinweis an den Nutzer: v2.28.2 installieren war wahrscheinlich nie erfolgt (2 Downloads = nur Verifikation) — jetzt direkt v2.28.3 laden.
+
+---
+Task ID: 55-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.3 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35561374241 + Tag-Run 35561375900 BEIDE success; Worklog-Commit a41695f auf main
+- Release AUTOMATISCH durch den Workflow erstellt: id 392697233, published 2026-09-21T04:33:52Z, Asset lertrain.apk 28.127.773 bytes (state uploaded)
+- Integrität: Asset anonym geladen → aapt versionCode 44 / versionName 2.28.3 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot) ✓
+- Code-Stichprobe im CI-APK: ARDY_MAX_ATTEMPTS = 3, VERSION 2.28.3, ardyMotionQuality — nachweislich enthalten ✓
+- Anonymer Download verifiziert (HTTP 206 auf Range-Request = frei erreichbar) ✓
+- CI-sha256 a4cde6f5… (lokal ea7e375a… — Zip-Metadaten, Signatur entscheidend)
+
+Stage Summary:
+- Release v2.28.3 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.3/lertrain.apk
+- Beide ARDY-Fehlbilder abgedeckt: NaN-„Streifen" (v2.28.2: fp32-Decoder + Sanitizer) und Pose-Kollaps (v2.28.3: Auto-Retry bis 3 Versuche, bestes Ergebnis gewinnt)
