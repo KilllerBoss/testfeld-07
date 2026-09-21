@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WWW = path.join(ROOT, 'app/src/main/assets/www');
-const { SRC_EDGES, SRC_ROLES, GHOST_ROLES, resolveSrcJoints, srcBonePairs, groundSrcPosFrame, groundSrcPosTrack } =
+const { SRC_EDGES, SRC_ROLES, GHOST_ROLES, resolveSrcJoints, srcBonePairs, groundSrcPosFrame, groundSrcPosTrack, reproportionSrcPos, fitSrcPosToRobot } =
   await import(path.join(WWW, 'js/retarget.js'));
 const { packMotion, unpackMotion } = await import(path.join(WWW, 'js/glbstore.js'));
 
@@ -210,10 +210,10 @@ console.log('■ 5) pack/unpack mit 27 Rollen');
 console.log('■ 6) Verdrahtungs-Pins');
 {
   const main = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
-  ok(/const VERSION = '2\.28\.7'/.test(main), "main.js VERSION '2.28.7'");
+  ok(/const VERSION = '2\.28\.7'/.test(main) || /const VERSION = '2\.28\.8'/.test(main), "main.js VERSION 2.28.7/2.28.8");
   const grad = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(/versionCode 48/.test(grad), 'build.gradle versionCode 48');
-  ok(/versionName "2\.28\.7"/.test(grad), 'build.gradle versionName 2.28.7');
+  ok(/versionCode 48/.test(grad) || /versionCode 49/.test(grad), 'build.gradle versionCode 48/49');
+  ok(/versionName "2\.28\.7"/.test(grad) || /versionName "2\.28\.8"/.test(grad), 'build.gradle versionName 2.28.7/2.28.8');
   const rt = readFileSync(path.join(WWW, 'js/retarget.js'), 'utf8');
   ok(/export function resolveSrcJoints/.test(rt), 'retarget.js: resolveSrcJoints exportiert');
   ok(/export function srcBonePairs/.test(rt), 'retarget.js: srcBonePairs exportiert');
@@ -228,6 +228,92 @@ console.log('■ 6) Verdrahtungs-Pins');
   const ardy = readFileSync(path.join(WWW, 'js/ardy.js'), 'utf8');
   ok(/mirrorArdyOutputX/.test(ardy), 'ardy.js: X-Spiegelung unverändert vorhanden');
   ok(/DECODER_FP32_BYTES = 71642198/.test(ardy), 'ardy.js: fp32-Fingerprint unverändert');
+}
+
+// ── 6) reproportionSrcPos — Knochenlängen-Transfer (v2.28.8) ──
+console.log('■ 6) reproportionSrcPos (Knochenlängen-Transfer)');
+{
+  // Kette Hips→Spine→Spine1→Spine2 (vereinfacht): Richtungen aus dem Lehrer,
+  // Längen aus lens — die Kette muss AKKUMULIEREN (Eltern aus dem ÜBERTRAGENEN
+  // Stand). (head braucht neck/spine2/spine3 — Teilbaum ohne die Kante.)
+  const roles = ['hips', 'spine', 'spine1', 'spine2']; // Kette mit 3 Kanten
+  const n = 2;
+  const src = new Float32Array(n * 4 * 3);
+  for (let f = 0; f < n; f++) {
+    const b = f * 4 * 3;
+    // Lehrer: Hips (0,0,f) → Spine (0,0,0.5) → Spine1 (0,0,1.0) → Spine2 (0,0,1.5) — gerade hoch
+    src[b + 2] = f; src[b + 3 * 1 + 2] = 0.5 + f; src[b + 3 * 2 + 2] = 1.0 + f; src[b + 3 * 3 + 2] = 1.5 + f;
+  }
+  const lens = { spine: 0.2, spine1: 0.2, spine2: 0.2 };
+  const work = src.slice();
+  ok(reproportionSrcPos(work, roles, n, lens) === true, 'Transfer meldet Änderung');
+  const z = (f, r) => work[(f * 4 + roles.indexOf(r)) * 3 + 2];
+  ok(Math.abs(z(0, 'hips') - 0) < 1e-9, 'Hips = Anker unverändert');
+  ok(Math.abs((z(0, 'spine') - z(0, 'hips')) - 0.2) < 1e-6, 'Kante 1 = lens.spine', (z(0, 'spine') - z(0, 'hips')).toFixed(3));
+  ok(Math.abs((z(0, 'spine1') - z(0, 'spine')) - 0.2) < 1e-6, 'Kante 2 akkumuliert auf ÜBERTRAGENEM Elter', (z(0, 'spine1') - z(0, 'spine')).toFixed(3));
+  ok(Math.abs((z(0, 'spine2') - z(0, 'spine1')) - 0.2) < 1e-6, 'Kante 3 akkumuliert (Ketten-Bug gefixt)', (z(0, 'spine2') - z(0, 'spine1')).toFixed(3));
+  // Richtung erhalten: statt senkrecht schräger Lehrer-Knochen bleibt die Richtung
+  const src2 = new Float32Array(1 * 4 * 3);
+  src2[2] = 0; src2[3 + 2] = 0.5; src2[6 + 0] = 0.3; src2[6 + 2] = 1.0; src2[9 + 2] = 1.5; // spine1 seitlich versetzt
+  const w2 = src2.slice();
+  reproportionSrcPos(w2, roles, 1, { spine: 0.2, spine1: 0.2, head: 0.2 });
+  const dirBefore = [src2[6] - src2[3], src2[8] - src2[5]];
+  const dirAfter = [w2[6] - w2[3], w2[8] - w2[5]];
+  const cross = Math.abs(dirBefore[0] * dirAfter[1] - dirBefore[1] * dirAfter[0]);
+  ok(cross < 1e-6, 'Richtung des Lehrer-Knochens bleibt erhalten', 'cross=' + cross.toExponential(1));
+  // Idempotenz: 2. Transfer mit denselben Längen ändert nichts
+  const snap = w2.slice();
+  reproportionSrcPos(w2, roles, 1, { spine: 0.2, spine1: 0.2, head: 0.2 });
+  ok(w2.every((v, i) => Math.abs(v - snap[i]) < 1e-6), 'idempotent (2. Transfer = identisch)');
+  // NaN-Frame bleibt NaN, leeres lens = unverändert
+  const src3 = new Float32Array(1 * 4 * 3); src3[6] = NaN;
+  const w3 = src3.slice();
+  reproportionSrcPos(w3, roles, 1, { spine: 0.2, spine1: 0.2, head: 0.2 });
+  ok(Number.isNaN(w3[6]), 'NaN-Elter → Kind NaN (Renderer versteckt)');
+  const w4 = src2.slice();
+  reproportionSrcPos(w4, roles, 1, {});
+  ok(w4.every((v, i) => Math.abs(v - src2[i]) < 1e-6), 'ohne lens-Einträge: Lehrer-Längen bleiben');
+  ok(reproportionSrcPos(null, roles, 1, lens) === false, 'Guard: null → false');
+}
+
+// ── 7) fitSrcPosToRobot überspringt srcRig-Motion ──────────
+console.log('■ 7) srcRig-Marker + Persistenz');
+{
+  const n = 4, nR = 27;
+  const srcPos = new Float32Array(n * nR * 3);
+  for (let i = 2; i < srcPos.length; i += 3) srcPos[i] = 0.9;
+  const m = { q: new Float32Array(n * 29), h: new Float32Array(n).fill(0.78), root: new Float32Array(2 * n), yaw: new Float32Array(n), baseQ: new Float32Array(4 * n), n, nu: 29, fps: 20, duration: n / 20, srcPos, srcJoints: SRC_ROLES.slice(), srcRig: 1 };
+  ok(fitSrcPosToRobot(m) === 0, 'srcRig=1 → uniformer Fit übersprungen (Roboter-Längen schon da)');
+  const m2 = Object.assign({}, m, { srcRig: 0 });
+  const F = fitSrcPosToRobot(m2);
+  ok(F > 0, 'ohne srcRig: Fit wirkt weiterhin (Legacy-Pfad)', 'F=' + F.toFixed(3));
+  // Persistenz
+  const rec = JSON.parse(JSON.stringify(packMotion(m)));
+  ok(rec.srcRig === 1, 'packMotion persistiert srcRig');
+  const back = unpackMotion(rec, 'ardy');
+  ok(back.srcRig === 1, 'unpackMotion erhält srcRig');
+  const rec2 = JSON.parse(JSON.stringify(packMotion(m2)));
+  ok((unpackMotion(rec2, 'ardy').srcRig || 0) === 0, 'srcRig=0-Roundtrip (alte Datensätze)');
+}
+
+// ── 8) Verdrahtung ─────────────────────────────────────────
+console.log('■ 8) Verdrahtungs-Pins');
+{
+  const main = readFileSync(path.join(WWW, 'js/main.js'), 'utf8');
+  ok(/const VERSION = '2\.28\.8'/.test(main), "main.js VERSION '2.28.8'");
+  const grad = readFileSync(path.join(ROOT, 'app/build.gradle'), 'utf8');
+  ok(/versionCode 49/.test(grad), 'build.gradle versionCode 49');
+  ok(/versionName "2\.28\.8"/.test(grad), 'build.gradle versionName 2.28.8');
+  const rt = readFileSync(path.join(WWW, 'js/retarget.js'), 'utf8');
+  ok(/export function reproportionSrcPos/.test(rt), 'retarget.js: reproportionSrcPos exportiert');
+  ok(/if \(motion\.srcRig\) return 0;/.test(rt), 'fitSrcPosToRobot: srcRig-Skip');
+  ok(/let srcRig = 0;/.test(rt) && /srcRig, \/\/ v2\.28\.8/.test(rt), 'retargetToRobot: srcRig gemessen + zurückgegeben');
+  ok(/const shoulderOf = \(elbowBody\)/.test(rt), 'Schulter = höchster Vorfahre des Ellbogens');
+  ok(/tMin\[f\] - \(Number\.isFinite\(m\) \? m : tMin\[f\]\)/.test(rt), 'Boden-BEZIEHUNG des Lehrers erhalten (senken UND heben)');
+  const gs = readFileSync(path.join(WWW, 'js/glbstore.js'), 'utf8');
+  ok(/srcRig: motion\.srcRig \|\| 0/.test(gs) && /srcRig: rec\.srcRig \|\| 0/.test(gs), 'glbstore: srcRig persistiert');
+  const ardy = readFileSync(path.join(WWW, 'js/ardy.js'), 'utf8');
+  ok(/mirrorArdyOutputX/.test(ardy), 'ardy.js: X-Spiegelung unverändert vorhanden');
 }
 
 console.log('\n═══ ERGEBNIS: ' + pass + ' bestanden, ' + fail + ' fehlgeschlagen ═══');

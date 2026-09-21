@@ -152,6 +152,58 @@ export function srcBonePairs(idxByRole) {
   }
   return pairs;
 }
+/**
+ * v2.28.8 — KNOCHENLÄNGEN-TRANSFER: Das grüne Lehrer-Skelett trug Menschen-
+ * Proportionen (cskel27 ≈ 1,7-m-Mensch) — selbst nach dem uniformen Höhen-Fit
+ * ragten Knochenspitzen über den kompakteren G1 hinaus (Nutzer: „Er ist nicht
+ * an den Skelett, sondern etwas innen. Als wäre es nicht Skelett sondern
+ * Exoskelett"). Diese Funktion baut srcPos Frame für Frame entlang der
+ * cskel27-Hierarchie NEU auf: die RICHTUNG jedes Knochens kommt aus den
+ * Lehrer-Daten (Pose/Winkel bleiben exakt erhalten), die LÄNGE kommt aus
+ * `lens` (am Roboter gemessene Gliedmaßen-Längen). Ohne Eintrag in lens
+ * bleibt die Lehrer-Länge. Hüfte = Anker bleibt unverändert; die Füße muss
+ * der Aufrufer danach neu erden (groundSrcPosFrame) — die Hüfte landet dann
+ * automatisch auf der Bein-Reichweite des Roboters.
+ * NUR für volle cskel27-Layouts (srcJoints.length === 27) — Legacy-13-Clips
+ * behalten den uniformen Fit. Idempotent (Längen bereits = lens → s = 1).
+ * lens: childRole → Länge (m). Rückgabe: true wenn etwas geändert wurde.
+ */
+export function reproportionSrcPos(srcPos, srcJoints, n, lens) {
+  if (!srcPos || !srcJoints || !n || !lens) return false;
+  const nR = srcJoints.length;
+  if (srcPos.length !== 3 * n * nR) return false;
+  const idx = {};
+  for (let i = 0; i < srcJoints.length; i++) idx[srcJoints[i]] = i;
+  const edges = [];
+  for (const [p, c] of SRC_EDGES) { // Eltern-vor-Kind (Baumreihenfolge)
+    if (c !== 'hips' && idx[c] !== undefined && idx[p] !== undefined) edges.push([p, c]);
+  }
+  const out = new Float32Array(srcPos.length);
+  out.set(srcPos); // NaN-Rahmen & Hüfte als Basis
+  let touched = 0;
+  for (let f = 0; f < n; f++) {
+    const P = (r) => (f * nR + idx[r]) * 3;
+    for (const [p, c] of edges) {
+      const op = P(p), oc = P(c);
+      const ox = srcPos[op], oy = srcPos[op + 1], oz = srcPos[op + 2]; // ORIGINAL-Elter (Lehrer-Richtung)
+      const cx = srcPos[oc], cy = srcPos[oc + 1], cz = srcPos[oc + 2]; // ORIGINAL-Kind (Lehrer-Richtung)
+      const oOut = P(c);
+      if (!Number.isFinite(ox) || !Number.isFinite(cx)) { out[oOut] = out[oOut + 1] = out[oOut + 2] = NaN; continue; }
+      const dx = cx - ox, dy = cy - oy, dz = cz - oz;
+      const l = Math.hypot(dx, dy, dz);
+      if (l < 1e-9) { out[oOut] = out[op]; out[oOut + 1] = out[op + 1]; out[oOut + 2] = out[op + 2]; continue; }
+      const px = out[op], py = out[op + 1], pz = out[op + 2]; // ÜBERTRAGENER Elter (Kette akkumuliert!)
+      if (!Number.isFinite(px)) { out[oOut] = out[oOut + 1] = out[oOut + 2] = NaN; continue; }
+      const L = Number.isFinite(lens[c]) && lens[c] > 1e-6 ? lens[c] : l;
+      const s = L / l;
+      out[oOut] = px + dx * s; out[oOut + 1] = py + dy * s; out[oOut + 2] = pz + dz * s;
+      touched++;
+    }
+  }
+  if (!touched) return false;
+  srcPos.set(out);
+  return true;
+}
 // Hilfsknochen-Namen, die KEIN echter Gelenk-Kandidat sind (assimp-Zerlegung,
 // Endblätter, IK-Hilfen) — in der Heuristik übersprungen.
 const BAD_NAME = /leaf|twist|roll|proxy|ik$|_ik|target|aim|effector|\$/;
@@ -1268,6 +1320,150 @@ export function retargetToRobot(clip, sim, log = () => {}) {
     h[f] = Math.min(prof.hMax, Math.max(prof.hMin, h[f] - lowest));
   }
 
+  // ── v2.28.8: KNOCHENLÄNGEN-TRANSFER — Skelett auf die ROBOTER-Gliedmaßen ──
+  // Menschen-Proportionen (cskel27) um den kompakteren G1 wirken als „Exo-
+  // skelett" (Nutzer-Screenshot: Wirbelsäule über dem Kopf, Arme/Beine außer-
+  // halb der Roboter-Gliedmaßen). Fix: RICHTUNGEN aus den Lehrer-Daten,
+  // LÄNGEN vom Roboter (Nullpose-Distanzen der Körper-Ursprünge — Segmente
+  // sind starr, also posensunabhängig messbar). Nur bei vollem cskel27-
+  // Layout; Legacy-13-Clips bleiben beim uniformen Höhen-Fit.
+  let srcRig = 0;
+  try {
+    if (prof.hasLegs && srcJoints.length === SRC_ROLES.length) {
+      const dist0 = (b1, b2) => { const a = pos0Of(b1), c = pos0Of(b2); return Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]); };
+      // Lehrer-Knochenlängen (Median je Kante — stabil gegen Pose-Ausreißer)
+      const tLen = {};
+      for (const [p, c] of SRC_EDGES) {
+        const ip = srcJoints.indexOf(p), ic = srcJoints.indexOf(c);
+        if (ip < 0 || ic < 0) continue;
+        const Ls = [];
+        for (let f = 0; f < n; f++) {
+          const op = (f * srcJoints.length + ip) * 3, oc = (f * srcJoints.length + ic) * 3;
+          const l = Math.hypot(srcPos[oc] - srcPos[op], srcPos[oc + 1] - srcPos[op + 1], srcPos[oc + 2] - srcPos[op + 2]);
+          if (Number.isFinite(l) && l > 1e-6) Ls.push(l);
+        }
+        if (Ls.length) { Ls.sort((a, b) => a - b); tLen[c] = Ls[Math.floor(Ls.length / 2)]; }
+      }
+      const pelvis = sim.baseBody;
+      const lens = {};
+      let ok = true;
+      // Beine: Hüft-Gelenkbreite + OS + SB (beide Seiten, echte Körper)
+      const legF = {};
+      for (const side of ['left', 'right']) {
+        const B = G1B[side];
+        if (!B || B.hip < 0 || B.knee < 0 || B.ankle < 0) { ok = false; break; }
+        lens[side + 'UpLeg'] = dist0(pelvis, B.hip);
+        lens[side + 'Leg'] = dist0(B.hip, B.knee);
+        lens[side + 'Foot'] = dist0(B.knee, B.ankle);
+        const tLeg = (tLen[side + 'UpLeg'] || 0) + (tLen[side + 'Leg'] || 0);
+        legF[side] = tLeg > 1e-6 ? (lens[side + 'UpLeg'] + lens[side + 'Leg']) / tLeg : 1;
+      }
+      // Zehen: proportional zum Bein-Faktor (kein eigener Toe-Körper messbar)
+      if (ok) for (const side of ['left', 'right']) {
+        lens[side + 'ToeBase'] = (tLen[side + 'ToeBase'] || 0.1) * (legF[side] || 1);
+      }
+      // Wirbelsäule + Schulterkette: der G1 hat KEINEN Kopf-/Torso-Anker-Body
+      // (waist_yaw_link liegt AUF dem Becken) und body_parentid[elbow] ist ein
+      // MITTLERES Oberarm-Glied (shoulder_yaw) — die Schulter selbst ist der
+      // HÖCHSTE Vorfahre des Ellbogens (argmax z auf der Elternkette).
+      //   Wirbelkette (Hüfte→Spine3) = senkrechte Distanz Becken→Schulter-Niveau
+      //   Schlüsselbein-Kette (Spine3→Schulter→Arm) = laterale Distanz
+      //   Oberarm = Schulter→Ellbogen · Unterarm = Ellbogen→Handgelenk
+      //   Nacken+Kopf = Lehrer × Wirbelsäulen-Faktor (kein Kopf-Körper messbar)
+      if (ok && prof.hasArms) {
+        const BL = G1B.left, BR = G1B.right;
+        const shoulderOf = (elbowBody) => { // höchster Vorfahre = Schultergelenk
+          let best = elbowBody, bestZ = pos0Of(elbowBody)[2], cur = elbowBody;
+          for (let g = 0; g < 6; g++) {
+            const par = sim.model.body_parentid[cur];
+            if (par === undefined || par <= 0) break;
+            const z = pos0Of(par)[2];
+            if (z <= bestZ + 1e-9) break; // nicht mehr steigend → Schulter erreicht
+            best = par; bestZ = z; cur = par;
+          }
+          return best;
+        };
+        if (BL && BL.elbow > 0 && BR && BR.elbow > 0) {
+          const shL = shoulderOf(BL.elbow), shR = shoulderOf(BR.elbow);
+          const p0 = pos0Of(pelvis);
+          const shZ = 0.5 * (pos0Of(shL)[2] + pos0Of(shR)[2]);
+          const center = [p0[0], p0[1], shZ]; // Schulter-Niveau auf der Mittelachse
+          const spineLen = Math.hypot(center[0] - p0[0], center[1] - p0[1], center[2] - p0[2]);
+          const clavL = Math.hypot(pos0Of(shL)[0] - center[0], pos0Of(shL)[1] - center[1], pos0Of(shL)[2] - center[2]);
+          const clavR = Math.hypot(pos0Of(shR)[0] - center[0], pos0Of(shR)[1] - center[1], pos0Of(shR)[2] - center[2]);
+          const tSpine = (tLen.spine || 0) + (tLen.spine1 || 0) + (tLen.spine2 || 0) + (tLen.spine3 || 0);
+          if (spineLen > 0.05 && tSpine > 1e-6) {
+            for (const c of ['spine', 'spine1', 'spine2', 'spine3']) {
+              if (tLen[c] !== undefined) lens[c] = spineLen * (tLen[c] / tSpine);
+            }
+            // Nacken+Kopf: proportional zur Wirbelsäulen-Kompression
+            const spineF = spineLen / tSpine;
+            const tNH = (tLen.neck || 0) + (tLen.head || 0);
+            if (tNH > 1e-6) {
+              if (tLen.neck !== undefined) lens.neck = tLen.neck * spineF;
+              if (tLen.head !== undefined) lens.head = tLen.head * spineF;
+            }
+            // Schlüsselbein-Ketten + Arme je Seite
+            for (const [side, shB, clav] of [['left', shL, clavL], ['right', shR, clavR]]) {
+              const B = G1B[side];
+              const tSh = (tLen[side + 'Shoulder'] || 0) + (tLen[side + 'Arm'] || 0);
+              if (clav > 0.02 && tSh > 1e-6) {
+                if (tLen[side + 'Shoulder'] !== undefined) lens[side + 'Shoulder'] = clav * (tLen[side + 'Shoulder'] / tSh);
+                if (tLen[side + 'Arm'] !== undefined) lens[side + 'Arm'] = clav * (tLen[side + 'Arm'] / tSh);
+              }
+              const upperArmLen = dist0(shB, B.elbow); // Schulter→Ellbogen
+              if (upperArmLen > 0.01) {
+                lens[side + 'ForeArm'] = upperArmLen;
+                const tFA = tLen[side + 'ForeArm'] || 0;
+                const armF = tFA > 1e-6 ? upperArmLen / tFA : 1;
+                if (B.wrist > 0 && dist0(B.elbow, B.wrist) > 0.01) {
+                  lens[side + 'Hand'] = dist0(B.elbow, B.wrist);
+                } else if (tLen[side + 'Hand'] !== undefined) {
+                  lens[side + 'Hand'] = tLen[side + 'Hand'] * armF;
+                }
+                const handF = (tLen[side + 'Hand'] > 1e-6 && lens[side + 'Hand'] !== undefined) ? lens[side + 'Hand'] / tLen[side + 'Hand'] : armF;
+                if (tLen[side + 'HandEnd'] !== undefined) lens[side + 'HandEnd'] = tLen[side + 'HandEnd'] * handF;
+                if (tLen[side + 'HandThumb1'] !== undefined) lens[side + 'HandThumb1'] = tLen[side + 'HandThumb1'] * handF;
+              }
+            }
+          }
+        }
+      }
+      // Anwenden (nur wenn die Kernsegmente sinnvoll sind)
+      let lensOk = ok && Object.keys(lens).length >= 12;
+      if (lensOk) for (const k in lens) if (!Number.isFinite(lens[k]) || lens[k] <= 0.005) { lensOk = false; break; }
+      if (lensOk) {
+        const fiLF = srcJoints.indexOf('leftFoot'), fiRF = srcJoints.indexOf('rightFoot');
+        const fiLT = srcJoints.indexOf('leftToeBase'), fiRT = srcJoints.indexOf('rightToeBase');
+        const groundIdx = [fiLF, fiRF, fiLT, fiRT].filter(i => i >= 0);
+        // Boden-BEZIEHUNG des Lehrers je Frame sichern (vorher messen): Stand-
+        // Frames haben min-Fuß = 0, Sprünge > 0 — nach dem Transfer wird die
+        // GLEICHE Min-Fußhöhe wiederhergestellt (das Skelett hat kürzere
+        // Roboter-Beine und würde sonst in der Lehrer-Hüfthöhe SCHWEBEN;
+        // groundSrcPosFrame hebt nur an und könnte das nicht senken).
+        const nR = srcJoints.length;
+        const tMin = new Float32Array(n);
+        for (let f = 0; f < n; f++) {
+          let m = Infinity;
+          for (const gi of groundIdx) { const z = srcPos[(f * nR + gi) * 3 + 2]; if (Number.isFinite(z)) m = Math.min(m, z); }
+          tMin[f] = Number.isFinite(m) ? m : 0;
+        }
+        if (reproportionSrcPos(srcPos, srcJoints, n, lens)) {
+          srcRig = 1;
+          for (let f = 0; f < n; f++) {
+            let m = Infinity;
+            for (const gi of groundIdx) { const z = srcPos[(f * nR + gi) * 3 + 2]; if (Number.isFinite(z)) m = Math.min(m, z); }
+            const dz = tMin[f] - (Number.isFinite(m) ? m : tMin[f]);
+            if (dz) for (let gi = 0; gi < nR; gi++) srcPos[(f * nR + gi) * 3 + 2] += dz;
+          }
+          log(`Skelett auf Roboter-Gliedmaßen übertragen (OS ${((lens.leftLeg || 0) * 100).toFixed(0)} cm, SB ${((lens.leftFoot || 0) * 100).toFixed(0)} cm, Oberarm ${((lens.leftForeArm || 0) * 100).toFixed(0)} cm, Unterarm ${((lens.leftHand || 0) * 100).toFixed(0)} cm)`);
+        }
+      }
+    }
+  } catch (e) {
+    log('Knochenlängen-Transfer übersprungen (' + (e && e.message ? e.message : e) + ') — uniformer Fit bleibt');
+  }
+
   // ── Locomotion-Bewertung: wandert die Bahn wirklich? ──
   // motiontask nutzt das, um den Loop-Rebase (Endlos-Laufen) nur bei echten
   // Bewegungs-Clips anzuwenden — bei Idles würde sonst der winzige
@@ -1290,6 +1486,7 @@ export function retargetToRobot(clip, sim, log = () => {}) {
     rawYaw, triadYaw, // Diagnose: Blick-Rohwert + Triaden-Yaw vor Unwrap
     locomotion, meanSpeed, // true = echte Fortbewegung (Loop-Rebase erlaubt)
     alg: RT_ALG, // Algorithmus-Version (glbstore/main: Auto-Re-Retarget alter Bestände)
+    srcRig, // v2.28.8: 1 = srcPos trägt Roboter-Knochenlängen (kein uniformer Fit nötig)
     scale, // Datei-Einheit → Meter (für den Original-Mesh-Wrap in render3d)
     mergedFrom: clip.mergedFrom || 0,
     mapped: roleNames,
@@ -1673,6 +1870,7 @@ export function smoothMotionPhysics(motion, opts = {}) {
 // Rückgabe: angewendeter Faktor (0 = nichts zu tun — schon passend/unsinnig).
 export function fitSrcPosToRobot(motion, opts = {}) {
   if (!motion || !motion.srcPos || !motion.srcJoints || !motion.n || !motion.h || !motion.h.length) return 0;
+  if (motion.srcRig) return 0; // v2.28.8: trägt bereits Roboter-Knochenlängen
   const n = motion.n, nR = motion.srcJoints.length;
   if (motion.srcPos.length !== 3 * n * nR) return 0;
   const target = motion.h[0];
