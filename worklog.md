@@ -928,3 +928,17 @@ Work Log:
 Stage Summary:
 - WURZELURSACHE DER GESAMTEN ARDY-SAGEN: (1) v2.28.2 fp16-Decoder-NaN („Streifen"), (2) v2.28.4 linkshändige Decoder-Welt („vertauscht/gespiegelt/falsches Skelett"). Beide bewiesen, beide gefixt, beide mit Real-Modell-Pins verankert.
 - v2.28.4 / versionCode 45: ARDY-Skeleton und Geist laufen jetzt anatomisch korrekt (links bleibt links).
+
+---
+Task ID: 56-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.4 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35563857196 + Tag-Run 35563858154 BEIDE success; Worklog-Commit 847542f auf main
+- Release automatisch durch den Workflow: v2.28.4 live, Asset lertrain.apk 28.129.057 bytes
+- Integrität: Asset anonym geladen → aapt versionCode 45 / versionName 2.28.4 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot) ✓ · Code-Stichprobe: mirrorArdyOutputX im CI-APK ✓
+
+Stage Summary:
+- Release v2.28.4 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.4/lertrain.apk
+- ARDY-Kette jetzt konventionskorrekt: fp32-Decoder (v2.28.2) + X-Spiegelung (v2.28.4) + Auto-Retry (v2.28.3) + Sanitizer — links bleibt links.
