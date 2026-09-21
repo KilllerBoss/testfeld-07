@@ -40,6 +40,9 @@ const HF_URL = (path) => 'https://huggingface.co/' + ARDY_REPO + '/resolve/' + A
 // dem GLEICHEN sicheren Ursprung aus. fetchModelFile prüft diese Liste
 // ZUERST — ARDY Mini läuft damit komplett ohne Hugging Face.
 let _imports = null;
+// v2.28.6: letzte abgelehnte Import-Datei (für klare Nutzer-Logmeldung)
+let _importRejection = null;
+export function ardyImportRejection() { return _importRejection; }
 
 /** Import-Liste neu von der nativen Brücke lesen. */
 export function refreshArdyImports() {
@@ -125,7 +128,25 @@ const DE_EN = [
 export function deToEn(prompt) {
   let s = String(prompt || '').trim();
   if (!s) return s;
+  // v2.28.6: PRE-Regeln über SENTINEL — (a) „steh still" zerfiel früher zu
+  // „steh stands still" (Kauderwelsch-Prompt → Out-of-Distribution →
+  // Müll-Motion), (b) die generische \bstill\b-Regel matchte das schon
+  // korrekte „stands still" erneut zu „stands stands still".
+  const PRE = [
+    [/\bsteh(?:e|t)?\s+still\b/g, 'stands still'],                     // DE
+    [/\bstehen\s+bleiben\b|\bbleib(?:e|t)?\s+(?:einfach\s+)?stehen\b/g, 'stands still'],
+    [/\bhalte(?:n)?\s+(?:einfach\s+)?still\b/g, 'stands still'],
+    [/\bstands?\s+still\b|\bstanding\s+still\b|\bstill\s+standing\b/g, 'stands still'], // EN-Identität
+  ];
+  let pre = false;
+  for (const [re, en] of PRE) { if (re.test(s)) { pre = true; s = s.replace(re, '\u0001'); } }
   for (const [re, en] of DE_EN) s = s.replace(re, en);
+  if (pre) s = s.replace(/\u0001/g, 'stands still');
+  // v2.28.6: HumanML3D-Trainingssätze haben fast immer ein Subjekt
+  // ("a person …") — ein subjektloser Kurzprompt ("idle" → "stands still")
+  // liegt außerhalb der Verteilung und kann Müll-Motion erzeugen.
+  // Fehlt ein Subjekt, wird "a person" vorangestellt.
+  if (!/\b(?:person|mann|frau|human|figure|child|boy|girl|man|woman|people|someone|somebody|crowd)\b/i.test(s)) s = 'a person ' + s;
   return s;
 }
 
@@ -387,7 +408,7 @@ async function cachePut(key, bytes) {
 }
 
 /** Datei laden: Import (Dateimanager) → Cache → HF-Download (mit Fortschritt) → entpackt cachen. */
-async function fetchModelFile(path, { onProgress, signal, label } = {}) {
+async function fetchModelFile(path, { onProgress, signal, label, expectedBytes } = {}) {
   // v2.27.0: 1) vom Gerät importierte Datei (Dateimanager) — kein HF nötig.
   // Die Datei liegt als Kopie im App-Ordner und wird same-origin ausgeliefert;
   // sie wird NICHT zusätzlich in den Cache Storage dupliziert (Platz sparen).
@@ -422,8 +443,20 @@ async function fetchModelFile(path, { onProgress, signal, label } = {}) {
           onProgress && onProgress({ stage: 'import ' + (label || path), completed: 1, total: 1, cached: true });
         }
         const out = path.endsWith('.gz') ? await gunzip(data) : data;
-        onProgress && onProgress({ stage: label || path, completed: 1, total: 1, cached: true });
-        return out;
+        // v2.28.6 IMPORT-GUARD: Der Import matcht NUR per Basisname — ein
+        // alter importierter fp16-Decoder (36 MB) würde heute auch die
+        // Anfrage "fp32/decoder.onnx.gz" beantworten und das Gerät würde
+        // WEITERHIN mit dem giftigen fp16-Decoder rechnen („Probleme
+        // bleiben über Updates gleich"). Ist eine erwartete Größe bekannt
+        // und weicht die importierte Datei ab → Import ÜBERSPRINGEN und
+        // aus Cache/HF laden (dort liegt die gepinnte Revision).
+        if (expectedBytes && out.length !== expectedBytes) {
+          _importRejection = 'Import „' + path.split('/').pop() + "\u201C hat " + (out.length / 1048576).toFixed(1)
+            + ' MB, erwartet ' + (expectedBytes / 1048576).toFixed(1) + ' MB (falsche Präzision/Version) — stattdessen wurde die korrekte Datei aus dem Cache/HF-Download geladen';
+        } else {
+          onProgress && onProgress({ stage: label || path, completed: 1, total: 1, cached: true });
+          return out;
+        }
       } catch (e) {
         if (e && e.name === 'AbortError') throw e;
         throw new Error('Importierte Datei kaputt: ' + imp.name + ' (' + (e && e.message ? e.message : e) + ') — bitte im ARDY-Panel löschen und erneut vom Gerät wählen');
@@ -914,10 +947,183 @@ let OrtTensor = null;
 export function setOrtTensorClass(cls) { OrtTensor = cls; }
 
 // ═══════════════════════════════════════════════════════════
+// v2.28.6: NUMERIK-INTEGRITÄTSPROBE — Geräte-Selbsttest.
+//
+// Beweislage (2026-09-21): Auf CPU (onnxruntime-node) generiert "idle"
+// ein perfektes Standbild (Hüfte 0,93 m konstant, 0 NaN, Knochenfehler
+// 0 %) — dieselbe App-Pipeline, die auf dem Gerät explodiert. Die
+// Explosion entsteht also NUR auf dem Gerät: (a) WebGPU-Kernel können
+// falsche Werte liefern (auch aus fp32-Graphen), (b) alte importierte
+// fp16-Dateien wurden per Basisname auch für fp32-Anfragen ausgeliefert.
+//
+// Gegen beides: Jede frisch erstellte Session rechnet EINEN festen,
+// synthetischen Prüfdurchlauf; die Prüfsummen (Σ|x|, max|x|, Spread)
+// müssen zur eingebaute CPU-Referenz (ardy_probe_reference.mjs, gleiche
+// Builder, gleiche Modelldateien) passen. Weicht ein Graph ab → Session
+// wird auf WASM neu erstellt und erneut geprüft (korrekt statt schnell).
+// ═══════════════════════════════════════════════════════════
+
+// Unkomprimierte Bytegröße des fp32-Decoders der gepinnten Revision —
+// Fingerabdruck gegen fp16-Dateien (≈ halbe Größe) und sonstigen Müll.
+export const DECODER_FP32_BYTES = 71642198;
+export const PROBE_SEED = 911741;
+export const PROBE_TOLERANCE = 0.35; // rel. Abweichung — korrektes GPU-Rauschen ≈1e-4, Explosion ≫10×
+
+/** Prüfsummen über einen Float-Array: Σ|x|, max|x|, Spread. null bei NaN/Inf. */
+export function tensorChecksums(data) {
+  let s2 = 0, absMax = 0, mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (!Number.isFinite(v)) return null;
+    const a = Math.abs(v);
+    s2 += a;
+    if (a > absMax) absMax = a;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  return { s2, absMax, spread: mx - mn };
+}
+
+/** Maximale relative Abweichung zweier Prüfsummen-Teile (0 = identisch). */
+export function checksumDeviation(got, ref) {
+  if (!got || !ref) return Infinity;
+  let dev = 0;
+  for (const k of ['s2', 'absMax', 'spread']) {
+    const r = ref[k], g = got[k];
+    if (!Number.isFinite(g)) return Infinity;
+    const d = Math.abs(g - r) / Math.max(Math.abs(r), 1e-9);
+    if (d > dev) dev = d;
+  }
+  return dev;
+}
+
+/** Maximale Abweichung über mehrere Ausgabe-Tensoren (Array von Teilen). */
+export function probeDeviation(gotParts, refParts) {
+  if (!Array.isArray(gotParts) || !Array.isArray(refParts) || gotParts.length !== refParts.length) return Infinity;
+  let dev = 0;
+  for (let i = 0; i < gotParts.length; i++) {
+    const d = checksumDeviation(gotParts[i], refParts[i]);
+    if (d > dev) dev = d;
+  }
+  return dev;
+}
+
+/** Fester Probe-Eingang: Text-Encoder (MiniLM-Tokenfolge, 6 Tokens). */
+export function buildTextEncoderProbeInput(manifest) {
+  const g = manifest.graphs.text_encoder.inputs;
+  const ids = BigInt64Array.from([101n, 1037n, 2724n, 4686n, 3401n, 102n]); // [CLS] a person stands still [SEP]
+  const L = ids.length;
+  const ones = BigInt64Array.from({ length: L }, () => 1n);
+  const zeros = BigInt64Array.from({ length: L }, () => 0n);
+  return {
+    [g.inputIds]: new OrtTensor('int64', ids, [1, L]),
+    [g.attentionMask]: new OrtTensor('int64', ones, [1, L]),
+    [g.tokenTypeIds]: new OrtTensor('int64', zeros, [1, L]),
+  };
+}
+
+/** Fester Probe-Eingang: Denoiser (ein DDIM-Schritt, synthetisches Fenster). */
+export function buildDenoiserProbeInput(manifest) {
+  const d = manifest.dimensions, g = manifest.graphs.denoiser.inputs;
+  const rng = new PortableRandom(PROBE_SEED);
+  const x = new Float32Array(d.max_tokens * d.hybrid_dim);
+  rng.fillNormal(x);
+  const tc = new Float32Array(2048);
+  rng.fillNormal(tc);
+  const genMask = new Float32Array(d.max_frames);
+  genMask.fill(1, 0, 40);
+  const genTokMask = new Float32Array(d.max_tokens);
+  genTokMask.fill(1, 0, 10);
+  return {
+    [g.cfgWeight]: new OrtTensor('float32', Float32Array.of(2), [1]),
+    [g.x]: new OrtTensor('float32', x, [1, d.max_tokens, d.hybrid_dim]),
+    [g.historyLength]: new OrtTensor('int64', BigInt64Array.of(0n), [1]),
+    [g.generationLength]: new OrtTensor('int64', BigInt64Array.of(40n), [1]),
+    [g.historyMask]: new OrtTensor('float32', new Float32Array(d.max_frames), [1, d.max_frames]),
+    [g.generationMask]: new OrtTensor('float32', genMask, [1, d.max_frames]),
+    [g.historyTokenMask]: new OrtTensor('float32', new Float32Array(d.max_tokens), [1, d.max_tokens]),
+    [g.generationTokenMask]: new OrtTensor('float32', genTokMask, [1, d.max_tokens]),
+    [g.textConditions]: new OrtTensor('float32', tc, [1, 1, 2048]),
+    [g.timestep]: new OrtTensor('int64', BigInt64Array.of(BigInt(manifest.diffusion.timesteps[0])), [1]),
+    [g.firstHeadingAngle]: new OrtTensor('float32', Float32Array.of(0), [1]),
+  };
+}
+
+/** Fester Probe-Eingang: Decoder (synthetische Hybrid-Tokens, 10 gültige Tokens). */
+export function buildDecoderProbeInput(manifest) {
+  const d = manifest.dimensions, g = manifest.graphs.decoder.inputs;
+  const rng = new PortableRandom(PROBE_SEED + 1);
+  const h = new Float32Array(d.max_tokens * d.hybrid_dim);
+  rng.fillNormal(h);
+  return {
+    [g.hybridTokens]: new OrtTensor('float32', h, [1, d.max_tokens, d.hybrid_dim]),
+    [g.motionPadMask]: new OrtTensor('float32', padMask(d, 10), [1, d.max_frames]),
+    [g.globalTranslation]: new OrtTensor('float32', Float32Array.of(0, 0, 0.79), [1, 3]),
+  };
+}
+
+/** Probe ausführen: fester Eingang → Prüfsummen der Ausgabe(n). */
+export async function probeSession(graph, session, manifest) {
+  const g = manifest.graphs[graph];
+  const feeds = graph === 'text_encoder' ? buildTextEncoderProbeInput(manifest)
+    : graph === 'denoiser' ? buildDenoiserProbeInput(manifest)
+      : buildDecoderProbeInput(manifest);
+  const res = await session.run(feeds);
+  const outs = graph === 'text_encoder' ? [res[g.outputs.textConditions]]
+    : graph === 'denoiser' ? [res[g.outputs.predX0]]
+      : [res[g.outputs.posedJoints], res[g.outputs.rootPositions]];
+  const parts = [];
+  for (const t of outs) {
+    if (!t || !t.data || !t.data.length) throw new Error('Probe-Ausgabe fehlt/leer');
+    const c = tensorChecksums(t.data);
+    if (!c) throw new Error('Probe lieferte nicht-endliche Werte (NaN/Inf)');
+    parts.push(c);
+  }
+  return parts;
+}
+
+/**
+ * Integritätswache über ALLE drei Graphen: weicht eine Session auf dem
+ * Gerät von der CPU-Referenz ab, wird sie auf WASM neu erstellt und
+ * erneut geprüft. recreateWasm(graph) → Promise<Session>.
+ * Rückgabe: Array von Klarnachrichten (für die Log-Ausgabe).
+ */
+export async function verifySessionIntegrity(sessions, manifest, recreateWasm, onNote) {
+  const notes = [];
+  for (const graph of ['text_encoder', 'denoiser', 'decoder']) {
+    const key = sessionKey(graph);
+    let dev = Infinity, chk = null;
+    try { chk = await probeSession(graph, sessions[key], manifest); dev = probeDeviation(chk, ARDY_PROBE_REFERENCE[graph]); }
+    catch (e) { dev = Infinity; }
+    if (Number.isFinite(dev) && dev <= PROBE_TOLERANCE) continue;
+    const why = Number.isFinite(dev) ? 'Abweichung ×' + dev.toFixed(1) : 'nicht-endliche Werte';
+    const msg = 'Integritätsprobe: ' + graph + ' liefert auf ' + (dev === Infinity && !chk ? 'defekter Session' : 'diesem GPU-Treiber') + ' falsche Werte (' + why + ') — Graph läuft jetzt korrekt auf WASM';
+    notes.push(msg);
+    onNote && onNote(msg);
+    sessions[key] = await recreateWasm(graph);
+    const chk2 = await probeSession(graph, sessions[key], manifest);
+    const dev2 = probeDeviation(chk2, ARDY_PROBE_REFERENCE[graph]);
+    if (!(Number.isFinite(dev2) && dev2 <= PROBE_TOLERANCE)) {
+      throw new Error('ARDY: ' + graph + ' liefert auch auf WASM falsche Werte (Abweichung ×' + (Number.isFinite(dev2) ? dev2.toFixed(1) : '∞') + ') — bitte Modell neu laden oder importieren');
+    }
+  }
+  return notes;
+}
+
+// Eingebrannte CPU-Referenz der Prüfsummen (erzeugt von
+// scripts/ardy/ardy_probe_reference.mjs mit DENSELBEN Buildern und
+// Modelldateien der gepinnten Revision). Struktur: graph → Tensor-Teile
+// → { s2 = Σ|x|, absMax = max|x|, spread = max−min }.
+export const ARDY_PROBE_REFERENCE = {"text_encoder":[{"s2":7397.154824867845,"absMax":49.330223083496094,"spread":88.88258361816406}],"denoiser":[{"s2":338.7531686555594,"absMax":1.412213683128357,"spread":2.5746169090270996}],"decoder":[{"s2":7366.0921318945475,"absMax":4.422393798828125,"spread":8.244404792785645},{"s2":268.56519591854885,"absMax":4.319784641265869,"spread":7.957102537155151}]};
+
+// ═══════════════════════════════════════════════════════════
 // Einstieg: Runtime laden (Manifest → Precision → Dateien →
 // Tokenizer → Sessions). Wird von main.js benutzt.
 // ═══════════════════════════════════════════════════════════
 let _runtimePromise = null;
+// v2.28.6: Probe-Ergebnisse des letzten Ladens (für die Log-Ausgabe)
+let _probeNotes = null;
+export function ardyProbeNotes() { return Array.isArray(_probeNotes) ? _probeNotes.slice() : null; }
 
 // v2.27.1: EIN Schlüsselvertrag für Session-Namen — loadArdyRuntime
 // schreibt unter diesen Keys, ArdyRuntime liest sie (_encodeText/
@@ -977,17 +1183,32 @@ export async function loadArdyRuntime(opts = {}) {
       executionProviders: caps.webgpu ? ['webgpu', 'wasm'] : ['wasm'],
     };
     const sessions = {};
+    const bytesByGraph = {};
     for (const graph of ['text_encoder', 'denoiser', 'decoder']) {
       // v2.28.2 FIX: Decoder IMMER aus fp32 (WebGPU-f16 explodiert) —
       // siehe modelFilePrecision() unten.
       const filePrecision = modelFilePrecision(graph, precision);
-      const bytes = await fetchModelFile(filePrecision + '/' + graph + '.onnx.gz', { onProgress, signal: opts.signal });
+      // v2.28.6: Decoder-Datei gegen den fp32-Fingerabdruck sichern —
+      // ein per Basisname matchender alter fp16-Import wird übersprungen.
+      const bytes = await fetchModelFile(filePrecision + '/' + graph + '.onnx.gz', {
+        onProgress, signal: opts.signal,
+        expectedBytes: graph === 'decoder' ? DECODER_FP32_BYTES : undefined,
+      });
+      bytesByGraph[graph] = bytes;
       onProgress && onProgress({ stage: graph, completed: 1, total: 1, message: 'Session erstellen …' });
       sessions[sessionKey(graph)] = await ort.InferenceSession.create(bytes, sessionOpts);
     }
     for (const k of SESSION_KEYS) {
       if (!sessions[k]) throw new Error('ARDY: Session „' + k + '“ fehlt nach dem Laden — bitte Modell neu laden oder importieren');
     }
+    // ── v2.28.6 INTEGRITÄTSPROBE (Geräte-Selbsttest) ──
+    // Beweist auf JEDEM Gerät, dass die Sessions rechnen, was die
+    // CPU-Referenz rechnet — sonst WASM-Fallback je Graph.
+    const probeNotes = await verifySessionIntegrity(sessions, manifest, async (graph) => {
+      return ort.InferenceSession.create(bytesByGraph[graph], { executionProviders: ['wasm'] });
+    });
+    _probeNotes = probeNotes;
+    if (_importRejection) probeNotes.push('Modelldatei: ' + _importRejection);
     return new ArdyRuntime(manifest, tokenizer, sessions, epName);
   })();
   try {

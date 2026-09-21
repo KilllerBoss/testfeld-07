@@ -45,8 +45,8 @@ const htmlSrc = await readFile(path.join(WWW, 'index.html'), 'utf8');
 const gradleSrc = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
 
 console.log('— Statische Pins —');
-check('VERSION 2.28.4/2.28.5 in main.js', mainSrc.includes("const VERSION = '2.28.4'") || mainSrc.includes("const VERSION = '2.28.5'"));
-check('versionCode 45/46 / versionName 2.28.4/2.28.5', (gradleSrc.includes('versionCode 45') && gradleSrc.includes('versionName "2.28.4"')) || (gradleSrc.includes('versionCode 46') && gradleSrc.includes('versionName "2.28.5"')));
+check('VERSION 2.28.4/2.28.5/2.28.6 in main.js', mainSrc.includes("const VERSION = '2.28.4'") || mainSrc.includes("const VERSION = '2.28.5'") || mainSrc.includes("const VERSION = '2.28.6'"));
+check('versionCode 45/46/47 / versionName 2.28.4/2.28.5/2.28.6', (gradleSrc.includes('versionCode 45') && gradleSrc.includes('versionName "2.28.4"')) || (gradleSrc.includes('versionCode 46') && gradleSrc.includes('versionName "2.28.5"')) || (gradleSrc.includes('versionCode 47') && gradleSrc.includes('versionName "2.28.6"')));
 check('render3d: mirrorGhost(sim) definiert', /mirrorGhost\(sim\)\s*\{/.test(r3dSrc));
 check('render3d: buildGhost setzt sofort Live-Pose', /if \(sim && sim\._xpos && sim\._xquat\) this\.updateGhost\(\{ xpos: sim\._xpos, xquat: sim\._xquat \}\);/.test(r3dSrc));
 check('main.js: Render-Loop spiegelt Geist ohne Referenz (r3d.mirrorGhost(S.sim))', mainSrc.includes('r3d.mirrorGhost(S.sim)'));

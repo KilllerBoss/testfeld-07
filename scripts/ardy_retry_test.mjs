@@ -128,9 +128,9 @@ console.log('\n[6] Verdrahtungs-Pins (main.js)');
   ok(mainJs.includes('attemptsUsed'), 'Warnung nennt die Versuchsanzahl');
   ok(mainJs.includes('ardyMotionQuality, smoothMotionPhysics, fitSrcPosToRobot, PHYS_FILTER_VERSION } from'), 'Import: ardyMotionQuality aus retarget.js');
   ok(retJs.includes('export function ardyMotionQuality'), 'retarget.js: ardyMotionQuality exportiert');
-  ok(mainJs.includes("const VERSION = '2.28.5';"), 'VERSION 2.28.5');
+  ok(mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';"), 'VERSION 2.28.5/2.28.6');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"'), 'versionCode 46 / versionName 2.28.5');
+  ok((gradle.includes('versionCode 46') && gradle.includes('versionName "2.28.5"')) || (gradle.includes('versionCode 47') && gradle.includes('versionName "2.28.6"')), 'versionCode 46/47 / versionName 2.28.5/2.28.6');
 }
 
 console.log('\n═══ Ergebnis: ' + pass + ' bestanden, ' + fail + ' fehlgeschlagen ═══');
