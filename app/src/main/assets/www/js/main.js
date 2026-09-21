@@ -34,7 +34,7 @@ import { ArdyClip } from './ardyclip.js'; // v2.25.0: cskel27-Weltposen → Reta
 import { sanitizeRwx } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme
 import { CanvasBoard, addPolicyNode, addUINode, addConstNode, addLogicNode, addLink, removeLink, findNode, findNodeByName, nodeOutCount, CARD_R_FIELDS, cardPPOFromAppPolicy, buildPlanGraph, linkManyGraph, LOGIC_OPS } from './canvas.js'; // v2.20.0: + Logik/LinkMany
 
-const VERSION = '2.28.9'; // v2.28.9: SEITEN-REPARATUR — Nutzer (Screenshot + Report): „Beine und Hände nicht am Skelett … bewegen sich hin und her und überkreuzen sich … auch wenn Skelett sich nicht bewegt. Policy an Geist? Der Geist sollte rohe Ausgabe von ardy sein“. Diagnose an der ECHTEN Kette (fp32-Modell, CPU, echte G1-Sim): (1) DER v2.28.4er X-SPIEGEL WAR FALsch — er beruhte auf einem Kreuzprodukt-Fehler („right = up × drift“ ist anatomisch LINKS; korrekt ist right = fwd × up): die rohe Decoder-Ausgabe hat KORREKTE Mixamo-Namen (RightUpLeg liegt anatomisch RECHTS, +0,095 m), der Spiegel vertauschte seit v2.28.4 Links/Rechts → das grüne Skelett überkreuzte den Roboter, die Beine wurden nach innen gezogen (Geist-Fuß y-Mitte 0,037 statt 0,104 m), Skelett-Gliedmaßen liefen DIAGONAL zu den Roboter-Gliedmaßen = „nicht am Skelett/überkreuzt“. Fix: Spiegelung aus generate() entfernt + MIGRATION alter Clips (mirrorMotionY: Y-Spiegel der gespeicherten Motion — q mit echten Gelenk-Weltachsen-Vorzeichen je left/right-Paar, srcPos/root lateral, baseQ (x,y,z,w)→(−x,y,−z,w), yaw → −yaw; FK-Beweis im Test) beim Aktivieren, mv-Marker (ARDY_MV=2) macht sie einmalig + persistiert. (2) Schulter-Twist-DRIFT: shoulder_yaw ist im Richtungs-Fehler fast unsichtbar (Achse ≈ Oberarmachse) → der Look-Ahead-Re-Anker feuerte nie und der Twist driftete frei (gemessen idle Seed 7: −2,4° → −45,3°, seamBlend zerrte zurück = „Arme bewegen sich hin und her“); Fix: SOFTER TWIST-ANKER (0,02 rad/Frame zum Minimal-Twist-Seed). Der Geist hängt weiter an der ROHEN ARDY-Referenz (Geist = Retargeting-Replay aus clip.q, NICHT Policy — Policy trieb nur den grauen Roboter). v2.28.8: KNOCHENLÄNGEN-TRANSFER — Nutzer (Screenshot): „G1 ist falsch gemappt an das Skelett, er ist nicht an dem Skelett, sondern etwas innen — wie ein Exoskelett“
+const VERSION = '2.28.10'; // v2.28.10: GEIST = ARDY, OHNE SKELETT — Nutzer: „Skellet und der Geist unterschieden sich. Kann man Output von ardy nicht direkt an g1 Geist binden ohne Skelett?“. Diagnose: der cyan-Geist hängt BEREITS direkt an der rohen ARDY-Ausgabe (setGhostPose mit clip.q = Retargeting-Replay — exakt dieselben Frames, die auch die Physik trackt; Policy/Sim speisen den Geist NICHT), aber daneben stand das grüne Lehrer-Skelett als ZWEITE Figur: eigene Datenquelle (srcPos), eigene Boden-Korrektur (groundSrcPosTrack beim Aktivieren statt groundGhost je Frame) und Retarget-Restdifferenz → zwei Figuren am selben Anker, sichtbar verschieden. Fix (Nutzer-Wunsch „ohne Skelett“): ARDY-Clips zeigen NUR noch den Geist — der srcOverlay-Anzeige-Zweig versteckt das Skelett (visible=false, placeSourceGhostAt-Aufruf entfernt) und applyGhosts baut den Lehrer für ARDY-Clips gar nicht mehr; der GLB-Lehrer (Original-Mesh) bleibt unangetastet. v2.28.9: SEITEN-REPARATUR — Nutzer (Screenshot + Report): „Beine und Hände nicht am Skelett … bewegen sich hin und her und überkreuzen sich … auch wenn Skelett sich nicht bewegt. Policy an Geist? Der Geist sollte rohe Ausgabe von ardy sein“. Diagnose an der ECHTEN Kette (fp32-Modell, CPU, echte G1-Sim): (1) DER v2.28.4er X-SPIEGEL WAR FALsch — er beruhte auf einem Kreuzprodukt-Fehler („right = up × drift“ ist anatomisch LINKS; korrekt ist right = fwd × up): die rohe Decoder-Ausgabe hat KORREKTE Mixamo-Namen (RightUpLeg liegt anatomisch RECHTS, +0,095 m), der Spiegel vertauschte seit v2.28.4 Links/Rechts → das grüne Skelett überkreuzte den Roboter, die Beine wurden nach innen gezogen (Geist-Fuß y-Mitte 0,037 statt 0,104 m), Skelett-Gliedmaßen liefen DIAGONAL zu den Roboter-Gliedmaßen = „nicht am Skelett/überkreuzt“. Fix: Spiegelung aus generate() entfernt + MIGRATION alter Clips (mirrorMotionY: Y-Spiegel der gespeicherten Motion — q mit echten Gelenk-Weltachsen-Vorzeichen je left/right-Paar, srcPos/root lateral, baseQ (x,y,z,w)→(−x,y,−z,w), yaw → −yaw; FK-Beweis im Test) beim Aktivieren, mv-Marker (ARDY_MV=2) macht sie einmalig + persistiert. (2) Schulter-Twist-DRIFT: shoulder_yaw ist im Richtungs-Fehler fast unsichtbar (Achse ≈ Oberarmachse) → der Look-Ahead-Re-Anker feuerte nie und der Twist driftete frei (gemessen idle Seed 7: −2,4° → −45,3°, seamBlend zerrte zurück = „Arme bewegen sich hin und her“); Fix: SOFTER TWIST-ANKER (0,02 rad/Frame zum Minimal-Twist-Seed). Der Geist hängt weiter an der ROHEN ARDY-Referenz (Geist = Retargeting-Replay aus clip.q, NICHT Policy — Policy trieb nur den grauen Roboter). v2.28.8: KNOCHENLÄNGEN-TRANSFER — Nutzer (Screenshot): „G1 ist falsch gemappt an das Skelett, er ist nicht an dem Skelett, sondern etwas innen — wie ein Exoskelett“
 const CTRL_DT = 0.02; // 50 Hz Regelrate
 
 // ── v2.11.0 — DOMAIN RANDOMIZATION (MASTER-PROMPT §10 „Pflicht“) ─
@@ -2150,14 +2150,14 @@ function loop(now) {
       if (r3d.sourceGhost) {
         const mode = isMotion ? S.task.refMode : S.task.refMode;
         if (isMotion && clip.srcOverlay && rr) {
-          // v2.28.1 ARDY-OVERLAY: das grüne Skeleton reitet EXAKT auf dem
-          // Geist-Anker (Demo-Avatar-Prinzip: EINE Figur spielt die Motion).
-          // Relative Darstellung + Gruppen-Offset je Frame → die Hüfte des
-          // Skeletons sitzt Millimeter-genau auf der Geist-Basis. Der Weg,
-          // den die ARDY-Hüfte im Clip nimmt, kürzt sich heraus — nichts
-          // wandert mehr auseinander, auch nicht bei Geist-lenk (Stick).
-          r3d.placeSourceGhostAt(fr, rr[0], rr[1]);
-          r3d.sourceGhost.visible = true;
+          // v2.28.10 GEIST = ARDY, OHNE SKELETT: der cyan-Geist ist DIE eine
+          // Referenzfigur — er hängt direkt an der rohen ARDY-Ausgabe
+          // (setGhostPose mit clip.q = Retargeting-Replay, unten). Das grüne
+          // Lehrer-Skelett war eine ZWEITE Figur (srcPos, eigene Boden-
+          // Korrektur, Retarget-Restdifferenz) = „Skelett und Geist unter-
+          // scheiden sich“. Es bleibt für ARDY dauerhaft AUS — auch falls
+          // es (alter Stand) bereits gebaut wurde. GLB-Lehrer: unverändert.
+          r3d.sourceGhost.visible = false;
         } else {
           // GLB-Pfade: absolute Darstellung (konsistent mit dem Original-Mesh)
           r3d.setSourceGhostRelative(false);
@@ -3094,7 +3094,8 @@ const ardyCloseBtn = document.getElementById('ardyClose'); if (ardyCloseBtn) ard
     S.srcShow = e.target.checked;
     try { localStorage.setItem('tr_srcShow', S.srcShow ? '1' : '0'); } catch (err) { /* voll */ }
     applyGhosts();
-    log(S.srcShow ? 'Original-Lehrer AN — Quelldatei (Mesh) läuft mit'
+    log(S.srcShow ? (S.motionClip && S.motionClip.srcOverlay ? 'Kein Lehrer-Skelett bei ARDY — der Geist zeigt die rohe ARDY-Ausgabe (v2.28.10)'
+      : 'Original-Lehrer AN — Quelldatei (Mesh) läuft mit')
       : 'Original-Lehrer AUS — nur der Geist zeigt, was trainiert wird', 'warn');
     ui.toast(S.srcShow ? 'Original-Lehrer an' : 'Nur Geist (Standard)');
   });
@@ -3119,7 +3120,10 @@ function applyGhosts() {
   if (!r3d) return;
   if (!S.ghostOn && !S.srcShow) { r3d.removeGhost(); r3d.removeSourceGhost(); return; }
   if (S.ghostOn) { if (S.sim && !S.sim.cfg.drone) r3d.buildGhost(S.sim); } else r3d.removeGhost();
-  if (S.srcShow && S.motionClip) {
+  // v2.28.10 GEIST = ARDY, OHNE SKELETT: für ARDY-Clips (srcOverlay) wird
+  // der Lehrer NICHT mehr gebaut — der Geist allein zeigt die rohe ARDY-
+  // Ausgabe. Der srcShow-Toggle bleibt ein GLB-Feature (Original-Mesh).
+  if (S.srcShow && S.motionClip && !S.motionClip.srcOverlay) {
     r3d.buildSourceGhost(S.motionClip, S.srcScene || null);
     ensureSrcScene();
   } else {
@@ -4016,7 +4020,9 @@ async function activateClip(rec) {
       }
     } catch (e) { /* Migration ist best-effort — Clip läuft weiter */ }
   }
-  // v2.28.1 ARDY-OVERLAY: das grüne Skeleton gehört ZUM Geist (eine Figur).
+  // v2.28.10 ARDY-MARKER am Clip: kennzeichnet ARDY-Quellen für die Anzeige —
+  // der srcOverlay-Zweig im Render-Loop versteckt das Lehrer-Skelett (Geist
+  // allein = rohe ARDY-Ausgabe) und applyGhosts baut den Lehrer nicht mehr.
   if (rec.src === 'ardy') S.motionClip.srcOverlay = true;
   // v2.28.1 GEIST-LENK-STANDARD für ARDY: der Nutzer erwartet, dass der
   // Stick SOFORT die ARDY-Referenz fährt („der Geist, was ARDY steuert").
@@ -4091,7 +4097,7 @@ async function activateClip(rec) {
     : S.task.ctrlMode === 'btn' ? ' · Steuerung: BUTTONS (Training würfelt Fahrbefehle + Trigger, POLICY-Modus: Stick + Tasten unten)'
     : ' · Steuerung: keine (rein Referenzbahn)';
   const srcInfo = rec.src === 'qpos' ? 'ARDY-Referenz aktiv (Cloud-CSV)'
-    : rec.src === 'ardy' ? 'ARDY-Mini-Referenz aktiv (auf dem Gerät generiert)'
+    : rec.src === 'ardy' ? 'ARDY-Mini-Referenz aktiv (auf dem Gerät generiert) · Geist = rohe ARDY-Ausgabe (ohne Lehrer-Skelett, v2.28.10)'
     : 'GLB-Referenz aktiv';
   log(srcInfo + ': ' + rec.name + ' (' + S.motionClip.duration.toFixed(1) + 's, Endlosschleife)' + mergeInfo + rootInfo + ctrlInfo + ' — Aufgabe: Motion-Tracking' + (S.task.animOn ? '' : ' [ANIMATION AUS — nur Gleichgewicht]'), 'ok');
   ui.toast('Referenz aktiv: ' + rec.name);

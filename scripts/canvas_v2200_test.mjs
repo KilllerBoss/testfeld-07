@@ -342,7 +342,7 @@ console.log('\n[10] Verdrahtung — Werkzeuge + UI + Doku');
   ok(/'linkMany'/.test(aiSrc) && /LOGIC_OPS/.test(aiSrc), 'ai.js: linkMany + LOGIC_OPS validiert');
   ok(/NIEMALS NUR Training starten/.test(aiSrc), 'ai.js: Prompt verbietet Training-ohne-Architektur');
   ok(/linkMany/.test(docSrc) && /Logik-Karten/.test(docSrc) && /LANG DRÜCKEN/.test(docSrc), 'CANVAS.md: linkMany + Logik + Geste dokumentiert');
-  ok(/versionCode (3[2-9]|4[0-9]|50)/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode ≥ 32 (v2.21.0: Pin auf ≥ gelockert)');
+  ok(/versionCode (3[2-9]|4[0-9]|5[0-1])/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode ≥ 32 (v2.21.0: Pin auf ≥ gelockert)');
 }
 
 console.log('\n════════════════════════════════');
