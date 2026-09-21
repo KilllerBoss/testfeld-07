@@ -529,6 +529,63 @@ export async function ardyCapabilities() {
 // ArdyRuntime — Sessions + Generierung
 // ═══════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════
+// v2.28.4: ACHSEN-KONVENTION — ARDY-Decoder ist X-GESPIEGELT
+// (linkshändige Welt gegenüber glTF/Mixamo; die Mixamo-Namen der
+// Gelenke sind damit links/rechts VERTAUSCHT).
+// Beweis: scripts/ardy/ardy_walk_probe.mjs (echter Decoder, Geh-Fahrt
+// mit kommandiertem Root-Drift): Blick = lokal +Z (= Laufrichtung,
+// korrekt), ABER „RightUpLeg" liegt ANATOMISCH LINKS (−0,095 m) und
+// „LeftUpLeg" rechts (+0,091). Knochenlängen und Hüftenhöhen sind
+// SPIEGELINVARIANT — deshalb blieb der Fehler allen bisherigen
+// Checks verborgen („10/10 sauber" in v2.28.2).
+// Folge im App-Pfad: retargetToG1 mappte data-„RightFoot" → G1-LINKS
+// → Beine/Arme kreuzten sich je Frame → „vertauscht/gespiegelt,
+// komplett falsches Skelett" (Nutzer-Report 2026-09-21).
+// FIX: Spiegelung der DECODER-AUSGABE an der X-Achse — Positionen
+// x→−x; Rotationen als Konjugation M·R·M mit M = diag(−1, 1, 1)
+// (bleibt det +1 = echte Drehung, und die FK-Kette bleibt konsistent:
+// (M·G_p·M)(M·L_j·M) = M·(G_p·L_j)·M). NUR die Ausgabe wird gespiegelt
+// — Modelleingaben (Latents/Root-Features) bleiben unberührt.
+// ═══════════════════════════════════════════════════════════
+/**
+ * ARDY-Ausgabe an X spiegeln (in-place; 2× anwenden = Original).
+ * footContacts bleiben unbestückt (kein Konsument; Kanalreihenfolge
+ * ist nicht dokumentiert — bewusst NICHT geraten).
+ * @param out Ergebnis von ArdyRuntime.generate()
+ * @returns out (dasselbe Objekt, gespiegelt)
+ */
+export function mirrorArdyOutputX(out) {
+  const J = out.jointNames.length;
+  const n = Math.max(0, Math.min(out.frameCount | 0, (out.joints.length / (J * 3)) | 0));
+  // Positionen: x → −x
+  for (let f = 0; f < n; f++) {
+    const b = f * J * 3;
+    for (let j = 0; j < J; j++) out.joints[b + j * 3] = -out.joints[b + j * 3];
+  }
+  if (out.rootPositions) {
+    for (let f = 0; f < n; f++) out.rootPositions[f * 3] = -out.rootPositions[f * 3];
+  }
+  // Rotationen: M·R·M, M = diag(−1,1,1) → Elemente (0,1),(0,2),(1,0),(2,0)
+  // negieren; Diagonale und (1,2),(2,1) bleiben (zwei Minuszeichen heben auf).
+  const flip = (data, stride) => {
+    if (!data) return;
+    for (let f = 0; f < n; f++) {
+      const b = f * stride;
+      for (let j = 0; j < J; j++) {
+        const o = b + j * 9;
+        data[o + 1] = -data[o + 1];
+        data[o + 2] = -data[o + 2];
+        data[o + 3] = -data[o + 3];
+        data[o + 6] = -data[o + 6];
+      }
+    }
+  };
+  flip(out.globalRotations, J * 9);
+  flip(out.localRotations, J * 9);
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════
 // v2.28.2: SANITIZER — explodierte/NaN-Frames abfangen.
 // Der Nutzer-Report „grünes Skeleton wird zu Streifen, Geist macht
 // explodierte Bewegungen“ entsteht, wenn Decoder-Ausgaben nicht-
@@ -832,6 +889,11 @@ export class ArdyRuntime {
     }
     out.frameCount = written;
     out.duration = written / dims.fps;
+    // v2.28.4: X-Spiegelung (Konvention ARDY → glTF/Mixamo, siehe Block
+    // über mirrorArdyOutputX) — VOR dem Sanitizer, damit die Metriken die
+    // finalen (gespiegelten) Daten beschreiben; spiegelinvariant, daher
+    // sind Knochenlängen/NaN-Logik identisch.
+    mirrorArdyOutputX(out);
     // v2.28.2: Decoder-Ausgabe säubern (NaN halten + Knochenlängen
     // reparieren) — verhindert „Streifen“-Skeleton und zappelnden Geist.
     sanitizeArdyOutput(out);
