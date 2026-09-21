@@ -968,3 +968,17 @@ Stage Summary:
 - v2.28.5 / versionCode 46: DREI Wurzeln des „Roboter kämpft mit sich selbst" behoben: (1) ARDY-Referenz physikalisch fahrbar gemacht (Raten ≤8 rad/s, Ruckler weg), (2) grünes Skelett auf Geist-Größe gefittet, (3) frische ARDY-Clips imitieren die Referenz automatisch (BC), bevor PPO übernimmt.
 - Geist hat nachweislich NIE Physik gehabt — die Referenz selbst verstieß gegen die Physik; Balance muss die Policy lernen (ideal-Tracker stürzt bei jeder Referenz — auch GLB).
 - Wichtig für den Nutzer: Nach dem Update alte ARDY-Clips einfach nochmal antippen (Migration läuft beim Aktivieren) oder neu generieren.
+---
+Task ID: 57-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.5 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- CI: main-Run 35568657117 + Tag-Run 35568658691 BEIDE success
+- Release automatisch durch den Workflow: id 392735769, published 2026-09-21T06:29:59Z, Asset lertrain.apk 28.132.617 bytes (state uploaded)
+- Integrität: Asset anonym geladen → aapt versionCode 46 / versionName 2.28.5 ✓ · apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 IDENTISCH (CN=Trainrobot) ✓ · Code-Stichprobe: smoothMotionPhysics / PHYS_FILTER_VERSION / VERSION 2.28.5 im CI-APK ✓ (6 Treffer in main.js)
+
+Stage Summary:
+- Release v2.28.5 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.5/lertrain.apk
+- Drei bewiesene Wurzeln des Roboter-Zappelns behoben: (1) ARDY-Referenz physikalisch fahrbar (Raten-Klemme 8 rad/s, Blick-Ruckler 179°→9°), (2) Skelett auf Geist-Größe gefittet, (3) BC-Imitations-Vorab-Training für frische ARDY-Clips (kein random-Kaltstart mehr).
+- Nutzer-Hinweis: alte ARDY-Clips beim ersten Antippen werden automatisch migriert (Physik-Glättung + Skelett-Fit persistiert).
