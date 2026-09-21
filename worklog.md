@@ -1156,3 +1156,19 @@ Work Log:
 Stage Summary:
 - v2.28.11 / versionCode 52: Geist-Playback wie im HF-Space geglättet (Lerp/Slerp statt Nearest-Frame) — Zittern drastisch reduziert (Faktor 3,0 gemessen); GLB-Pfad unverändert. Der Nutzer-Frage-Antwort-Kern: Der Space glättet nur im Playback (kein Filter im Decoder) — die App hatte genau diese Playback-Glättung nicht; jetzt spielt sie die rohe ARDY-Ausgabe sub-frame-interpoliert ab.
 - Offen für nächste Iteration: Referenz-Skalen-Desync (sampleRef t = phase·fps bei n ≠ fps — Zeitstreckung + Naht-Sprung) mit Policy-Migration.
+
+---
+Task ID: 63-Release
+Agent: Super Z (Hauptagent)
+Task: v2.28.11 Release abschließen (CI + GitHub-Release + Integrität)
+
+Work Log:
+- Environment-Neuaufbau (Reset): Repo via Inline-Token-Fetch auf afc599f (v2.28.10), SDK neu installiert (scripts/install_sdk_v290.sh: cmdline-tools 11076708, platforms;android-34, build-tools;34.0.0 → /home/z/tools/android-sdk), Gradle 8.7 → /home/z/tools/gradle-8.7, local.properties gesetzt. ARDY-Fixture-Nachladung: model.json.gz aus model.json regeneriert; fp32-ONNX (decoder 71,6 MB, denoiser 590,7 MB, text_encoder 112,4 MB) + tokenizer.json.gz aus dem HF-Modell-Repo geladen (Token nur inline) — ardy_probe 22 und ardy_real_onnx 3 danach grün.
+- Build: app-release.apk 28.149.541 bytes · aapt versionCode 52 / versionName 2.28.11 · apksigner SHA-256 1c0422b9… IDENTISCH (CN=Trainrobot) · APK-Marker: motiontask.js sampleArdyDisplay/slerpQ ×5, main.js VERSION '2.28.11' + PLAYBACK-GLÄTTUNG ×5 ✓.
+- CI: main-Run 35614268342 + Tag-Run 35614268418 BEIDE success; Release automatisch (id 393044869, published 2026-09-21T14:46:45Z), Asset lertrain.apk 28.149.541 bytes (uploaded) — Größe exakt = lokaler Build.
+- Integrität des LIVE-APK: anonym geladen → aapt 52 / 2.28.11 ✓ · apksigner SHA-256 identisch ✓ · Code-Stichprobe sampleArdyDisplay/slerpQ + VERSION 2.28.11 ✓.
+
+Stage Summary:
+- Release v2.28.11 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/download/v2.28.11/lertrain.apk
+- Geist-Playback glatt wie im HF-Space (Lerp/Slerp statt Nearest-Frame, Faktor 3,0 weniger Sprung), Geist = rohe ARDY-Ausgabe (Direktbindung v2.28.10 unverändert), GLB-Pfad unverändert.
+- Offen für nächste Iteration: Referenz-Skalen-Desync (sampleRef t = phase·fps bei n ≠ fps — Zeitstreckung Faktor 4 + Naht-Sprung 0,141 rad; Policy-Migration nötig).
