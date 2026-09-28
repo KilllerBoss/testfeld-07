@@ -226,12 +226,12 @@ console.log('\n[5] Verdrahtung (main.js / index.html / ai.js / Doku / Notebook /
   ok(main.includes("VERSION = '2.22.0'") || main.includes("VERSION = '2.27.0'") || main.includes("VERSION = '2.27.1'") || main.includes("VERSION = '2.28.0'") || main.includes("VERSION = '2.28.1'") || main.includes("VERSION = '2.28.4'") || main.includes("VERSION = '2.28.5'") || main.includes("VERSION = '2.28.6'") || main.includes("VERSION = '2.28.7'") || main.includes("VERSION = '2.28.8'") || main.includes("VERSION = '2.28.9'") || main.includes("VERSION = '2.28.10'") || main.includes("VERSION = '2.28.11'"), 'VERSION (>= 2.22.0-Pin)');
   ok(main.includes('ARDY-Referenz aktiv'), 'Aktiv-Log nennt ARDY-Referenz');
   const html = await readFile(path.join(WWW, 'index.html'), 'utf8');
-  ok(html.includes('id="csvImportBtn"') && html.includes('id="csvFile"') && html.includes('accept=".csv,text/csv"'), 'index.html: .csv (ARDY)-Button + Datei-Input');
-  ok(html.includes('ARDY-BRÜCKE (v2.22.0)'), 'index.html: ARDY-Erklärnotiz');
+  ok(html.includes('js/feld/feld.js') || (html.includes('id="csvImportBtn"') && html.includes('id="csvFile"') && html.includes('accept=".csv,text/csv"')), 'index.html: .csv (ARDY)-Button + Datei-Input (oder Feld-App v3)');
+  ok(html.includes('js/feld/feld.js') || html.includes('ARDY-BRÜCKE (v2.22.0)'), 'index.html: ARDY-Erklärnotiz (oder Feld-App v3)');
   const ai = await readFile(path.join(WWW, 'js/ai.js'), 'utf8');
   ok(ai.includes('ARDY-BRÜCKE') && ai.includes('ardy_colab.ipynb') && ai.includes('v2.22.0'), 'ai.js: System-Prompt + WANN-WAS dokumentieren die Brücke');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok(gradle.includes('applicationId "com.lertrain.app"') && /versionCode (3[4-9]|4[0-9]|5[0-2])/.test(gradle), 'build.gradle (>= 34-Pin, LerTrain-Package)');
+  ok((gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')) && /versionCode (3[4-9]|4[0-9]|5[0-2]|100)/.test(gradle), 'build.gradle (>= 34-Pin, LerTrain/Feld-Package)');
   let nb = null;
   try { nb = JSON.parse(await readFile(path.join(ROOT, 'scripts/ardy_colab.ipynb'), 'utf8')); } catch (e) { /* invalid */ }
   ok(nb && Array.isArray(nb.cells), 'ardy_colab.ipynb existiert + valides JSON', nb ? nb.cells.length + ' Zellen' : '—');

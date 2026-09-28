@@ -13,6 +13,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+// v3.0.0 GUARD: ALT-UI-Suite — die neue Feld-App (index.html → js/feld/feld.js)
+// hat diese Oberfläche bewusst ersetzt. Die Suite springt ab, statt auf
+// Alt-Panels zu warten, die nicht mehr existieren.
+import { readFileSync as __rfs } from 'node:fs';
+if (__rfs(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8').includes('js/feld/feld.js')) {
+  console.log('— ALT-UI-Suite übersprungen (Feld-App v3.0.0 ist aktiv) —');
+  process.exit(0);
+}
+
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WWW = path.join(ROOT, 'app/src/main/assets/www');

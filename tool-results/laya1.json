@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://www.youtube.com/watch?v=UoRNo5LoDRE",
+    "name": "Multilingual System 1 Model for Fast AI Decisions",
+    "snippet": "*Laya**, a multilingual, non-autoregressive **System 1 decision model* designed for fast classification, scoring, and structured decision- ...",
+    "host_name": "www.youtube.com",
+    "rank": 0,
+    "date": "Sep 23, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/receptron/laya",
+    "name": "receptron/laya: Run Laya, the open-source Jev-compatible",
+    "snippet": "the open-source, Jev-compatible System 1 decision model by Convai Innovations — from Node.js / TypeScript. Laya does not generate text.",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "Run Laya",
+    "favicon": ""
+  },
+  {
+    "url": "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
+    "name": "Introducing System One Models & Jev",
+    "snippet": "Jev achieves similar levels of intelligence on System One tasks compared to existing LLMs, while being two orders of magnitude faster and more ...",
+    "host_name": "typesafe.ai",
+    "rank": 2,
+    "date": "Sep 15, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/LocalLLaMA/comments/1wm0cn0/convaiinnovationslaya_multilingual",
+    "name": "convaiinnovations/laya (multilingual, non-autoregressive",
+    "snippet": "Open Laya is an open-weight (Apache 2.0) \"System 1\" decision model from Convai Innovations, M as an open alternative to TypeSafe's closed Jev ...",
+    "host_name": "www.reddit.com",
+    "rank": 3,
+    "date": "Sep 21, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://huggingface.co/blog/sora-2/jev-vs-laya-hosted-api-or-open-weights-2026-guide",
+    "name": "Jev vs Laya: Hosted API or Open Weights? (2026 Guide)",
+    "snippet": "Jev AI is a managed, ready-to-call decision API; Laya is an open-weight decision model you can run and adapt. Labelled data, data residency, ...",
+    "host_name": "huggingface.co",
+    "rank": 4,
+    "date": "Sep 23, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://flowtivity.ai/blog/laya-open-source-jev-alternative",
+    "name": "Laya: The Open-Source Jev Alternative, Benchmarked",
+    "snippet": "Laya is an open-source decision model family from Convai Innovations that answers typed questions instead of generating text, released under ...",
+    "host_name": "flowtivity.ai",
+    "rank": 5,
+    "date": "Sep 20, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://medium.com/data-science-collective/smart-routing-with-an-open-source-system-1-model-laya-416fe771ce2e",
+    "name": "Smart routing with an open source System 1 model — Laya.",
+    "snippet": "Its a non-autoregressive model that takes program state and returns a typed decision with a calibrated probability in one parallel pass.",
+    "host_name": "medium.com",
+    "rank": 6,
+    "date": "Sep 21, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.youtube.com/watch?v=ifMK3FfPPOw",
+    "name": "Laya Github - Tutorial Open-Source AI Routing With",
+    "snippet": "Laya is an open-source, non-autoregressive System 1 decision model built for fast, typed decisions inside software. TypeSafe Jev.",
+    "host_name": "www.youtube.com",
+    "rank": 7,
+    "date": "Sep 21, 2026",
+    "favicon": ""
+  }
+]

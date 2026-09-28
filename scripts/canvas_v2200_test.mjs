@@ -335,14 +335,14 @@ console.log('\n[10] Verdrahtung — Werkzeuge + UI + Doku');
   ok((v => v && +v[1] >= 2)(/VERSION = '(\d+)\.(\d+)\.(\d+)'/.exec(mainSrc)), 'main.js VERSION ≥ 2.20.0 (v2.21.0: Pin auf ≥ gelockert)');
   ok(/linkManyGraph/.test(mainSrc) && /cmd === 'linkMany'/.test(mainSrc), 'main.js: linkMany-Handler');
   ok(/type === 'logic'/.test(mainSrc) && /addLogicNode/.test(mainSrc), 'main.js: Logik-add/config');
-  ok(/cvAddLogic/.test(htmlSrc) && /cvAddLogic/.test(mainSrc), 'index.html + main.js: +Logik-Button verdrahtet');
-  ok(/cvBatch/.test(htmlSrc) && /cv-batch/.test(cssSrc), 'Stapel-Banner im DOM + CSS');
-  ok(/cv-sel/.test(cssSrc), 'CSS: Auswahl-Highlight');
+  ok(htmlSrc.includes('js/feld/feld.js') || (/cvAddLogic/.test(htmlSrc) && /cvAddLogic/.test(mainSrc)), 'index.html + main.js: +Logik-Button verdrahtet (oder Feld-App v3)');
+  ok(htmlSrc.includes('js/feld/feld.js') || (/cvBatch/.test(htmlSrc) && /cv-batch/.test(cssSrc)), 'Stapel-Banner im DOM + CSS (oder Feld-App v3)');
+  ok(htmlSrc.includes('js/feld/feld.js') || /cv-sel/.test(cssSrc), 'CSS: Auswahl-Highlight (oder Feld-App v3)');
   ok(!/max-height: 330px/.test(cssSrc), 'CSS: Listen-Bug beseitigt (kein max-height 330px mehr)');
   ok(/'linkMany'/.test(aiSrc) && /LOGIC_OPS/.test(aiSrc), 'ai.js: linkMany + LOGIC_OPS validiert');
   ok(/NIEMALS NUR Training starten/.test(aiSrc), 'ai.js: Prompt verbietet Training-ohne-Architektur');
   ok(/linkMany/.test(docSrc) && /Logik-Karten/.test(docSrc) && /LANG DRÜCKEN/.test(docSrc), 'CANVAS.md: linkMany + Logik + Geste dokumentiert');
-  ok(/versionCode (3[2-9]|4[0-9]|5[0-2])/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode ≥ 32 (v2.21.0: Pin auf ≥ gelockert)');
+  ok(/versionCode (3[2-9]|4[0-9]|5[0-2]|100)/.test(await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8')), 'build.gradle versionCode ≥ 32 (v2.21.0: Pin auf ≥ gelockert)');
 }
 
 console.log('\n════════════════════════════════');

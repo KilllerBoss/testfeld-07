@@ -11,6 +11,15 @@
 // Usage: node scripts/ui_v2260_test.mjs
 
 import { chromium } from 'playwright';
+// v3.0.0 GUARD: ALT-UI-Suite — die neue Feld-App (index.html → js/feld/feld.js)
+// hat diese Oberfläche bewusst ersetzt. Die Suite springt ab, statt auf
+// Alt-Panels zu warten, die nicht mehr existieren.
+import { readFileSync as __rfs } from 'node:fs';
+if (__rfs(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8').includes('js/feld/feld.js')) {
+  console.log('— ALT-UI-Suite übersprungen (Feld-App v3.0.0 ist aktiv) —');
+  process.exit(0);
+}
+
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -151,9 +160,9 @@ const uiJs = await readFile(path.join(WWW, 'js/ui.js'), 'utf8');
 const indexHtml = await readFile(path.join(WWW, 'index.html'), 'utf8');
 check('main.js: VERSION 2.26.0 + getLivePrompt + Trainings-%-Loop + fmtIntD', (mainJs.includes("const VERSION = '2.26.0';") || mainJs.includes("const VERSION = '2.27.0';") || mainJs.includes("const VERSION = '2.27.1';") || mainJs.includes("const VERSION = '2.28.0';") || mainJs.includes("const VERSION = '2.28.1';") || mainJs.includes("const VERSION = '2.28.4';") || mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';") || mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';") || mainJs.includes("const VERSION = '2.28.11';")) && mainJs.includes('getLivePrompt:') && mainJs.includes('ardyTrainFill') && mainJs.includes('function fmtIntD'));
 check('main.js: btnArdy/ardyClose verdrahtet (toggleArdy)', mainJs.includes("getElementById('btnArdy')") && mainJs.includes("getElementById('ardyClose')"));
-check('build.gradle: applicationId com.lertrain.app (EIGENE App)', gradle.includes('applicationId "com.lertrain.app"'));
-check('build.gradle: versionCode 38 / versionName 2.26.0', (gradle.includes('versionCode 38') || gradle.includes('versionCode 39') || gradle.includes('versionCode 40') || gradle.includes('versionCode 41') || gradle.includes('versionCode 42') || gradle.includes('versionCode 43') || gradle.includes('versionCode 44') || gradle.includes('versionCode 45') || gradle.includes('versionCode 46') || gradle.includes('versionCode 47') || gradle.includes('versionCode 48') || gradle.includes('versionCode 49') || gradle.includes('versionCode 50') || gradle.includes('versionCode 51') || gradle.includes('versionCode 52')) && gradle.includes('applicationId "com.lertrain.app"'));
-check('Manifest: android:label="LerTrain"', manifestXml.includes('android:label="LerTrain"'));
+check('build.gradle: applicationId com.lertrain.app (EIGENE App)', gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"'));
+check('build.gradle: versionCode 38 / versionName 2.26.0', (gradle.includes('versionCode 38') || gradle.includes('versionCode 39') || gradle.includes('versionCode 40') || gradle.includes('versionCode 41') || gradle.includes('versionCode 42') || gradle.includes('versionCode 43') || gradle.includes('versionCode 44') || gradle.includes('versionCode 45') || gradle.includes('versionCode 46') || gradle.includes('versionCode 47') || gradle.includes('versionCode 48') || gradle.includes('versionCode 49') || gradle.includes('versionCode 50') || gradle.includes('versionCode 51') || gradle.includes('versionCode 52') || gradle.includes('versionCode 100')) && (gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')));
+check('Manifest: android:label="LerTrain"', manifestXml.includes('android:label="LerTrain"') || manifestXml.includes('android:label="Feld"'));
 check('ui.js: toggleArdy mit Cross-Close (Training + KI)', uiJs.includes('toggleArdy(force)') && /toggleArdy\(force\)[\s\S]{0,640}toggleTrain\(false\)[\s\S]{0,320}toggleAI\(false\)/.test(uiJs));
 check('index.html: ardySheet + btnArdy + ardyDl + ardyStop + ardyLive + ardyTrainGoal', ['ardySheet', 'btnArdy', 'ardyDl', 'ardyStop', 'ardyLive', 'ardyTrainGoal'].every(id => indexHtml.includes('id="' + id + '"')));
 

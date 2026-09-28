@@ -1,0 +1,38 @@
+[
+  {
+    "url": "https://boards.4chan.org",
+    "name": "/g/ - /lmg/ - Local Models General - Technology",
+    "snippet": "8 days ago — https:// huggingface .co/ convaiinnovations / laya … it is a 400M model and should run fully local on whatever CPU you have available.",
+    "host_name": "boards.4chan.org",
+    "rank": 0,
+    "date": "Sep 20, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://menonlab-blog-production.up.railway.app",
+    "name": "Blog - The Menon Lab - Railway",
+    "snippet": "Laya is an open-source, non-autoregressive System 1 decision model from Convai Innovations — ~421M params, ~1GB memory, ~33ms local calls, typed decisions with ... Read more",
+    "host_name": "menonlab-blog-production.up.railway.app",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://scouts.yutori.com",
+    "name": "LLM tools and tutorials for devs - Scouts by Yutori",
+    "snippet": "Huggingface Unsloth. Laya : Non‐Autoregressive Decision Engine ( ConvAI Innovations template for multi-step, stateful agent workflows. Verified list of genuinely ...",
+    "host_name": "scouts.yutori.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.trending.md",
+    "name": "Sources - trending.md",
+    "snippet": "for open- weight model releases and benchmarks. ~2-week delayed weights ). secondary coverage of open- weights model releases. 612 laya . convaiinnovations .com.  ...",
+    "host_name": "www.trending.md",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  }
+]

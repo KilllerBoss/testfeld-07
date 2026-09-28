@@ -1,0 +1,660 @@
+// ═══════════════════════════════════════════════════════════
+// feld/feld.js — HAUPT-APP „Feld" (v3.0.0)
+//
+// Minimalistische Trainings-App: MuJoCo-WASM + MicroDuck,
+// Policy = Soft-MoE-LLN, 3 Trainingsstufen, Belohnungssystem
+// mit allen Reglern, Steuerkonsole (4 Buttons + 2 Joysticks),
+// LAYA-Router (System 1) in Stufe 3, ONNX-Export/-Quantisierung
+// mit CPU/GPU/NPU-Ausführung, Autosave + Import/Export.
+// ═══════════════════════════════════════════════════════════
+
+import { APP_NAME, VERSION } from './version.js';
+import { initEngine, RobotSim, fetchModelIntoFS, writeWorldFile, hasModelInFS } from '../engine.js';
+import { getRobot } from '../robots.js';
+import { buildWorldXML } from '../worlds.js';
+import { RNG } from '../math.js';
+import { Renderer3D } from '../render3d.js';
+import { FeldTrainer } from './trainer.js';
+import { RewModel, RwxModel, RW_FIELDS, PRESETS, RWX_DEFS } from './rewards.js';
+import { Console, BUTTONS } from './console.js';
+import { LayaRouter } from './laya.js';
+import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
+import * as store from './store.js';
+
+// ── Zustand ────────────────────────────────────────────────
+const S = {
+  sim: null, task: null, trainer: null, renderer: null,
+  rew: null, rwx: null, laya: null, konsole: null,
+  mode: 'pause',            // 'train' | 'live' | 'pause'
+  world: 'flach',
+  budget: 30,               // RL-Schritte je Animation-Frame
+  updatePause: false,
+  dirty: false, lastSave: 0,
+  layaActive: false, layaTimer: 0,
+  ortInfer: null,           // { session, ep, ort } — Policy über ONNX
+  chartMax: 1,
+  booted: false,
+};
+const $ = (id) => document.getElementById(id);
+const log = (m, k) => {
+  const el = $('bootlog');
+  if (!el) return;
+  el.textContent += (el.textContent ? '\n' : '') + m;
+  if (k === 'err') el.classList.add('err');
+};
+
+// ── Boot ───────────────────────────────────────────────────
+async function boot() {
+  try {
+    log('FELD ' + VERSION + ' — starte …');
+    await initEngine(log);
+    log('MuJoCo-WASM bereit', 'ok');
+    const cfg = Object.assign({}, getRobot('duck'));
+    // Belohnungsmodell: TRÄGT die rW-Zahlen (Task liest live)
+    S.rew = new RewModel(cfg.rW);
+    S.rwx = new RwxModel(null);
+    cfg.rW = S.rew;
+    cfg.rWx = S.rwx;
+    if (!hasModelInFS(cfg.dir)) {
+      await fetchModelIntoFS('models/' + cfg.dir);
+    }
+    log('MicroDuck geladen (' + cfg.nActuators + ' Aktuatoren)', 'ok');
+    const worldXml = buildWorldXML(cfg, S.world, 7);
+    writeWorldFile(cfg.dir, 'welt_live.xml', worldXml);
+    S.sim = new RobotSim(cfg, 'welt_live.xml');
+    // Task (Soft-MoE-Task des Ducks) + cfg-Rückverweis (Stufen-Glättung)
+    S.task = cfg.task(cfg);
+    S.task.cfg = cfg;
+    S.task.reset(new RNG(4242), S.sim);
+    log('Task bereit: ' + S.task.obsDim + ' Obs × ' + S.task.actDim + ' Aktionen · ' + S.task.expertNames.join(' · '), 'ok');
+    // Trainer + Speicherstand
+    S.trainer = new FeldTrainer(S.task, S.sim, { seed: 20260929, rWBase: S.rew.snapshot() });
+    S.laya = new LayaRouter({});
+    const sess = store.loadSession();
+    if (sess) applySession(sess, { quiet: true });
+    // Renderer
+    S.renderer = new Renderer3D($('gl'));
+    S.renderer.buildFromModel(S.sim);
+    wireResize();
+    // Konsole
+    S.konsole = new Console($('consolePad'), { onButton: (i) => { log('Konsole: ' + BUTTONS[i].label); } });
+    S.konsole.driveActive = false;
+    // UI
+    wireTabs();
+    wireTrainUI();
+    buildRewardUI();
+    wireConsoleUI();
+    wireModelUI();
+    wireGesture();
+    $('bootOverlay').classList.add('hidden');
+    S.booted = true;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    log('BOOT FEHLGESCHLAGEN: ' + (e && e.message), 'err');
+    console.error(e);
+  }
+}
+
+// ── Hauptschleife ──────────────────────────────────────────
+let _lastT = 0;
+function loop(t) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.1, (t - _lastT) / 1000 || 0.016);
+  _lastT = t;
+  if (!S.sim) return;
+  try {
+    if (S.mode === 'train') {
+      trainTick(dt);
+    } else if (S.mode === 'live') {
+      liveTick();
+    }
+    applyConsole();
+    S.renderer.updateFrame(S.sim, dt);
+    S.renderer.render();
+    hud();
+    maybeAutosave(t);
+  } catch (e) {
+    S.mode = 'pause';
+    log('LOOP-STOPP: ' + (e && e.message), 'err');
+    console.error(e);
+  }
+}
+
+/** Trainings-Takt: budgetierte RL-Schritte (UI bleibt bedienbar). */
+function trainTick() {
+  if (S.konsole && S.konsole.driveActive) pushUserCmd();
+  if (S.layaActive) pushLaya();
+  if (S.updatePause) { S.updatePause = false; return; }
+  const did = S.trainer.pump(S.budget);
+  if (did) {
+    S.updatePause = true;
+    S.dirty = true;
+    drawChart();
+    markStages();
+  }
+}
+
+/** Live-Takt: Policy ausführen (JS oder ONNX), ohne zu lernen. */
+function liveTick() {
+  const task = S.task, sim = S.sim;
+  if (S.konsole && S.konsole.driveActive) pushUserCmd();
+  task.observe(sim, S.trainer._obs);
+  if (S.ortInfer && !S._ortBusy) {
+    // ONNX-Ausführung (CPU/GPU/NPU — EP wie im Modell-Tab gewählt)
+    S._ortBusy = true;
+    const obs = Float32Array.from(S.trainer._obs);
+    S.ortInfer.run({ obs: new S._ortT('float32', obs, [1, obs.length]) })
+      .then((out) => {
+        S._ortBusy = false;
+        const mu = out.mu.data;
+        task.actionToCtrl(sim, mu);
+        sim.stepN(10);
+        task.reward(sim);
+        for (let i = 0; i < task.actDim; i++) task.lastAct[i] = mu[i];
+        if (task.afterAct) task.afterAct(sim, mu);
+      })
+      .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
+  } else if (!S._ortBusy) {
+    const a = S.trainer.actLive(S.trainer._obs, true);
+    if (S.task.setRouting && S.trainer.ppo.lastW) S.task.setRouting(S.trainer.ppo.lastW);
+    task.actionToCtrl(sim, a.act);
+    sim.stepN(10);
+    task.reward(sim);
+    for (let i = 0; i < task.actDim; i++) task.lastAct[i] = a.act[i];
+    if (task.afterAct) task.afterAct(sim, a.act);
+  }
+  if (S.rwx.on && S.rwx.terms.some((x) => x.source === 'console')) pushConsoleGoals();
+}
+
+/** Konsole → Task-Kommandos (in-Verteilung zum Training). */
+function pushUserCmd() {
+  const c = S.konsole.commands();
+  const cfg = S.task.cfg;
+  S.task.setUserCmd(c.vx * (cfg.speedMax || 0.25), c.vy * 0.1, c.wz * (cfg.yawMax || 1.0), S.konsole.buttons);
+}
+
+/** LAYA (System 1) → Skill-Hinweis + Kommandos (Stufe 3). */
+function pushLaya() {
+  const sim = S.sim, task = S.task;
+  S.layaTimer -= 1;
+  if (S.layaTimer > 0) return;
+  S.layaTimer = 25; // 0,5 s
+  const bq = new Float64Array(4);
+  sim.baseQuat(bq);
+  const w = bq[0], x = bq[1], y = bq[2], z = bq[3];
+  const upz = 1 - 2 * (x * x + y * y);
+  const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+  sim.baseVelWorld(new Float64Array(3));
+  const c = S.konsole.commands();
+  const bv = new Float64Array(3);
+  sim.baseVelWorld(bv);
+  const state = {
+    upz,
+    vFwd: Math.cos(yaw) * bv[0] + Math.sin(yaw) * bv[1],
+    yawRate: sim._qvel[5],
+    cmdVx: Math.max(0, c.vx), cmdWz: c.wz,
+    fallen: upz < 0.5, hGTol: Math.max(0, sim.cfg.h0 - sim._xpos[3 * sim.baseBody + 2]),
+  };
+  const d = S.laya.decide(state);
+  const cfg = task.cfg;
+  const vx = Math.max(0, c.vx) * (cfg.speedMax || 0.25);
+  const wz = c.wz * (cfg.yawMax || 1.0);
+  task._setCmd(vx, 0, wz, d.w);
+}
+
+/** Konsole → Belohnungsziele (goTo/faceYaw mit source:'console'). */
+function pushConsoleGoals() {
+  const sim = S.sim;
+  const p = new Float64Array(3);
+  sim.basePos(p);
+  const bq = new Float64Array(4);
+  sim.baseQuat(bq);
+  const w = bq[0], x = bq[1], y = bq[2], z = bq[3];
+  const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+  const c = S.konsole.commands();
+  for (const t of S.rwx.terms) {
+    if (t.source !== 'console') continue;
+    if (t.kind === 'goTo') {
+      // Ziel „d = Joystick-Fahrt" vor dem Roboter (max 3 m)
+      const d = Math.min(3, Math.hypot(c.vx, c.vy));
+      const a = yaw + Math.atan2(c.vy, Math.max(0.001, c.vx));
+      t.x = Math.max(-12, Math.min(12, p[0] + Math.cos(a) * d));
+      t.y = Math.max(-12, Math.min(12, p[1] + Math.sin(a) * d));
+    } else if (t.kind === 'faceYaw') {
+      let ty = yaw + c.wz * 1.2;
+      while (ty > Math.PI) ty -= 2 * Math.PI;
+      while (ty <= -Math.PI) ty += 2 * Math.PI;
+      t.yaw = ty;
+    }
+  }
+}
+
+/** Konsole-Eingaben überhaupt in die Sim schieben (Train & Live). */
+function applyConsole() {
+  if (!S.konsole || !S.konsole.driveActive) return;
+  if (S.mode === 'train') return; // trainTick macht das selbst (Reihenfolge)
+  // Live: Kommandos sind in liveTick gesetzt — Ziele trotzdem pflegen:
+  if (S.rwx.on && S.rwx.terms.some((x) => x.source === 'console')) pushConsoleGoals();
+}
+
+// ── HUD/Chart ──────────────────────────────────────────────
+function hud() {
+  const t = S.trainer;
+  if (!t) return;
+  const el = $('hud');
+  if (!el) return;
+  const er = t.epRewards.length ? t.epRewards[t.epRewards.length - 1] : 0;
+  const ti = t.lastMetrics && t.lastMetrics.trickInfo ? t.lastMetrics.trickInfo : null;
+  el.innerHTML =
+    'STUFE ' + S.trainer.stage + ' · ' + S.mode.toUpperCase() +
+    ' · UPDATES ' + t.updates +
+    ' · EP ' + t.episodes +
+    ' · EP-REWARD ' + er.toFixed(1) +
+    ' · EMA ' + t.emaEpR.toFixed(1) +
+    (ti ? ' · LR ' + ti.lr.toExponential(1) + ' · T ' + ti.T + ' · σ ' + ti.std.toFixed(2) : '');
+}
+function drawChart() {
+  const cv = $('chart');
+  if (!cv) return;
+  const g = cv.getContext('2d');
+  const Wd = cv.width, Hd = cv.height;
+  g.clearRect(0, 0, Wd, Hd);
+  const hist = S.trainer.epRewards.slice(-160);
+  if (!hist.length) return;
+  const mx = Math.max(1e-6, ...hist.map((v) => Math.abs(v)));
+  S.chartMax = mx;
+  g.strokeStyle = '#4CC24A';
+  g.lineWidth = 1.5;
+  g.beginPath();
+  hist.forEach((v, i) => {
+    const x = (i / Math.max(1, hist.length - 1)) * (Wd - 8) + 4;
+    const yv = Hd - 6 - ((v + mx) / (2 * mx)) * (Hd - 12);
+    if (i === 0) g.moveTo(x, yv); else g.lineTo(x, yv);
+  });
+  g.stroke();
+  g.strokeStyle = '#262626';
+  g.setLineDash([3, 4]);
+  g.beginPath();
+  g.moveTo(0, Hd / 2); g.lineTo(Wd, Hd / 2);
+  g.stroke();
+  g.setLineDash([]);
+}
+
+// ── Autosave ───────────────────────────────────────────────
+function maybeAutosave(t) {
+  if (!S.dirty) return;
+  if (t - S.lastSave < 10000) return;
+  S.lastSave = t;
+  S.dirty = false;
+  const ok = store.saveSession(sessionBlob());
+  const el = $('saveState');
+  if (el) el.textContent = 'Autosave ' + new Date().toLocaleTimeString('de-DE') + (ok ? '' : ' (FEHLER)');
+}
+function sessionBlob() {
+  return {
+    app: APP_NAME, v: VERSION, ts: Date.now(),
+    stage: S.trainer.stage,
+    policy: store.policyToJSON(S.trainer.ppo),
+    hyper: S.trainer.hyper,
+    tricks: S.trainer.tricks,
+    rewards: S.rew.toJSON(),
+    rwx: S.rwx.toJSON(),
+    console: S.konsole ? S.konsole.toJSON() : null,
+    laya: S.laya ? S.laya.toJSON() : null,
+    layaActive: S.layaActive,
+    world: S.world,
+  };
+}
+function applySession(sess, opts = {}) {
+  try {
+    if (!sess || !sess.policy) return false;
+    const pol = sess.policy;
+    const net = S.trainer.ppo.net;
+    const params = {};
+    for (const n of net.pNames) {
+      if (!pol.params[n]) return false;
+      params[n] = store.b64ToF32(pol.params[n]);
+    }
+    net.applyFromJSON(params);
+    const nm = store.b64ToF32(pol.norm.mean), nM2 = store.b64ToF32(pol.norm.M2);
+    S.trainer.ppo.norm.mean.set(nm);
+    S.trainer.ppo.norm.M2.set(nM2);
+    S.trainer.ppo.norm.count = pol.norm.count || 1;
+    if (sess.hyper) Object.assign(S.trainer.hyper, sess.hyper);
+    if (sess.tricks) Object.assign(S.trainer.tricks, sess.tricks);
+    if (sess.rewards) Object.assign(S.rew, RewModel.fromJSON(sess.rewards, S.rew.toJSON()));
+    if (sess.rwx) {
+      const r = RwxModel.fromJSON(sess.rwx);
+      S.rwx.on = r.on; S.rwx.terms = r.terms;
+      if (S.task) S.task.cfg.rWx = S.rwx;
+    }
+    if (sess.laya && S.laya) S.laya = LayaRouter.fromJSON(sess.laya);
+    if (typeof sess.layaActive === 'boolean') S.layaActive = sess.layaActive && S.trainer.stage === 3;
+    if (typeof sess.stage === 'number') setStage(sess.stage, true);
+    if (sess.console && S.konsole) {
+      S.konsole.driveActive = !!sess.console.driveActive;
+      S.konsole.goalFollow = sess.console.goalFollow !== false;
+      S.konsole.headFollow = sess.console.headFollow !== false;
+    }
+    if (!opts.quiet) log('Speicherstand übernommen', 'ok');
+    return true;
+  } catch (e) {
+    log('Speicherstand unlesbar: ' + e.message, 'err');
+    return false;
+  }
+}
+
+// ── UI: Tabs ───────────────────────────────────────────────
+function wireTabs() {
+  const tabs = document.querySelectorAll('.tab');
+  const pages = document.querySelectorAll('.page');
+  tabs.forEach((tb) => {
+    tb.addEventListener('click', () => {
+      tabs.forEach((x) => x.classList.remove('on'));
+      pages.forEach((x) => x.classList.remove('on'));
+      tb.classList.add('on');
+      const p = $(tb.dataset.page);
+      if (p) p.classList.add('on');
+      if (tb.dataset.page === 'pgFeld') S.renderer && S.renderer.resize();
+    });
+  });
+  $('btnMode').addEventListener('click', () => {
+    const next = S.mode === 'pause' ? (S.trainer.updates > 0 ? 'live' : 'train') : 'pause';
+    setMode(next);
+  });
+  $('btnTrainGo').addEventListener('click', () => setMode('train'));
+  $('btnLiveGo').addEventListener('click', () => setMode('live'));
+  $('btnStop').addEventListener('click', () => setMode('pause'));
+  $('btnReset').addEventListener('click', () => {
+    S.trainer.resetAll();
+    log('Episode zurückgesetzt');
+  });
+}
+function setMode(m) {
+  S.mode = m;
+  $('modeChip').textContent = { train: 'TRAINING', live: 'POLICY', pause: 'PAUSE' }[m];
+  $('btnMode').textContent = m === 'pause' ? '▶ START' : '⏸ PAUSE';
+}
+
+// ── UI: Training (3 Stufen) ────────────────────────────────
+function wireTrainUI() {
+  document.querySelectorAll('.stage-btn').forEach((b) => {
+    b.addEventListener('click', () => setStage(parseInt(b.dataset.stage, 10)));
+  });
+  const bud = $('budget');
+  bud.value = S.budget;
+  bud.addEventListener('input', () => { S.budget = parseInt(bud.value, 10) || 30; $('budgetVal').textContent = S.budget; });
+  $('budgetVal').textContent = S.budget;
+  // Tricks-Schalter
+  const tk = $('tricksOn');
+  tk.checked = S.trainer.tricks.on;
+  tk.addEventListener('change', () => { S.trainer.tricks.on = tk.checked; S.dirty = true; });
+  for (const [id, key] of [['tkLr', 'autoLr'], ['tkRollout', 'autoRollout'], ['tkNoise', 'autoNoise']]) {
+    const el = $(id);
+    el.checked = S.trainer.tricks[key];
+    el.addEventListener('change', () => { S.trainer.tricks[key] = el.checked; S.dirty = true; });
+  }
+  // LAYA (Stufe 3)
+  $('layaOn').addEventListener('change', (e) => {
+    if (S.trainer.stage !== 3) { e.target.checked = false; $('layaHint').classList.remove('hidden'); return; }
+    S.layaActive = e.target.checked;
+    $('layaHint').classList.add('hidden');
+    S.dirty = true;
+  });
+  $('layaTemp').addEventListener('input', (e) => {
+    S.laya.temp = parseFloat(e.target.value) || 1.6;
+    $('layaTempVal').textContent = S.laya.temp.toFixed(1);
+    S.dirty = true;
+  });
+  markStages();
+}
+function setStage(s, silent = false) {
+  const old = S.trainer.stage;
+  S.trainer.setStage(s);
+  if (s !== 3) { S.layaActive = false; const lo = $('layaOn'); if (lo) lo.checked = false; }
+  if (!silent) log('Stufe ' + s + ': ' + ['…', 'Experten trainieren (Router friert)', 'Router trainiert (Experten frieren)', 'Feinabstimmung — sanfte Übergänge'][s]);
+  markStages();
+  S.dirty = true;
+  if (s !== old && !silent) { S.trainer.resetAll(); }
+}
+function markStages() {
+  document.querySelectorAll('.stage-btn').forEach((b) => {
+    b.classList.toggle('on', parseInt(b.dataset.stage, 10) === S.trainer.stage);
+  });
+  const info = {
+    1: 'EXPERTEN · Encoder + 4 Experten + Decoder · Router friert',
+    2: 'ROUTER · nur Router, Experten EINGEFROREN',
+    3: 'FEINABSTIMMUNG · alles offen · LR ×0,25 · Übergangsglättung ×3',
+  }[S.trainer.stage];
+  $('stageInfo').textContent = info;
+  const layaSec = $('layaSec');
+  if (layaSec) layaSec.classList.toggle('dim', S.trainer.stage !== 3);
+}
+
+// ── UI: Belohnung ──────────────────────────────────────────
+function buildRewardUI() {
+  const host = $('rewRows');
+  host.innerHTML = '';
+  for (const [k, label, lo, hi, st] of RW_FIELDS) {
+    const row = document.createElement('div');
+    row.className = 'rrow';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const sl = document.createElement('input');
+    sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = st; sl.value = S.rew[k];
+    const num = document.createElement('input');
+    num.type = 'number'; num.min = lo; num.max = hi; num.step = st; num.value = S.rew[k];
+    const sync = (v) => {
+      const x = parseFloat(v);
+      if (!Number.isFinite(x)) return;
+      S.rew[k] = x; S.dirty = true;
+      sl.value = x; num.value = x;
+    };
+    sl.addEventListener('input', () => sync(sl.value));
+    num.addEventListener('change', () => sync(num.value));
+    row.appendChild(lab); row.appendChild(sl); row.appendChild(num);
+    host.appendChild(row);
+  }
+  // Presets
+  const ph = $('presetRow');
+  ph.innerHTML = '';
+  for (const id of Object.keys(PRESETS)) {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = PRESETS[id].name;
+    b.addEventListener('click', () => {
+      S.rew.applyPreset(id);
+      S.dirty = true;
+      buildRewardUI();
+      log('Preset: ' + PRESETS[id].name, 'ok');
+    });
+    ph.appendChild(b);
+  }
+  // Terme
+  buildRwxUI();
+}
+function buildRwxUI() {
+  const host = $('rwxRows');
+  host.innerHTML = '';
+  S.rwx.terms.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'trow';
+    const head = document.createElement('div');
+    head.className = 'trow-head';
+    const nm = document.createElement('span');
+    nm.textContent = (RWX_DEFS[t.kind] ? RWX_DEFS[t.kind].label : t.kind) + ' · w ' + t.w.toFixed(2);
+    head.appendChild(nm);
+    const del = document.createElement('button');
+    del.className = 'mini';
+    del.textContent = '✕';
+    del.addEventListener('click', () => { S.rwx.remove(i); S.dirty = true; buildRwxUI(); });
+    head.appendChild(del);
+    row.appendChild(head);
+    const grid = document.createElement('div');
+    grid.className = 'tgrid';
+    for (const p of (RWX_DEFS[t.kind] ? RWX_DEFS[t.kind].params : [])) {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = '0.05'; inp.value = t[p];
+      inp.dataset.p = p;
+      inp.addEventListener('change', () => {
+        const v = parseFloat(inp.value);
+        if (Number.isFinite(v)) { t[p] = v; S.dirty = true; }
+      });
+      const l = document.createElement('label');
+      l.textContent = p;
+      const wrap = document.createElement('div');
+      wrap.appendChild(l); wrap.appendChild(inp);
+      grid.appendChild(wrap);
+    }
+    // Gewicht
+    const wInp = document.createElement('input');
+    wInp.type = 'number'; wInp.step = '0.05'; wInp.value = t.w;
+    wInp.addEventListener('change', () => {
+      const v = parseFloat(wInp.value);
+      if (Number.isFinite(v)) { t.w = Math.max(0, Math.min(5, v)); S.dirty = true; }
+    });
+    const wL = document.createElement('label');
+    wL.textContent = 'w';
+    const wWrap = document.createElement('div');
+    wWrap.appendChild(wL); wWrap.appendChild(wInp);
+    grid.appendChild(wWrap);
+    // Quelle: Konsole (nur goTo/faceYaw)
+    if (t.kind === 'goTo' || t.kind === 'faceYaw') {
+      const chk = document.createElement('input');
+      chk.type = 'checkbox'; chk.checked = t.source === 'console';
+      chk.addEventListener('change', () => { t.source = chk.checked ? 'console' : null; S.dirty = true; });
+      const cl = document.createElement('label');
+      cl.textContent = 'Quelle: Konsole';
+      const cWrap = document.createElement('div');
+      cWrap.appendChild(cl); cWrap.appendChild(chk);
+      grid.appendChild(cWrap);
+    }
+    row.appendChild(grid);
+    host.appendChild(row);
+  });
+  $('rwxOn').checked = S.rwx.on === 1 && S.rwx.terms.length > 0;
+}
+function wireRewardUI() {
+  $('rwxOn').addEventListener('change', (e) => {
+    S.rwx.on = e.target.checked ? 1 : 0;
+    S.dirty = true;
+  });
+  $('rwxKind').addEventListener('change', () => { /* nur Auswahl */ });
+  $('rwxAdd').addEventListener('click', () => {
+    const kind = $('rwxKind').value;
+    const t = S.rwx.add(kind, {});
+    if (t) { S.dirty = true; buildRwxUI(); }
+  });
+}
+
+// ── UI: Konsole ────────────────────────────────────────────
+function wireConsoleUI() {
+  $('consOn').addEventListener('change', (e) => {
+    S.konsole.driveActive = e.target.checked;
+    $('consHint').classList.toggle('hidden', e.target.checked);
+    S.dirty = true;
+  });
+  $('btnConsoleTest').addEventListener('click', () => {
+    // kurzer Selbstdruck aller 4 Buttons (Anzeige-Demo)
+    for (let i = 0; i < 4; i++) setTimeout(() => S.konsole.press(i), i * 160);
+  });
+}
+
+// ── UI: Modell (Export/Quantisierung/EP/Speicher) ──────────
+function wireModelUI() {
+  $('expFmt').value = 'fp32';
+  $('expNorm').checked = true;
+  $('expValue').checked = false;
+  $('btnExportOnnx').addEventListener('click', () => {
+    const fmt = $('expFmt').value;
+    try {
+      const norm = $('expNorm').checked
+        ? { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) }
+        : null;
+      const { bytes, ops, params, outputs } = moeToOnnx(S.trainer.ppo.net, {
+        format: fmt, norm, valueHead: $('expValue').checked,
+      });
+      store.exportFile({ app: APP_NAME, fmt, ops, params, outputs, onnx: Array.from(bytes) },
+        'feld-policy-' + fmt + '.onnx.json');
+      $('expState').textContent = 'Export OK: ' + ops + ' Knoten, ' + params + ' Parameter (' + fmt + ')';
+      log('ONNX-Export (' + fmt + '): ' + bytes.length + ' Bytes', 'ok');
+    } catch (e) {
+      $('expState').textContent = 'Export-Fehler: ' + e.message;
+    }
+  });
+  $('btnSelfTest').addEventListener('click', async () => {
+    $('expState').textContent = 'Selbsttest läuft (ORT wird geladen) …';
+    try {
+      const r = await selfTest(S.trainer.ppo.net, $('epSel').value);
+      $('expState').textContent = 'Parität ONNX ↔ JS: maxΔ = ' + r.maxDiff.toExponential(2) + ' (n=' + r.n + ')';
+      log('ONNX-Selbsttest: maxΔ ' + r.maxDiff.toExponential(2), 'ok');
+    } catch (e) {
+      $('expState').textContent = 'Selbsttest-Fehler: ' + e.message;
+    }
+  });
+  $('btnRunOrt').addEventListener('click', async () => {
+    try {
+      $('expState').textContent = 'Erzeuge Session …';
+      const norm = { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) };
+      const { bytes } = moeToOnnx(S.trainer.ppo.net, { format: 'fp32', norm, valueHead: false });
+      const { session, ep, ort } = await createSession(bytes, $('epSel').value);
+      S.ortInfer = session;
+      S._ortT = ort.Tensor;
+      $('epReal').textContent = 'Aktiv: ' + ep;
+      $('expState').textContent = 'ONNX-Inferenz aktiv (' + ep + ')';
+    } catch (e) {
+      $('expState').textContent = 'Session-Fehler: ' + e.message;
+    }
+  });
+  $('btnStopOrt').addEventListener('click', () => {
+    S.ortInfer = null;
+    $('epReal').textContent = '';
+    $('expState').textContent = 'ONNX-Inferenz aus';
+  });
+  // Speicher
+  $('btnExportJson').addEventListener('click', () => {
+    store.exportFile(sessionBlob());
+    $('saveState').textContent = 'Exportiert';
+  });
+  $('btnImportJson').addEventListener('click', async () => {
+    try {
+      const obj = await store.importFile();
+      if (applySession(obj)) $('saveState').textContent = 'Import OK';
+    } catch (e) {
+      $('saveState').textContent = 'Import-Fehler: ' + e.message;
+    }
+  });
+  $('btnClearSave').addEventListener('click', () => {
+    store.clearSession();
+    $('saveState').textContent = 'Autosave gelöscht';
+  });
+}
+
+// ── Renderer-Größe + Kamera-Geste ──────────────────────────
+function wireResize() {
+  const fit = () => { S.renderer && S.renderer.resize(); };
+  window.addEventListener('resize', fit);
+  setTimeout(fit, 0);
+}
+function wireGesture() {
+  const cv = $('gl');
+  let pid = null, px = 0, py = 0, pinch = 0;
+  cv.addEventListener('pointerdown', (e) => { pid = e.pointerId; px = e.clientX; py = e.clientY; cv.setPointerCapture(pid); });
+  cv.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pid) return;
+    const r = S.renderer;
+    r.camYaw -= (e.clientX - px) * 0.008;
+    r.camPitch = Math.max(0.05, Math.min(1.35, r.camPitch + (e.clientY - py) * 0.006));
+    px = e.clientX; py = e.clientY;
+  });
+  cv.addEventListener('pointerup', () => { pid = null; });
+  cv.addEventListener('pointercancel', () => { pid = null; });
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    S.renderer.camDist = Math.max(0.6, Math.min(12, S.renderer.camDist * (1 + Math.sign(e.deltaY) * 0.1)));
+  }, { passive: false });
+}
+
+// ── Los ────────────────────────────────────────────────────
+wireRewardUI();
+boot();

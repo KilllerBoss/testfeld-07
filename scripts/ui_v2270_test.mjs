@@ -13,6 +13,15 @@
 // Usage: node scripts/ui_v2270_test.mjs
 
 import { chromium } from 'playwright';
+// v3.0.0 GUARD: ALT-UI-Suite — die neue Feld-App (index.html → js/feld/feld.js)
+// hat diese Oberfläche bewusst ersetzt. Die Suite springt ab, statt auf
+// Alt-Panels zu warten, die nicht mehr existieren.
+import { readFileSync as __rfs } from 'node:fs';
+if (__rfs(new URL('../app/src/main/assets/www/index.html', import.meta.url), 'utf8').includes('js/feld/feld.js')) {
+  console.log('— ALT-UI-Suite übersprungen (Feld-App v3.0.0 ist aktiv) —');
+  process.exit(0);
+}
+
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -46,7 +55,7 @@ const gradleSrc = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
 
 console.log('— Statische Pins —');
 check('VERSION 2.28.4/2.28.5/2.28.6 in main.js', mainSrc.includes("const VERSION = '2.28.4'") || mainSrc.includes("const VERSION = '2.28.5'") || mainSrc.includes("const VERSION = '2.28.6'") || mainSrc.includes("const VERSION = '2.28.7'") || mainSrc.includes("const VERSION = '2.28.8'") || mainSrc.includes("const VERSION = '2.28.9'") || mainSrc.includes("const VERSION = '2.28.10'") || mainSrc.includes("const VERSION = '2.28.11'"));
-check('versionCode 45/46/47 / versionName 2.28.4/2.28.5/2.28.6', (gradleSrc.includes('versionCode 45') && gradleSrc.includes('versionName "2.28.4"')) || (gradleSrc.includes('versionCode 46') && gradleSrc.includes('versionName "2.28.5"')) || (gradleSrc.includes('versionCode 47') && gradleSrc.includes('versionName "2.28.6"')) || (gradleSrc.includes('versionCode 48') && gradleSrc.includes('versionName "2.28.7"')) || (gradleSrc.includes('versionCode 49') && gradleSrc.includes('versionName "2.28.8"')) || (gradleSrc.includes('versionCode 50') && gradleSrc.includes('versionName "2.28.9"')) || (gradleSrc.includes('versionCode 51') && gradleSrc.includes('versionName "2.28.10"')) || (gradleSrc.includes('versionCode 52') && gradleSrc.includes('versionName "2.28.11"')));
+check('versionCode 45/46/47 / versionName 2.28.4/2.28.5/2.28.6', (gradleSrc.includes('versionCode 45') && gradleSrc.includes('versionName "2.28.4"')) || (gradleSrc.includes('versionCode 46') && gradleSrc.includes('versionName "2.28.5"')) || (gradleSrc.includes('versionCode 47') && gradleSrc.includes('versionName "2.28.6"')) || (gradleSrc.includes('versionCode 48') && gradleSrc.includes('versionName "2.28.7"')) || (gradleSrc.includes('versionCode 49') && gradleSrc.includes('versionName "2.28.8"')) || (gradleSrc.includes('versionCode 50') && gradleSrc.includes('versionName "2.28.9"')) || (gradleSrc.includes('versionCode 51') && gradleSrc.includes('versionName "2.28.10"')) || (gradleSrc.includes('versionCode 52') && gradleSrc.includes('versionName "2.28.11"')) || (gradleSrc.includes('versionCode 100') && gradleSrc.includes('versionName "3.0.0"')));
 check('render3d: mirrorGhost(sim) definiert', /mirrorGhost\(sim\)\s*\{/.test(r3dSrc));
 check('render3d: buildGhost setzt sofort Live-Pose', /if \(sim && sim\._xpos && sim\._xquat\) this\.updateGhost\(\{ xpos: sim\._xpos, xquat: sim\._xquat \}\);/.test(r3dSrc));
 check('main.js: Render-Loop spiegelt Geist ohne Referenz (r3d.mirrorGhost(S.sim))', mainSrc.includes('r3d.mirrorGhost(S.sim)'));

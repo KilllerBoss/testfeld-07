@@ -11,6 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "onnxruntime-node": "^1.30.0"
+    "onnxruntime-node": "^1.27.0",
+    "protobufjs": "^8.8.0"
   }
 }

@@ -2,448 +2,186 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0a0e14">
-<title>LerTrain · Testfeld·07</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Feld</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 3D-Welt: Vollbild -->
+
+<!-- ═══ FELD (3D) ═══ -->
+<section class="page on" id="pgFeld">
   <canvas id="gl"></canvas>
+  <div id="hud" class="hud"></div>
+  <div id="bootOverlay" class="boot">
+    <div class="boot-mark"><span class="sq"></span><span class="dot"></span></div>
+    <div class="boot-name">FELD</div>
+    <pre id="bootlog" class="bootlog"></pre>
+  </div>
+  <div class="field-bar">
+    <button id="btnMode" class="primary">▶ START</button>
+    <span id="modeChip" class="chip">PAUSE</span>
+    <span class="chip dim">MICRODUCK · SOFT-MOE-LLN</span>
+  </div>
+</section>
 
-  <!-- Ladesplash -->
-  <div id="splash">
-    <div class="splash-mark">TESTFELD·07</div>
-    <div class="splash-title">TRAINROBOT</div>
-    <div class="splash-sub">MuJoCo-Sandbox mit Policy-Training · CPU · ohne CUDA</div>
-    <div id="splashStatus" class="splash-status">Starte System …</div>
-    <div class="splash-bar"><div id="splashBar"></div></div>
+<!-- ═══ TRAINING ═══ -->
+<section class="page" id="pgTrain">
+  <header class="ph">TRAINING <span class="dim">Soft-MoE · 3 Stufen</span></header>
+  <div class="card">
+    <div class="stages">
+      <button class="stage-btn" data-stage="1"><b>1</b><span>Experten<br>trainieren</span></button>
+      <button class="stage-btn" data-stage="2"><b>2</b><span>Router trainieren<br><i>Experten frieren</i></span></button>
+      <button class="stage-btn" data-stage="3"><b>3</b><span>Feinabstimmung<br><i>sanfte Übergänge</i></span></button>
+    </div>
+    <div id="stageInfo" class="hint"></div>
+    <div class="row">
+      <button id="btnTrainGo" class="primary">▶ TRAINIEREN</button>
+      <button id="btnLiveGo">POLICY</button>
+      <button id="btnStop">STOP</button>
+      <button id="btnReset" class="ghost">RESET</button>
+    </div>
+    <div class="rrow">
+      <label>Schritte je Bild</label>
+      <input id="budget" type="range" min="8" max="120" step="2" value="30">
+      <output id="budgetVal">30</output>
+    </div>
+    <canvas id="chart" width="560" height="120"></canvas>
   </div>
 
-  <!-- Fehler-Anzeige (KEIN Fallback: bei Defekt wird abgebrochen) -->
-  <div id="failScreen" class="hidden">
-    <div class="fail-box">
-      <div class="fail-head">SYSTEMFEHLER</div>
-      <div id="failMsg" class="fail-msg"></div>
-      <button id="failReload" class="btn btn-solid">Neustart</button>
+  <div class="card">
+    <h3>TRICKS <span class="dim">— passen sich je Erfolg an</span></h3>
+    <div class="toggles">
+      <label class="switch"><input id="tricksOn" type="checkbox" checked><span>Tricks aktiv</span></label>
+      <label class="switch"><input id="tkLr" type="checkbox" checked><span>Lernrate adaptiv</span></label>
+      <label class="switch"><input id="tkRollout" type="checkbox" checked><span>Rollout-Länge adaptiv</span></label>
+      <label class="switch"><input id="tkNoise" type="checkbox" checked><span>Rauschen adaptiv</span></label>
     </div>
+    <p class="hint">Erfolg steigt → Lernrate +, Rollout länger, σ kleiner. Erfolg fällt → Lernrate −, Rollout kürzer, σ größer. Begrenzt und gebremst; Werte stehen im HUD.</p>
   </div>
 
-  <!-- Obere Leiste -->
-  <header id="topbar" class="ui hidden">
-    <div class="brand">
-      <span class="brand-mark">TESTFELD·07</span>
-      <span id="robotTitle" class="brand-robot">—</span>
+  <div class="card" id="layaSec">
+    <h3>LAYA-ROUTER <span class="dim">— System 1, Stufe 3</span></h3>
+    <div class="toggles">
+      <label class="switch"><input id="layaOn" type="checkbox"><span>LAYA als Router</span></label>
     </div>
-    <div class="top-actions">
-      <button id="btnTrainTop" class="iconbtn" aria-label="Training" title="Training">
-        <svg viewBox="0 0 24 24"><path d="M4 20V10M9 20V4M14 20v-7M19 20V8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-      <button id="btnCanvas" class="iconbtn" aria-label="Netz-Canvas" title="Netz-Canvas (Policies bauen und verbinden)">
-        <svg viewBox="0 0 24 24"><circle cx="4.5" cy="6.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="4.5" cy="17.5" r="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="14.5" y="9" width="7" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 6.5h4a2 2 0 0 1 2 2V10M6.5 17.5h4a2 2 0 0 0 2-2V14" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-      </button>
-      <button id="btnArdy" class="iconbtn" aria-label="ARDY Mini" title="ARDY Mini: Text → Motion auf dem Gerät (eigene Steuerung + Prompting + Modell-Download + Live-%)">
-        <svg viewBox="0 0 24 24"><circle cx="13" cy="4.6" r="2" fill="currentColor"/><path d="M13 7.2l-3.4 1.6-2.2 3M13 7.2l3.2 1.4 1.2 3.2M13 7.2v4.4l-2.6 3-1.6 5M13 11.6l2.4 2.8.8 5.4M9.6 8.8l-3 .8-1.4 2.4M9.6 8.8l2 3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button id="btnAI" class="iconbtn" aria-label="KI-Trainer" title="KI-Trainer (Gemini)">
-        <svg viewBox="0 0 24 24"><path d="M12 3l1.7 4.6L18 9.3l-4.3 1.7L12 15.6l-1.7-4.6L6 9.3l4.3-1.7zM18.5 14l.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9zM5.5 15.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" fill="currentColor"/></svg>
-      </button>
-      <!-- v2.14.1: Vollbild-Button ENTFERNT — die App ist nativ Immersive
-           (MainActivity SYSTEM_UI_FLAG_IMMERSIVE_STICKY), ein WebView hat
-           keine requestFullscreen-API — der Button konnte nichts tun.
-           v2.14.1: Konsole-Button ENTFERNT (Nutzerwunsch; Log läuft unsichtbar). -->
+    <div class="rrow">
+      <label>Entschiedenheit</label>
+      <input id="layaTemp" type="range" min="0.6" max="3" step="0.1" value="1.6">
+      <output id="layaTempVal">1.6</output>
     </div>
-  </header>
-
-  <!-- Roboter-Auswahl: dynamisch aus robots.js befüllt (v2.14.0: 3 Modelle) -->
-  <nav id="robotBar" class="ui hidden" aria-label="Roboter"></nav>
-
-  <!-- Modus-Umschalter -->
-  <nav id="modeBar" class="ui hidden" aria-label="Modus">
-    <button id="modeManuell" class="mode-chip active">MANUELL</button>
-    <button id="modePolicy" class="mode-chip">POLICY</button>
-    <button id="modeCanvas" class="mode-chip" title="Netz-Canvas auf dem Roboter ausführen">CANVAS</button>
-    <span id="policyHint" class="policy-hint hidden">keine Policy gespeichert</span>
-  </nav>
-
-  <!-- Welt-Auswahl (v2.7.0: Presets + Zufallsgenerator, prozedural skaliert) -->
-  <nav id="worldBar" class="ui hidden" aria-label="Welt"></nav>
-
-  <!-- Statuszeile -->
-  <div id="statusLine" class="ui hidden">
-    <span id="stSpeed">0,00 m/s</span>
-    <span class="sep">·</span>
-    <span id="stAlt">0,00 m</span>
-    <span class="sep">·</span>
-    <span id="stHz">60 Hz</span>
-    <span class="sep">·</span>
-    <span id="stMode">MANUELL</span>
+    <p id="layaHint" class="warn hidden">LAYA steht erst in STUFE 3 bereit (System 1: getypte Entscheidung in einem Durchlauf).</p>
+    <p class="hint">LAYA (Convai, Apache 2.0 — offene Alternative zu Jev) wählt je 0,5 s den passenden Experten: balance · walk · turn · recover — kalibriert, mit Hysterese.</p>
   </div>
+</section>
 
-  <!-- Clip-Aktions-Buttons (v2.6.0: unten statt oben) -->
-  <div id="clipButtons" class="clip-buttons hidden"></div>
-
-  <!-- Plugin-Chips (v2.7.0: Buttons aus KI-geschriebenen Mods, ganz unten) -->
-  <div id="pluginChips" class="ai-buttons plugin-chips hidden"></div>
-
-  <!-- KI-Button-Leiste (von der KI eingerichtete Aktionen, v2.6.0 unten) -->
-  <div id="aiButtons" class="ai-buttons hidden"></div>
-
-  <!-- Steuerung -->
-  <div id="controls" class="ui hidden">
-    <div id="joyZone"><div id="joyBase"><div id="joyStick"></div></div></div>
-    <div id="actionCol">
-      <button id="btnUp" class="padbtn drone-only hidden" aria-label="Steigen">
-        <svg viewBox="0 0 24 24"><path d="M12 5l7 8h-4v6h-6v-6H5z" fill="currentColor"/></svg>
-      </button>
-      <button id="btnDown" class="padbtn drone-only hidden" aria-label="Sinken">
-        <svg viewBox="0 0 24 24"><path d="M12 19l-7-8h4V5h6v6h4z" fill="currentColor"/></svg>
-      </button>
-      <button id="btnPush" class="padbtn pushbtn" aria-label="Schubsen">
-        <svg viewBox="0 0 24 24"><path d="M3 12h11M11 7l5 5-5 5M18 5v14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button id="btnPad" class="padbtn" aria-label="Gamepad ein-/ausblenden (2 Sticks + A/B/C/D)" title="Gamepad: linker Stick = vor/seit · rechter Stick = drehen · A Hüpfen · B Hinlegen · C Aufstehen · D Stopp">
-        <svg viewBox="0 0 24 24"><path d="M6 9h4m-2-2v4m8-1h.01M18 12h.01M7 5h10a4 4 0 0 1 4 4v6a2 2 0 0 1-3.4 1.4L15 14H9l-2.6 2.4A2 2 0 0 1 3 15V9a4 4 0 0 1 4-4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button id="btnCam" class="padbtn" aria-label="Kamera (Robotersicht)">
-        <svg viewBox="0 0 24 24"><path d="M4 8h9l3-2 4 2v8l-4 2-3-2H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="10.5" cy="12" r="2.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-      </button>
-      <button id="btnReset" class="padbtn" aria-label="Zurücksetzen">
-        <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.34 5.66M4 12V7m0 5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
+<!-- ═══ BELohnung ═══ -->
+<section class="page" id="pgReward">
+  <header class="ph">BELohnung <span class="dim">alle Regler · sofort wirksam</span></header>
+  <div class="card">
+    <h3>PRESETS</h3>
+    <div class="row wrap" id="presetRow"></div>
   </div>
-
-  <!-- v2.23.0: GAMEPAD-Overlay (Controller-Layout, touch-action:none) ·
-       v2.24.0: eigener ×-Knopf als ERSTES Element der rechten Pad-Seite —
-       er hängt ÜBER den A/B/C/D-Tasten in derselben Flex-Spalte und kann
-       deshalb von keiner Taste blockiert werden -->
-  <div id="padOverlay" class="ui hidden">
-    <div class="padSide padSideL">
-      <div id="padLZone" class="padZone"><div id="padLStick" class="padStick"></div></div>
-      <span class="padLbl">VOR / SEIT</span>
-    </div>
-    <div class="padSide padSideR">
-      <button id="padClose" class="padClose" aria-label="Controller schließen" title="Controller schließen">×</button>
-      <div class="padBtns">
-        <button id="padBtnA" class="padBtn padA" aria-label="A: Hüpfen/Sprung">A</button>
-        <button id="padBtnB" class="padBtn padB" aria-label="B: Hinlegen">B</button>
-        <button id="padBtnC" class="padBtn padC" aria-label="C: Aufstehen">C</button>
-        <button id="padBtnD" class="padBtn padD" aria-label="D: Stopp">D</button>
-      </div>
-      <div id="padRZone" class="padZone"><div id="padRStick" class="padStick"></div></div>
-      <span class="padLbl">DREHEN</span>
-    </div>
+  <div class="card">
+    <h3>GEWICHTE</h3>
+    <div id="rewRows"></div>
   </div>
-
-  <!-- v2.13.0: FPV-Kamerabild (nur ANZEIGE — kein Policy-Eingang) -->
-  <div id="fpvWrap" class="hidden">
-    <canvas id="fpvCanvas" width="240" height="160"></canvas>
-    <span id="fpvLabel">ROBOTER-SICHT</span>
+  <div class="card">
+    <h3>ZUSATZTERME</h3>
+    <label class="switch"><input id="rwxOn" type="checkbox"><span>Terme aktiv</span></label>
+    <div id="rwxRows"></div>
+    <div class="row">
+      <select id="rwxKind" class="select">
+        <option value="goTo">Ziel (goTo)</option>
+        <option value="stayNear">Umkreis (stayNear)</option>
+        <option value="heightBand">Höhenband</option>
+        <option value="faceYaw">Blickrichtung (faceYaw)</option>
+        <option value="paceMax">Tempo max</option>
+        <option value="paceMin">Tempo min</option>
+        <option value="uprightMin">Aufrecht min</option>
+        <option value="symmetric">L/R-Symmetrie</option>
+      </select>
+      <button id="rwxAdd">+ TERM</button>
+    </div>
+    <p class="hint">goTo/faceYaw können ihre Ziele LIVE aus der Steuerkonsole beziehen („Quelle: Konsole“ am Term).</p>
   </div>
+</section>
 
-  <!-- Trainings-Panel -->
-  <section id="trainSheet" class="sheet hidden">
-    <div class="sheet-grab"></div>
-    <div class="sheet-head">
-      <span class="sheet-title">POLICY-TRAINING</span>
-      <span id="trainRobotName" class="sheet-sub">—</span>
-      <button id="trainClose" class="iconbtn" aria-label="Schließen">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-    </div>
+<!-- ═══ STEUERUNG ═══ -->
+<section class="page" id="pgConsole">
+  <header class="ph">STEUERUNG <span class="dim">Konsole</span></header>
+  <div class="card">
+    <label class="switch"><input id="consOn" type="checkbox"><span>Konsole übernimmt Kommandos</span></label>
+    <p id="consHint" class="hint">Aus: Kommandos kommen aus dem Training (Zufallsplaner).</p>
+  </div>
+  <div class="card padcard">
+    <div id="consolePad" class="padwrap"></div>
+  </div>
+  <div class="card">
+    <p class="hint">Links: Bewegung (vor/zurück/seitlich) · Rechts: Kopfrichtung (drehen). Buttons: HÜPFEN · LIEGEN · AUFSTEHEN · STOPP. Mit „Quelle: Konsole“ im Belohnungs-Tab füttern die Joysticks zusätzlich goTo/faceYaw.</p>
+    <div class="row"><button id="btnConsoleTest" class="ghost">Buttons testen</button></div>
+  </div>
+</section>
 
-    <div class="train-grid">
-      <div class="stat"><span class="stat-k">Belohnung</span><span id="tReward" class="stat-v">–</span></div>
-      <div class="stat"><span class="stat-k">Episoden</span><span id="tEpisodes" class="stat-v">0</span></div>
-      <div class="stat"><span class="stat-k">Schritte</span><span id="tSteps" class="stat-v">0</span></div>
-      <div class="stat"><span class="stat-k">Tempo</span><span id="tRate" class="stat-v">0 /s</span></div>
+<!-- ═══ MODELL ═══ -->
+<section class="page" id="pgModel">
+  <header class="ph">MODELL <span class="dim">Export · Ausführung · Speicher</span></header>
+  <div class="card">
+    <h3>ONNX-EXPORT</h3>
+    <div class="rrow"><label>Format</label>
+      <select id="expFmt" class="select">
+        <option value="fp32">fp32</option>
+        <option value="fp16">fp16 (halb)</option>
+        <option value="int8">int8 (W8A32)</option>
+      </select>
     </div>
+    <div class="toggles">
+      <label class="switch"><input id="expNorm" type="checkbox" checked><span>Norm einbauen</span></label>
+      <label class="switch"><input id="expValue" type="checkbox"><span>Wertkopf mit</span></label>
+    </div>
+    <div class="row">
+      <button id="btnExportOnnx" class="primary">EXPORT .ONNX</button>
+      <button id="btnSelfTest" class="ghost">SELBSTTEST</button>
+    </div>
+    <div id="expState" class="hint"></div>
+  </div>
+  <div class="card">
+    <h3>AUSFÜHRUNG <span class="dim">CPU · GPU · NPU</span></h3>
+    <div class="rrow"><label>Gerät</label>
+      <select id="epSel" class="select">
+        <option value="auto">Auto (NPU → GPU → CPU)</option>
+        <option value="cpu">CPU (wasm)</option>
+        <option value="gpu">GPU (webgpu)</option>
+        <option value="npu">NPU (webnn)</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="btnRunOrt" class="primary">POLICY ÜBER ONNX LAUFEN LASSEN</button>
+      <button id="btnStopOrt">AUS</button>
+    </div>
+    <div id="epReal" class="hint"></div>
+    <p class="hint">Samsung S26 Ultra: NPU über WebNN (wenn der WebView es anbietet), GPU über WebGPU, CPU immer. Fallback-Kette automatisch.</p>
+  </div>
+  <div class="card">
+    <h3>SPEICHER <span class="dim">Autosave · Import · Export</span></h3>
+    <div class="row wrap">
+      <button id="btnExportJson">EXPORT .JSON</button>
+      <button id="btnImportJson">IMPORT</button>
+      <button id="btnClearSave" class="ghost">AUTOSAVE LÖSCHEN</button>
+    </div>
+    <div id="saveState" class="hint"></div>
+    <p class="hint">Autosave: alle 10 s bei Änderung (Policy, Stufe, Tricks, Belohnung, Konsole, LAYA).</p>
+  </div>
+</section>
 
-    <canvas id="rewardChart" width="640" height="200"></canvas>
-    <canvas id="rateChart" width="640" height="90"></canvas>
+<!-- ═══ TAB-LEISTE ═══ -->
+<nav class="tabs">
+  <button class="tab on" data-page="pgFeld">FELD</button>
+  <button class="tab" data-page="pgTrain">TRAIN</button>
+  <button class="tab" data-page="pgReward">BELohnung</button>
+  <button class="tab" data-page="pgConsole">STEUER</button>
+  <button class="tab" data-page="pgModel">MODELL</button>
+</nav>
 
-    <div class="train-actions">
-      <button id="tStart" class="btn btn-solid">Training starten</button>
-      <button id="tReset" class="btn">Zurücksetzen</button>
-    </div>
-    <div class="train-actions">
-      <div class="speed-slider-row" role="group" aria-label="Trainings-Tempo">
-        <span class="glb-ctrl-label">Tempo</span>
-        <input type="range" id="speedSlider" class="speed-slider" min="1" max="16" step="1" value="2" autocomplete="off">
-        <span id="speedVal" class="stat-k">2×</span>
-      </div>
-    </div>
-    <div class="train-actions" id="duckRow" style="display:none;">
-      <div class="speed-group" role="group" aria-label="Soft-MoE Routing">
-        <span class="stat-k" style="align-self:center;margin-right:6px;">Router</span>
-        <span class="route-bar"><span id="routeBal" class="route-fill rf-bal"></span><span class="route-lbl">Bal</span></span>
-        <span class="route-bar"><span id="routeWalk" class="route-fill rf-walk"></span><span class="route-lbl">Walk</span></span>
-        <span class="route-bar"><span id="routeTurn" class="route-fill rf-turn"></span><span class="route-lbl">Turn</span></span>
-        <span class="route-bar"><span id="routeRec" class="route-fill rf-rec"></span><span class="route-lbl">Rec</span></span>
-      </div>
-      <span id="duckLevel" class="stat-k" style="align-self:center;">Lv 1</span>
-    </div>
-    <div class="train-actions">
-      <button id="tSave" class="btn small">Speichern</button>
-      <button id="tLoad" class="btn small">Laden</button>
-      <button id="tExport" class="btn small">Export</button>
-      <button id="tImport" class="btn small">Import</button>
-      <input type="file" id="importFile" accept=".json,application/json" class="hidden">
-    </div>
-
-    <div class="train-actions" id="scnRow">
-      <span class="glb-ctrl-label">Aufgabe</span>
-      <button class="speed-chip scn-chip active" data-scn="gehen">Gehen</button>
-      <button class="speed-chip scn-chip" data-scn="getup">Aufstehen</button>
-      <button class="speed-chip scn-chip" data-scn="drop">Abwurf</button>
-    </div>
-    <div class="train-actions" id="fallRow">
-      <span class="glb-ctrl-label">Bei Sturz</span>
-      <button class="speed-chip fall-chip active" data-fall="reset">Auto-Reset</button>
-      <button class="speed-chip fall-chip" data-fall="stay">Liegen lassen</button>
-    </div>
-    <div class="train-actions" id="drRow">
-      <span class="glb-ctrl-label">Störungen</span>
-      <button class="speed-chip dr-chip" data-dr="aus">Aus</button>
-      <button class="speed-chip dr-chip active" data-dr="leicht">Leicht</button>
-      <button class="speed-chip dr-chip" data-dr="mittel">Mittel</button>
-      <button class="speed-chip dr-chip" data-dr="stark">Stark</button>
-    </div>
-
-    <div id="glbSection" class="glb-section hidden">
-      <div class="glb-head">
-        <span class="sheet-title" style="font-size:11px">GLB-BEWEGUNG · FÜR JEDEN ROBOTER</span>
-        <span class="glb-toggles">
-          <label class="glb-toggle"><input type="checkbox" id="ghostToggle" checked> Geist</label>
-          <label class="glb-toggle"><input type="checkbox" id="srcShowToggle"> Original</label>
-        </span>
-      </div>
-      <div class="glb-row">
-        <button id="glbImportBtn" class="btn small">.glb importieren</button>
-        <input type="file" id="glbFile" accept=".glb,model/gltf-binary" class="hidden" multiple>
-        <button id="csvImportBtn" class="btn small" title="NVIDIA ARDY — Text→Motion als G1-QPOS-CSV (erzeugt auf einer kostenlosen Cloud-GPU, siehe ardy_colab.ipynb im Repo)">.csv (ARDY)</button>
-        <input type="file" id="csvFile" accept=".csv,text/csv" class="hidden" multiple>
-        <button id="bcBtn" class="btn small">BC vortrainieren</button>
-        <button id="glbUnbind" class="btn small">OHNE ANIM WEITER</button>
-      </div>
-      <div class="glb-row glb-ctrl-row">
-        <span class="glb-ctrl-label">Referenz</span>
-        <button class="speed-chip ref-chip active" data-ref="stelle" title="Referenz steht fix am Startpunkt — Bewegung auf der Stelle">STELLE</button>
-        <button class="speed-chip ref-chip" data-ref="frei" title="Der Lehrer wandert auf seiner Bahn durchs Feld">FREI</button>
-        <button class="speed-chip ref-chip" data-ref="folgt" title="Der Lehrer hängt am Roboter und spielt die Bewegung relativ zu ihm ab — kein Bahn-Zwang">FOLGT</button>
-      </div>
-      <div class="glb-row glb-ctrl-row">
-        <span class="glb-ctrl-label">Steuerung</span>
-        <button class="speed-chip ctrl-chip active" data-ctrl="none">Keine</button>
-        <button class="speed-chip ctrl-chip" data-ctrl="joy">Joystick</button>
-        <button class="speed-chip ctrl-chip" data-ctrl="btn">Buttons</button>
-        <label class="glb-toggle anim-train-toggle"><input type="checkbox" id="animTrainToggle" checked> Animation im Training</label>
-      </div>
-      <div class="glb-row glb-ctrl-row">
-        <span class="glb-ctrl-label">MOTION-KI</span>
-        <button id="mkiChip" class="speed-chip" title="Die fertig trainierte Motion-Policy animiert den Roboter — du steuerst bei Bedarf per Joystick/Buttons (Modus POLICY)">AUS</button>
-        <input id="mkiMix" type="range" min="0" max="1" step="0.05" value="0.7" title="Steuer-Mix: links = Clip (KI animiert selbst), rechts = Stick (du führst)" style="flex:1; min-width:70px; max-width:150px;">
-        <span id="mkiMixVal" class="glb-ctrl-label" style="min-width:36px; text-align:right;">70 %</span>
-        <button id="mkiPause" class="btn small" title="Geist einfrieren — der Roboter hält die aktuelle Pose">⏸ GEIST</button>
-        <button id="mkiNext" class="btn small" title="Zum nächsten Clip für diesen Roboter springen">⏭ CLIP</button>
-      </div>
-      <div class="glb-row glb-ctrl-row">
-        <span class="glb-ctrl-label">LEHRER</span>
-        <button id="teacherChip" class="speed-chip" title="Basis-Motion-Datensatz (HuggingFace, Auto-Download) als BELOHNUNGS-Lehrer — die Animation ist NIE Policy-Input und kann jederzeit auf 0 gefadet werden, ohne dass das Verhalten springt">AUS</button>
-        <input id="teacherW" type="range" min="0" max="1" step="0.05" value="0.6" title="Lehrer-Gewicht (Imitations-Reward) — 0 = Animation weg, Verhalten bleibt" style="flex:1; min-width:70px; max-width:130px;">
-        <span id="teacherWVal" class="glb-ctrl-label" style="min-width:36px; text-align:right;">60 %</span>
-        <button id="teacherReload" class="btn small" title="Datensatz neu von HuggingFace laden">⟳ NEU LADEN</button>
-        <span id="teacherSrc" class="glb-ctrl-label" style="min-width:70px;">—</span>
-      </div>
-      <div class="glb-row glb-ctrl-row" id="erRow">
-        <span class="glb-ctrl-label">EXPERTEN</span>
-        <button id="erToggle" class="btn small" title="Belohnungssystem: Router und jeder Experte individuell pro Roboter">Belohnungen…</button>
-        <span id="erInfo" class="glb-ctrl-label" style="flex:1;">Router + Experten individuell</span>
-      </div>
-      <div id="expertRPanel" class="glb-row hidden" style="flex-direction:column; gap:4px; align-items:stretch;"></div>
-      <div id="glbBtnRow" class="glb-row glb-btn-row hidden">
-        <input id="glbBtnName" type="text" placeholder="z. B. Kicken" maxlength="12" autocomplete="off">
-        <button id="glbBtnAdd" class="btn small">+ Button</button>
-        <span class="glb-ctrl-label glb-btn-hint">max. 4 · lang drücken = löschen</span>
-      </div>
-      <div id="glbList" class="glb-list"></div>
-      <div id="glbStatus" class="train-note">GLB für JEDEN Roboter: G1 = Beine+Arme+Taille · MicroDuck = Beine (Kopf bleibt STAND) · Drohne = FLUGBAHN (Autopilot fliegt die Route). REFERENZ-MODUS: STELLE = Bewegung fix am Punkt · FREI = Lehrer läuft seine Bahn · FOLGT = Lehrer hängt am Roboter. „OHNE ANIM WEITER“ = Policy (trainiert MIT Animation) ohne Animation WEITERTRAINIEREN — Netz und Speicherstand bleiben, sie ist danach nicht mehr an die Animation gebunden. Steuerung: „Joystick“/„Buttons“ führen im POLICY-Modus. ⭐ MOTION-KI: fertige Motion-Policy abspielen — der Clip animiert (Stil/Phase), der Joystick führt bei Bedarf (STEUER-MIX: 0 % = nur Clip, 100 % = nur Stick, dazwischen gemischt); ⏸ GEIST friert die Pose ein, ⏭ CLIP springt weiter. ★ ARDY-BRÜCKE (v2.22.0): eigene TEXTE als Bewegung — NVIDIA ARDY (Text→Motion) läuft auf einer KOSTENLOSEN Cloud-GPU (Notebook: ardy_colab.ipynb im GitHub-Repo, kein eigenes CUDA nötig); die erzeugte G1-QPOS-CSV per „.csv (ARDY)“ importieren → wird zum Lehrer wie ein GLB-Clip (Geist, BC, PPO, MOTION-KI). ★★ ARDY MINI (v2.26.0): eigenes Panel — Button 👤 in der Top-Leiste (getrennte Steuerung + Prompting vom GLB-Bereich, Modell-Download-Button, Live-Steuerung während der Generierung, Trainings-Prozent live).</div>
-    </div>
-    <div id="trainNote" class="train-note">Störungen (Domain Randomization) = jede Trainings-Episode leicht andere Physik: Masse, Motorstärke, Reibung, Dämpfung, Gravitation, Startpose/-Tempo, IMU-Rauschen, Schübe, Aktions-Verzögerung — die Policy lernt Robustheit statt den Simulator auswendig (LEICHT standard). TEMPO-SLIDER (v2.14.0): 1–16 Schritte pro Bild — höhere Werte trainieren schneller, bleiben aber flüssig (das blockierende „MAX" wurde entfernt). PPO · 64×64 MLP bzw. Soft-MoE (MicroDuck, 2–8 Experten per KI) · CPU only</div>
-  </section>
-
-  <!-- ── v2.17.0: NETZ-CANVAS (v2.18.0: VOLLBILD + Multi-Touch) ── -->
-  <section id="canvasSheet" class="sheet cv-sheet hidden">
-    <div class="sheet-head">
-      <span class="sheet-title">NETZ-CANVAS</span>
-      <span id="cvInfo" class="sheet-sub">Policies bauen, verbinden, ausführen</span>
-      <button id="cvClose" class="iconbtn" aria-label="Canvas schließen">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-    <div class="cv-toolbar">
-      <button id="cvAddPolicy" class="btn small">+ Netz</button>
-      <button id="cvAddLogic" class="btn small" title="Logik/Verbinder: + − × ÷ min max abs neg — kein Netz">+ Logik</button>
-      <button id="cvAddUI" class="btn small">+ UI</button>
-      <button id="cvAddConst" class="btn small">+ Konst</button>
-      <span class="cv-sep"></span>
-      <button id="cvZoomOut" class="btn small" aria-label="Verkleinern">−</button>
-      <button id="cvZoomIn" class="btn small" aria-label="Vergrößern">+</button>
-      <button id="cvFit" class="btn small" title="Alles sichtbar machen">⤢</button>
-      <button id="cvClear" class="btn small" title="Canvas leeren">Leeren</button>
-    </div>
-    <div class="cv-toolbar">
-      <button id="cvRun" class="btn btn-solid">AUSFÜHREN</button>
-      <button id="cvTrain" class="btn">TRAINIEREN</button>
-      <span id="cvStat" class="stat-k">0 Karten · 0 Kabel</span>
-    </div>
-    <div id="cvPort" class="cv-viewport">
-      <div id="cvWorld" class="cv-world">
-        <svg id="cvWires" class="cv-wires" width="6000" height="4000"></svg>
-      </div>
-      <div id="cvBatch" class="cv-batch"></div>
-      <div id="cvGesture" class="cv-gesture">2 FINGER: ZOOMEN · VERSCHIEBEN&nbsp;&nbsp;|&nbsp;&nbsp;LANG DRÜCKEN: MEHRERE PORTS AUF EINMAL VERBINDEN</div>
-    </div>
-    <div id="cvEdit" class="cv-edit hidden"></div>
-    <div class="train-note">VOLLBILD-CANVAS: 1 Finger zieht Karten/Kabel, 2 Finger zoomen und verschieben die Fläche. LINKS alle Sensoren des Roboters (einzeln + Stick X/Y) · RECHTS alle Aktuatoren (einzeln). Mitte: Karten (+ Netz) und LOGIK-Verbinder (+ Logik: + − × ÷ min max abs neg — reine Signalverarbeitung ohne Netz, Ein-/Ausgänge frei wählbar). STAPEL-VERBINDEN: eine Seite einer Karte LANG drücken (freie Ports leuchten gelb), dann eine Seite einer anderen Karte LANG drücken — alles Passende wird verbunden, Überzähliges bleibt frei. Einzelkabel: Port antippen und dann einen anderen Port (oder ziehen). Belohnung je Karte: GLOBALE Aufgaben-Belohnung oder EIGENE Formel. „AUSFÜHREN" = Canvas fährt den Roboter, „TRAINIEREN" = PPO pro Karte. Gemini hat vollen Zugriff (canvasBuild / canvasGraph / canvasReward / canvasRun / canvasUI).</div>
-  </section>
-
-  <!-- v2.17.0: Laufzeit-Elemente des Canvas (Buttons/Slider/Joystick/Gauge) -->
-  <div id="canvasUIBar" class="ai-buttons hidden"></div>
-
-  <!-- ── v2.26.0: ARDY MINI — EIGENES PANEL (Steuerung + Prompting getrennt) ── -->
-  <section id="ardySheet" class="sheet hidden">
-    <div class="sheet-grab"></div>
-    <div class="sheet-head">
-      <span class="sheet-title">ARDY MINI · TEXT → MOTION</span>
-      <span id="ardyEp" class="sheet-sub">—</span>
-      <button id="ardyClose" class="iconbtn" aria-label="ARDY Mini schließen">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-
-    <div class="ardy-section">
-      <div class="glb-head ardy-head">
-        <span class="sheet-title" style="font-size:11px">MODELL (IMPORT ÜBER DATEIMANAGER ODER HF-DOWNLOAD)</span>
-        <span id="ardyDlPct" class="glb-ctrl-label">—</span>
-      </div>
-      <div class="glb-row ardy-opts">
-        <button id="ardyDl" class="btn small btn-solid">⬇ Modell herunterladen</button>
-        <button id="ardyImport" class="btn small">📁 Vom Gerät wählen</button>
-        <button id="ardyCacheClear" class="btn small">Cache löschen</button>
-      </div>
-      <div class="glb-row ardy-opts">
-        <button id="ardyGhostDrive" class="btn small btn-solid">🎮 Geist lenken (Stick → Roboter lernt)</button>
-      </div>
-      <div id="ardyBar" class="ardy-bar hidden"><div id="ardyBarFill"></div></div>
-      <div class="glb-row ardy-live-row">
-        <span class="sheet-title" style="font-size:11px">LIVE</span>
-        <span id="ardyPct" class="ardy-pct-big">—</span>
-        <span id="ardyGen" class="glb-ctrl-label">bereit</span>
-        <button id="ardyStop" class="btn small" disabled>⏹ Stop</button>
-      </div>
-    </div>
-
-    <div class="ardy-section">
-      <div class="glb-head ardy-head">
-        <span class="sheet-title" style="font-size:11px">PROMPTING (DEUTSCH ODER ENGLISCH)</span>
-      </div>
-      <div id="ardyChips" class="ardy-chips"></div>
-      <div class="glb-row">
-        <input id="ardyPrompt" class="ardy-prompt" type="text" placeholder="Was soll der Roboter tun? (dt. oder engl.)" autocomplete="off">
-        <button id="ardyGenerate" class="btn small btn-solid">Generieren</button>
-      </div>
-      <div class="glb-row ardy-opts">
-        <label class="glb-ctrl-label">Dauer
-          <select id="ardyDur" class="ardy-select">
-            <option value="2">2 s</option>
-            <option value="5" selected>5 s</option>
-            <option value="8">8 s</option>
-            <option value="10">10 s</option>
-          </select>
-        </label>
-        <label class="glb-ctrl-label">Seed
-          <input id="ardySeed" class="ardy-seed" type="text" placeholder="zufällig" inputmode="numeric" autocomplete="off">
-        </label>
-        <label class="glb-ctrl-label">CFG
-          <input id="ardyCfg" class="ardy-seed" type="number" value="2" min="1" max="4" step="0.5" inputmode="decimal">
-        </label>
-        <label class="glb-ctrl-label ardy-live-label"><input id="ardyLive" type="checkbox" checked> Live-Prompt</label>
-      </div>
-    </div>
-
-    <div class="ardy-section">
-      <div class="glb-head ardy-head">
-        <span class="sheet-title" style="font-size:11px">TRAINING (PROZENT LIVE, WÄHREND DER ROBOTER TRAINIERT)</span>
-        <span id="ardyTrainPct" class="ardy-pct-big">0 %</span>
-      </div>
-      <div class="ardy-bar"><div id="ardyTrainFill" style="width:0%"></div></div>
-      <div class="glb-row ardy-opts">
-        <label class="glb-ctrl-label">Ziel (Schritte)
-          <input id="ardyTrainGoal" class="ardy-seed" type="number" min="10000" step="100000" inputmode="numeric">
-        </label>
-        <span id="ardyTrainInfo" class="glb-ctrl-label">—</span>
-      </div>
-    </div>
-
-    <div id="ardyStatus" class="train-note">MODELL LADEN — zwei Wege: ① „📁 Vom Gerät wählen“ öffnet den DATEIMANAGER: dort die ARDY-Dateien auswählen (model.json.gz, tokenizer/tokenizer.json.gz, text_encoder/denoiser/decoder .onnx.gz — Ordner fp16 bzw. fp32, Mehrfachauswahl möglich). Die App kopiert sie lokal und lädt sie ab sofort von dort — ganz ohne Download. ② „⬇ Modell herunterladen“ (Hugging Face, ~650 MB, einmalig). Danach läuft Text→Bewegung komplett auf dem Gerät. GEIST LENKEN: Geist hängt am Roboter, der Stick führt die Referenz — der Roboter lernt die gefahrene Route per Belohnung.</div>
-  </section>
-
-  <!-- KI-Trainer (Gemini) -->
-  <section id="aiSheet" class="sheet hidden">
-    <div class="sheet-grab"></div>
-    <div class="sheet-head">
-      <span class="sheet-title">KI-TRAINER</span>
-      <span id="aiModel" class="sheet-sub">Gemini wird erkannt …</span>
-      <button id="aiClose" class="iconbtn" aria-label="Schließen">
-        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </button>
-    </div>
-    <div id="aiLog" class="ai-log"></div>
-    <div class="ai-suggest">
-      <button class="ai-sug" data-q="Mein Roboter soll schneller laufen lernen">Schneller laufen</button>
-      <button class="ai-sug" data-q="Füge einen Button hinzu, der den Roboter nach vorn schubst">Schubs-Button</button>
-      <button class="ai-sug" data-q="Wechsle zur Aufgabe Aufstehen und erhöhe die Belohnung für Aufrechtsein">Aufstehen lernen</button>
-      <button class="ai-sug" data-q="Bringe meinem Roboter Kopfstand lernen bei — schreibe ein Freestyle-Plugin mit eigener Startpose und eigener Belohnung">Kopfstand lernen</button>
-      <button class="ai-sug" data-q="Schreibe ein Plugin, das den Roboter alle 10 Sekunden zufällig schubst">Plugin: Auto-Schubser</button>
-      <button class="ai-sug" data-q="Schreibe ein Plugin mit einem Button ABWURF, der den Roboter von oben in die Luft wirft">Plugin: Abwurf</button>
-    </div>
-    <div class="ai-inputrow">
-      <input id="aiInput" type="text" placeholder="Was soll dein Roboter lernen?" autocomplete="off" enterkeyhint="send">
-      <button id="aiSend" class="btn btn-solid ai-send" aria-label="Senden">GO</button>
-    </div>
-    <div class="ai-keyrow">
-      <input id="aiKeyInput" type="password" placeholder="Anderer Gemini-API-Schlüssel (optional)" autocomplete="off">
-      <button id="aiKeySave" class="btn small">Setzen</button>
-      <button id="aiKeyReset" class="btn small">Standard</button>
-    </div>
-    <div id="aiKeyStatus" class="ai-note">Eingebauter Schlüssel aktiv.</div>
-    <div class="ai-foot">
-      <div class="speed-group ai-modelgroup" role="group" aria-label="KI-Modell">
-        <button class="speed-chip aimode active" data-aimode="fast">SCHNELL</button>
-        <button class="speed-chip aimode" data-aimode="smart">SMART</button>
-      </div>
-      <span class="ai-note">Gemini · zum Anwenden Taste je Antwort</span>
-    </div>
-
-    <!-- WERKSTATT (v2.7.0): KI-geschriebene Mods/Plugins -->
-    <div class="plg-section">
-      <div class="glb-head">
-        <span class="sheet-title" style="font-size:11px">WERKSTATT · PLUGINS — KI-CODE MIT ROHEM ZUGRIFF</span>
-      </div>
-      <div id="plgList" class="glb-list plg-list"></div>
-      <div class="train-note">Die KI kann eigene Mods SCHREIBEN (writePlugin) oder live Code ausführen (runCode) — mit vollem Zugriff auf die Simulation: Teleport, Physik-Hooks, eigene Belohnungen, eigene Buttons. Plugins bleiben gespeichert und starten mit der App. ★ = mitgelieferte Beispiele. Plugin-Buttons erscheinen unten in der Leiste.</div>
-    </div>
-  </section>
-
-  <!-- v2.14.1: KONSOLE-PANEL ENTFERNT (Nutzerwunsch). Das Log-Element
-       bleibt unsichtbar im DOM — Boot-/Diagnose-Meldungen landen hier
-       weiter (Tests + Fehlerdiagnose via ADB lesen es mit). -->
-  <div id="consoleLog" hidden></div>
-
-  <div id="toast" role="status"></div>
-
-  <script type="module" src="js/main.js"></script>
+<script type="module" src="js/feld/feld.js"></script>
 </body>
 </html>
