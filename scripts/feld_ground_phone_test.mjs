@@ -38,7 +38,7 @@ const DEG = Math.PI / 180;
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
-ok(VERSION === '3.2.0' && VERSION_CODE === 102, '3.2.0 / 102 (Schubser + Boden + Handy in EINEM Release)');
+ok((VERSION === '3.2.0' && VERSION_CODE === 102) || (VERSION === '3.3.0' && VERSION_CODE === 103), '3.2.0/102 oder 3.3.0/103 (Schubser + Boden + Handy in EINEM Release)');
 
 // ════════════════ 2 · GROUNDMODEL ════════════════
 sec('GROUNDMODEL — Regler (an/aus · Muster · wie stark · wie schnell)');
@@ -230,7 +230,8 @@ sec('VERDRAHTUNG (Web + Android)');
 const feldjs = readFileSync(join(WWW, 'js/feld/feld.js'), 'utf8');
 ok(feldjs.includes("from './ground.js'") && feldjs.includes("from './phone.js'"), 'feld.js importiert ground.js + phone.js');
 ok(feldjs.includes('S.trainer.onStep = groundPhoneStep;'), 'Trainer-Haken: Boden+Handy JE Regelzyklus im Training');
-ok(feldjs.includes('groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden auch live'), 'POLICY-Betrieb: Boden+Handy aktiv');
+ok(feldjs.includes('groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden JE Zyklus (wie im Training)')
+  || feldjs.includes('groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden auch live'), 'POLICY-Betrieb: Boden+Handy aktiv');
 ok(feldjs.includes('groundPhoneStep(0); // v3.2.0: Pause'), 'Pause: Plattform ruht');
 ok(feldjs.includes('S.gDirect = probeGravity(S.sim);') && feldjs.includes('applyGroundImpulse(sim, tx, ty, dt, S._gMass'),
   'Schwerkraft-Steuerung mit Impuls-Fallback');

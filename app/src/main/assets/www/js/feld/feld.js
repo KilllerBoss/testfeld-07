@@ -31,7 +31,9 @@ const S = {
   rew: null, rwx: null, laya: null, konsole: null,
   mode: 'pause',            // 'train' | 'live' | 'pause'
   world: 'flach',
-  budget: 30,               // RL-Schritte je Animation-Frame
+  budget: 30,               // RL-Schritte je Animation-Frame (nur TRAINING)
+  _liveAcc: 0,              // v3.3.0: Zeitakkumulator des POLICY-Betriebs (Echtzeit)
+  _ortMu: null,             // v3.3.0: letzter gültiger ONNX-Befehl (wird gehalten)
   updatePause: false,
   dirty: false, lastSave: 0,
   layaActive: false, layaTimer: 0,
@@ -142,12 +144,15 @@ function loop(t) {
       trainTick(dt);
     } else if (S.mode === 'live') {
       tickCmdGen(dt);
-      liveTick();
+      liveTick(dt);
     } else {
       groundPhoneStep(0); // v3.2.0: Pause — Plattform ruht (Neigung 0, Schwerkraft exakt g0)
     }
     applyConsole();
-    S.renderer.updateFrame(S.sim, dt);
+    // v3.3.0: im POLICY-Betrieb interpolierte Pose (Physik 50 Hz ↔ Display
+    // beliebig — sonst zittert die Darstellung); Training/Pause wie gehabt
+    const livePose = S.mode === 'live' ? S.sim.renderPose(Math.min(1, S._liveAcc / 0.02)) : null;
+    S.renderer.updateFrame(S.sim, dt, livePose);
     S.renderer.render();
     hud();
     maybeAutosave(t);
@@ -203,31 +208,65 @@ function tickCmdGen(dt) {
   k.renderSticks();
 }
 
-/** Live-Takt: Policy ausführen (JS oder ONNX), ohne zu lernen. */
-function liveTick() {
-  const task = S.task, sim = S.sim;
+/**
+ * v3.3.0 — Live-Takt (POLICY): ECHTZEIT statt „ein Zyklus je Bild“.
+ * Vorher lief pro Render-Frame GENAU EIN Regelzyklus (sim.stepN(10)):
+ * bei 30 fps Zeitlupe (0,6×), bei 120 Hz Überlicht (2,4×), bei
+ * schwankender Framerate Zittern — egal, was der Schritte-Budget-
+ * Slider stand (der wirkt nur im Training). Jetzt folgt die Simulation
+ * der ECHTEN UHR: Zeitakkumulator + Aufholschleife mit Budget.
+ * ONNX: die Inferenz läuft asynchron WEITER — die Physik wartet nicht
+ * mehr (letzter gültiger Befehl wird gehalten, wie bei echter Robotik);
+ * vorher fror die Sim während jeder Inferenz ein (Stottern/Langsam).
+ */
+function liveTick(dt) {
+  const task = S.task;
   // v3.2.0: Schubser im POLICY-Betrieb nur, wenn extra eingeschaltet —
   // so sieht man live, wie die Ente auf Stöße reagiert.
   task._schubLive = !!(S.schubser && S.schubser.on && S.schubser.live);
-  groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden auch live
   if (cmdDriven()) pushUserCmd();
+  // Echte Zeit akkumulieren (App-Wechsel-Sprünge auf 0,25 s begrenzen)
+  S._liveAcc = Math.min(0.25, (S._liveAcc || 0) + Math.max(0, dt));
+  S.sim.snapPrev(); // Pose VOR diesem Frame für die Render-Interpolation sichern
+  const CYC = 0.02;  // Regelzyklus = 10 Substeps × 0,002 s (wie im Training)
+  const t0 = performance.now();
+  let guard = 0;
+  while (S._liveAcc >= CYC && guard < 15) {
+    S._liveAcc -= CYC;
+    guard++;
+    liveCycle();
+    if (performance.now() - t0 > 9) break; // Aufholbudget: Render nie würgen
+  }
+  if (S._liveAcc > CYC * 4) S._liveAcc = CYC; // Notbremse nach Systemlast
+  if (S.rwx.on && S.rwx.terms.some((x) => x.source === 'console')) pushConsoleGoals();
+}
+
+/** EIN Regelzyklus im POLICY-Betrieb (0,02 s Simzeit — wie trainTick). */
+function liveCycle() {
+  const task = S.task, sim = S.sim;
+  groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden JE Zyklus (wie im Training)
   task.observe(sim, S.trainer._obs);
-  if (S.ortInfer && !S._ortBusy) {
-    // ONNX-Ausführung (CPU/GPU/NPU — EP wie im Modell-Tab gewählt)
-    S._ortBusy = true;
-    const obs = Float32Array.from(S.trainer._obs);
-    S.ortInfer.run({ obs: new S._ortT('float32', obs, [1, obs.length]) })
-      .then((out) => {
-        S._ortBusy = false;
-        const mu = out.mu.data;
-        task.actionToCtrl(sim, mu);
-        sim.stepN(10);
-        task.reward(sim);
-        for (let i = 0; i < task.actDim; i++) task.lastAct[i] = mu[i];
-        if (task.afterAct) task.afterAct(sim, mu);
-      })
-      .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
-  } else if (!S._ortBusy) {
+  if (S.ortInfer) {
+    // ONNX-Ausführung (CPU/GPU/NPU — EP wie im Modell-Tab gewählt):
+    // Inferenz anstoßen, falls frei — die Physik läuft SOGAR WEITER,
+    // solange das Ergebnis unterwegs ist (letzter Befehl wird gehalten)
+    if (!S._ortBusy) {
+      S._ortBusy = true;
+      const obs = Float32Array.from(S.trainer._obs);
+      S.ortInfer.run({ obs: new S._ortT('float32', obs, [1, obs.length]) })
+        .then((out) => {
+          S._ortBusy = false;
+          S._ortMu = Float32Array.from(out.mu.data);
+        })
+        .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
+    }
+    const mu = S._ortMu || (S._ortMu = new Float32Array(task.actDim));
+    task.actionToCtrl(sim, mu);
+    sim.stepN(10);
+    task.reward(sim);
+    for (let i = 0; i < task.actDim; i++) task.lastAct[i] = mu[i];
+    if (task.afterAct) task.afterAct(sim, mu);
+  } else {
     const a = S.trainer.actLive(S.trainer._obs, true);
     if (S.task.setRouting && S.trainer.ppo.lastW) S.task.setRouting(S.trainer.ppo.lastW);
     task.actionToCtrl(sim, a.act);
@@ -236,7 +275,6 @@ function liveTick() {
     for (let i = 0; i < task.actDim; i++) task.lastAct[i] = a.act[i];
     if (task.afterAct) task.afterAct(sim, a.act);
   }
-  if (S.rwx.on && S.rwx.terms.some((x) => x.source === 'console')) pushConsoleGoals();
 }
 
 /**
@@ -1059,6 +1097,19 @@ function wireGesture() {
     S.renderer.camDist = Math.max(0.6, Math.min(12, S.renderer.camDist * (1 + Math.sign(e.deltaY) * 0.1)));
   }, { passive: false });
 }
+
+// Test-/Debug-Handle (schadlos in Produktion — wie in der Alt-App):
+// Browser-Tests messen darüber Sim-Zeit (mjData.time) gegen die Echtzeit.
+Object.defineProperty(window, '__feld', {
+  get: () => ({
+    sim: S.sim,
+    task: S.task,
+    trainer: S.trainer,
+    get mode() { return S.mode; },
+    get budget() { return S.budget; },
+    get liveAcc() { return S._liveAcc; },
+  }),
+});
 
 // ── Los ────────────────────────────────────────────────────
 wireRewardUI();

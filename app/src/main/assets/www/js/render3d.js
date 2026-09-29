@@ -601,20 +601,25 @@ export class Renderer3D {
   }
 
   // Pro Frame: Körper-Transformationen + Kamera
-  updateFrame(sim, dt) {
+  updateFrame(sim, dt, pose) {
     if (this.bodyGroups) {
       const p = new Float64Array(3), q = new Float64Array(4);
+      // v3.3.0: pose = interpolierte {xpos, xquat, baseBody} aus dem
+      // Live-Loop (Physik 50 Hz ↔ Display beliebig) — glatte Darstellung
+      const PX = pose ? pose.xpos : null, PQ = pose ? pose.xquat : null;
       for (let b = 1; b < this.bodyGroups.length; b++) {
         const grp = this.bodyGroups[b];
         if (!grp) continue;
-        for (let i = 0; i < 3; i++) p[i] = sim._xpos[3 * b + i];
-        for (let i = 0; i < 4; i++) q[i] = sim._xquat[4 * b + i];
+        for (let i = 0; i < 3; i++) p[i] = PX ? PX[3 * b + i] : sim._xpos[3 * b + i];
+        for (let i = 0; i < 4; i++) q[i] = PQ ? PQ[4 * b + i] : sim._xquat[4 * b + i];
         grp.position.set(p[0], p[1], p[2]);
         grp.quaternion.set(q[1], q[2], q[3], q[0]);
       }
       // Marker unter dem Roboter (Marker lebt in Szenen-Koordinaten:
       // MuJoCo (x,y) → Szene (x, Höhe, -y))
-      sim.basePos(p);
+      const bb = pose ? pose.baseBody : sim.baseBody;
+      if (PX) { p[0] = PX[3 * bb]; p[1] = PX[3 * bb + 1]; p[2] = PX[3 * bb + 2]; }
+      else sim.basePos(p);
       this._marker.position.set(p[0], 0.012, -p[1]);
       const hex = this.sim && this.sim.cfg && this.sim.cfg.color ? this.sim.cfg.color : '#ff9d21';
       if (this._markerHex !== hex) { this._markerHex = hex; this._marker.material.color.set(hex); }

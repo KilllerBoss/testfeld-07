@@ -262,6 +262,7 @@ export class RobotSim {
     mj().mj_forward(this.model, this.data);
     // Regler starten in der Keyframe-Pose (G1-Arme bleiben gebogen etc.)
     this.ctrl.set(this.keyCtrl);
+    this.invalidateRender();
   }
 
   reset() { this.resetToKeyframe(); }
@@ -278,9 +279,62 @@ export class RobotSim {
     const m = mj();
     this.applyCtrl();
     for (let i = 0; i < n; i++) m.mj_step(this.model, this.data);
+    this._rsDidStep = true;
   }
 
-  step() { this.applyCtrl(); mj().mj_step(this.model, this.data); }
+  step() { this.applyCtrl(); mj().mj_step(this.model, this.data); this._rsDidStep = true; }
+
+  // ── Render-Interpolation (v3.3.0) ──────────────────────────
+  // Physik läuft mit fester Regelrate (50 Hz), das Display mit beliebiger
+  // Framerate. Ohne Interpolation „zittert" die Darstellung (50/60-Beat,
+  // bei langsamen Displays echtes Ruckeln). snapPrev() sichert den Zustand
+  // VOR dem ersten Regelschritt eines Frames, renderPose() blendet zwischen
+  // diesem und dem aktuellen Zustand (alpha = Restzeit / Regelrate).
+  snapPrev() {
+    const n3 = 3 * this.nbody, n4 = 4 * this.nbody;
+    if (!this._rsX0 || this._rsX0.length !== n3) {
+      this._rsX0 = new Float64Array(n3); this._rsQ0 = new Float64Array(n4);
+      this._rsXi = new Float64Array(n3); this._rsQi = new Float64Array(n4);
+      this._rsDidStep = true;
+    }
+    // Nur nach echten Physikschritten die Referenz nachziehen — sonst
+    // bleibt die Blend-Basis stehen (Frames ohne Schritt bewegen die
+    // Darstellung weiter Richtung letzter Physikpose = glatt)
+    if (this._rsDidStep) {
+      this._rsX0.set(this._xpos.subarray(0, n3));
+      this._rsQ0.set(this._xquat.subarray(0, n4));
+      this._rsDidStep = false;
+    }
+    this._rsOn = true;
+  }
+
+  // Nach Reset/Teleport: Interpolation invalidieren (kein Blenden über Sprünge)
+  invalidateRender() { this._rsOn = false; this._rsDidStep = true; }
+
+  // Interpolierte Pose (xpos lerp, xquat nlerp mit Vorzeichen-Flip) oder null
+  renderPose(alpha) {
+    if (!this._rsOn || !this._rsX0) return null;
+    const b3 = 3 * this.baseBody;
+    const jx = this._xpos[b3] - this._rsX0[b3], jy = this._xpos[b3 + 1] - this._rsX0[b3 + 1], jz = this._xpos[b3 + 2] - this._rsX0[b3 + 2];
+    if (jx * jx + jy * jy + jz * jz > 2.25) return null; // Reset-Sprung
+    const n3 = 3 * this.nbody, n4 = 4 * this.nbody;
+    const X = this._rsXi, Q = this._rsQi;
+    for (let i = 0; i < n3; i++) X[i] = this._rsX0[i] + (this._xpos[i] - this._rsX0[i]) * alpha;
+    for (let k = 0; k < n4; k += 4) {
+      // MuJoCo xquat = (w, x, y, z)
+      let w2 = this._xquat[k], x2 = this._xquat[k + 1], y2 = this._xquat[k + 2], z2 = this._xquat[k + 3];
+      const dot = w2 * this._rsQ0[k] + x2 * this._rsQ0[k + 1] + y2 * this._rsQ0[k + 2] + z2 * this._rsQ0[k + 3];
+      const sgn = dot < 0 ? -1 : 1;
+      w2 *= sgn; x2 *= sgn; y2 *= sgn; z2 *= sgn;
+      let w = this._rsQ0[k] + (w2 - this._rsQ0[k]) * alpha;
+      let x = this._rsQ0[k + 1] + (x2 - this._rsQ0[k + 1]) * alpha;
+      let y = this._rsQ0[k + 2] + (y2 - this._rsQ0[k + 2]) * alpha;
+      let z = this._rsQ0[k + 3] + (z2 - this._rsQ0[k + 3]) * alpha;
+      const n = Math.hypot(w, x, y, z) || 1;
+      Q[k] = w / n; Q[k + 1] = x / n; Q[k + 2] = y / n; Q[k + 3] = z / n;
+    }
+    return { xpos: X, xquat: Q, baseBody: this.baseBody };
+  }
 
   // ── Lese-Helfer (gebündelt, um Embind-Overhead zu senken) ──
   basePos(out) { const o = 3 * this.baseBody; out[0] = this._xpos[o]; out[1] = this._xpos[o + 1]; out[2] = this._xpos[o + 2]; return out; }

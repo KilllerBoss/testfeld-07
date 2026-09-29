@@ -1277,3 +1277,23 @@ Stage Summary:
 - Belohnungs-Tab jetzt mit 3 neuen Störungs-Kanälen: AUTOSCHUBSER (ob/wie oft/wie stark + Richtung + Erfolg-Curriculum + optional live) · BEWEGLICHER BODEN (4 Muster, 1–25°, 0,05–1,5 Hz) · HANDY-SENSOR (Gyroskop: Schwingen schubst die Ente, Neigen kippt den Boden — im Training und live)
 - Alle drei wirken SOFORT (je reward()/Regelzyklus gelesen), sind im Autosave/Import/Export, generalisierungsfreundlich (Störungs-Vielfalt statt Positionen merken)
 - Update-fähig über alle bisherigen Installationen (Signatur 1c0422b9…3c4 CN=Trainrobot unverändert)
+
+---
+Task ID: 28
+Agent: Super Z (Hauptagent)
+Task: v3.3.0 — POLICY-Betrieb in ECHTZEIT (Nutzer: „wenn man policy anmacht, ist es nicht in Echtzeit, zittert extrem oder bewegt sich ganz langsam — egal welchen speedup ich wähle. Für den Roboter soll alles gleich sein")
+
+Work Log:
+- BASIS-KORREKTUR: Lokaler Klon war auf v2.6.1 (Trainrobot) HANGEN GEBLIEBEN, upstream war längst bei v3.2.0 (feld.app, Autoschubser + beweglicher Boden + Handy-Sensor live). Zwischenstand v2.7.0 auf dem alten Stand nach backup_v27_stale gesichert, dann git reset --hard upstream_main (b2d9b60) und der Fix auf dem ECHTEN Code implementiert. (In dieser Sandbox fehlte zudem das Android-SDK — frisch installiert: cmdline-tools 11076708, platform-34, build-tools 34.0.0, Lizenzen ok, local.properties gesetzt.)
+- ROOT-CAUSE 1 (Zeitlupe/Zittern im POLICY-Modus): liveTick lief EINMAL je Render-Frame und machte EXAKT EINEN Regelzyklus (sim.stepN(10) = 0,02 s Simzeit) — die Simzeit folgte damit der fps, nicht der Uhr: 30 fps = 0,6× Zeitlupe, 120 Hz = 2,4× Überlicht, schwankende fps = Zittern. Der „Schritte je Bild"-Budget-Slider wirkt nur im Training — deshalb „egal welchen speedup ich wähle". FIX (feld.js): liveTick(dt) wanduhrgetrieben — Zeitakkumulator (Sprünge auf 0,25 s begrenzt), Aufholschleife (Guard 15, 9-ms-Budget, Render wird nie gewürgt), Notbremse acc ≤ 4×Zyklus; liveCycle() kapselt EINEN Regelzyklus
+- ROOT-CAUSE 2 (ONNX-Einfrieren): im ONNX-Pfad tat liveTick während der laufenden Inferenz (S._ortBusy) GAR NICHTS — die Physik stand still, bis das Ergebnis kam, dann ein Sprung: extremes Stottern + Zeitlupe bei langsamer Inferenz. FIX: Inferenz läuft asynchron WEITER, die Physik taktet mit der Echtzeit und hält den letzten gültigen Befehl (S._ortMu) — wie eine echte Regelung
+- ROOT-CAUSE 3 (Rest-Zittern): Physik 50 Hz ↔ Display beliebig = 50/60-Beat. FIX: Render-Interpolation — engine.js snapPrev()/renderPose(alpha)/invalidateRender() (xpos-Lerp + xquat-Nlerp mit Vorzeichen-Flip, Sprungwache >1,5 m bei Reset, stepN markiert _rsDidStep, resetToKeyframe invalidiert); render3d.updateFrame(sim, dt, pose) nutzt interpolierte Posen nur im POLICY-Betrieb
+- NEBENFIX: groundPhoneStep lief vorher EINMAL je Render-Frame mit dt=0,02 — Bodenmuster/Handy-Neigung waren ebenfalls fps-abhängig; jetzt JE Zyklus (Simzeit), identisch zum Training
+- DEBUG-HANDLE: window.__feld (sim/task/trainer/mode/budget/liveAcc) für Browser-Tests (schadlos, wie in der Alt-App)
+- TESTS: feld_live_v33_test.mjs NEU 40 Checks GRÜN — inkl. PACING-BEWEIS (Spiegelsimulation): 30/60/120 fps + Jitter-Pattern → alle 49,9–50,0 Zyklen/s (vorher 30/60/120), Notbremse nach Last-Hänger, Nlerp-Gegenproben (Gegenphase→Identität, 90°→45°); feld_live_browser_test.mjs NEU (Playwright): POLICY-Modus im Chromium, Sim-Zeit 3,00 s vs. Wand 3,00 s = 100 % ECHTZEIT; feld_test 79 ✓, feld_cmd 73 ✓, feld_schubser 50 ✓, feld_ground_phone 60 ✓, src_skeleton 90 ✓, qpos 52 ✓, physics 42 ✓, motionset 49 ✓, canvas 84 ✓; pins_v33.py NEU (14 Suiten auf 103/3.3.0 OR-erweitert, abwärtskompatibel); harte VERSION-Pins in feld/feld_cmd/feld_schubser/feld_ground_phone auf 3.2.0 ODER 3.3.0 erweitert
+- VERSION: version.js 3.3.0/103, build.gradle 103/3.3.0, CI-OR-Kette um 3\.3\.0 erweitert
+- BUILD: assembleRelease (Daemon) BUILD SUCCESSFUL; feld.apk → download/ (sha256 716317687adb0aeed7d9f6c54cfac07efa620bfa54e646b350ab9e8f3d1749d1); aapt: de.feld.app 103/3.3.0 ✓; apksigner: SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 = Soll-Signatur EXAKT ✓; Asset-Stichprobe: version.js 3.3.0/103 + liveTick(dt)/_ortMu/snapPrev im APK ✓
+
+Stage Summary:
+- v3.3.0 (versionCode 103): POLICY-Betrieb läuft ZWINGEND in Echtzeit — Sim-Zeit = Wanduhr bei jeder Framerate (bewiesen: 100 % im Headless-Chromium), kein Zittern (Interpolation + konstante Zyklen), keine ONNX-Einfrierpausen (Befehl wird gehalten). Trainings-Budget „Schritte je Bild" bleibt ein reiner Trainings-Regler. Bodenmuster + Handy-Sensor ticken jetzt in beiden Modi mit SIMZEIT — für den Roboter ist Training und POLICY gleich („Für den Roboter soll alles gleich sein")
+- APK lokal: download/feld.apk, Signatur EXAKT die Soll-SHA 1c0422b9…ee3c4
