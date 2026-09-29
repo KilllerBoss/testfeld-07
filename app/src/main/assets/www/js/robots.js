@@ -12,6 +12,7 @@ import { clamp } from './math.js';
 import { sanitizeDr, applyDrModel, applyDrStart, drSensor, drPushDue, drDelayedAct } from './dr.js';
 import { leggedSkillState, droneSkillState, expertRouterReward, expertRFor, defaultExpertNames } from './skill.js'; // v2.13.0 Experten-Belohnungen · v2.23.0 pro Roboter/alle Roboter
 import { rewardTerms, resetTermState } from './rewardx.js'; // v2.14.0: komplexe Belohnungsterme (rWx)
+import { schubDue, schubApply } from './feld/schubser.js'; // v3.2.0: AutoSchubser (Nutzer-Regler im Belohnungs-Tab)
 
 // Drohnen-Schweben-Belohnung: KI-anpassbar (KI-Trainer).
 export const HOVER_R = {
@@ -844,6 +845,7 @@ export function makeDuckMoeTask(cfg) {
         if (this.drSpec.pose > 0) applyDrStart(sim, this.drSpec, rng);
       }
       this._epLen = 0;
+      this._schubNext = null; // v3.2.0: Schubser-Intervall frisch würfeln je Episode
       // ── v2.12.1 Liegend-Start erkennen („Liegen lassen"): Episode beginnt
       // am Boden → Aufsteh-Fenster statt Sofort-Abbruch (vorher done=true im
       // ersten Schritt = Extrem kurze Episoden, die Ente „kann nicht mal
@@ -1133,6 +1135,16 @@ export function makeDuckMoeTask(cfg) {
           sim.pushImpulse(Math.cos(ang) * Jv, Math.sin(ang) * Jv, 0);
         }
       }
+      // ── v3.2.0 AUTOSCHUBSER (Nutzer-Regler im Belohnungs-Tab) ──
+      // on → Stör-Impulse im Training; live=1 → auch im POLICY-Betrieb
+      // (feld.js setzt _schubLive je Modus). cfg.schubser wird je Aufruf
+      // gelesen → Regler (an/aus · wie oft · wie stark · Richtung ·
+      // Curriculum) wirken SOFORT, ohne Neustart.
+      const sc = cfg.schubser;
+      if (sc && sc.on && (this._schubLive !== true || sc.live)) {
+        const dvS = schubDue(this, null);
+        if (dvS > 0) schubApply(this, sim, dvS, null);
+      }
       // ── Abbruch (v2.12.1): Sturz → Aufsteh-Fenster statt Sofort-Abbruch ──
       let done = false;
       if (this._recoverMode) {
@@ -1152,6 +1164,11 @@ export function makeDuckMoeTask(cfg) {
       this._epLen++;
       if (!done && this._epLen >= this.epMax) done = true;
       if (done) {
+        // v3.2.0: Schubser-Curriculum — Erfolgs-EMA je Episode (0,85/0,15):
+        // Episode endend aufrecht/über zMin = Erfolg → Stärke wächst,
+        // Sturz = Misserfolg → Stärke wird automatisch leichter.
+        const _okS = (upz >= cfg.done.upMin && gz >= cfg.done.zMin) ? 1 : 0;
+        this._schubSuc = this._schubSuc == null ? _okS : this._schubSuc * 0.85 + _okS * 0.15;
         if (this._recThisEp) {
           this._epSinceUp = 0;
         } else {

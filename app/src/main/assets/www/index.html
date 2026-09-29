@@ -110,6 +110,29 @@
     </div>
     <p class="hint">goTo/faceYaw können ihre Ziele LIVE aus der Steuerkonsole beziehen („Quelle: Konsole“ am Term).</p>
   </div>
+  <div class="card">
+    <h3>SCHUBSER <span class="dim">— Auto-Störungen beim Training</span></h3>
+    <div class="toggles">
+      <label class="switch"><input id="schOn" type="checkbox"><span>Schubser aktiv</span></label>
+      <label class="switch"><input id="schGrow" type="checkbox"><span>Stärke wächst mit Erfolg</span></label>
+      <label class="switch"><input id="schLive" type="checkbox"><span>Auch im POLICY-Betrieb</span></label>
+    </div>
+    <div class="rrow"><label>Wie oft: Intervall von (s)</label><input id="schTmin" type="range" min="0.5" max="20" step="0.5" value="3"><output id="schTminVal">3.0</output></div>
+    <div class="rrow"><label>Wie oft: Intervall bis (s)</label><input id="schTmax" type="range" min="0.5" max="20" step="0.5" value="8"><output id="schTmaxVal">8.0</output></div>
+    <div class="rrow"><label>Wie stark: Δv von (m/s)</label><input id="schVmin" type="range" min="0" max="6" step="0.1" value="0.4"><output id="schVminVal">0.40</output></div>
+    <div class="rrow"><label>Wie stark: Δv bis (m/s)</label><input id="schVmax" type="range" min="0" max="6" step="0.1" value="1.8"><output id="schVmaxVal">1.80</output></div>
+    <div class="rrow"><label>Richtung</label>
+      <select id="schDir" class="select">
+        <option value="auto">Zufällig (auto)</option>
+        <option value="fwd">Nach vorn</option>
+        <option value="back">Nach hinten</option>
+        <option value="left">Nach links</option>
+        <option value="right">Nach rechts</option>
+      </select>
+    </div>
+    <div id="schState" class="hint"></div>
+    <p class="hint">Schubser = Stör-Impulse (Δv) auf die Basis — die Ente lernt, Stöße wegzuregeln (Robustheit: Verstehen statt Auswendiglernen). Jeder Schubs wird im Intervall „von–bis“ Sekunden gewürfelt, die Stärke gleichverteilt „von–bis“ m/s. Mit „Stärke wächst mit Erfolg“ wird es bei Stürzen automatisch leichter, wenn die Ente standhält, schwerer. Mit „Auch im POLICY-Betrieb“ siehst du im FELD live, wie sie reagiert.</p>
+  </div>
 </section>
 
 <!-- ═══ STEUERUNG ═══ -->
@@ -189,7 +212,7 @@
       <button id="btnClearSave" class="ghost">AUTOSAVE LÖSCHEN</button>
     </div>
     <div id="saveState" class="hint"></div>
-    <p class="hint">Autosave: alle 10 s bei Änderung (Policy, Stufe, Tricks, Belohnung, Konsole, LAYA).</p>
+    <p class="hint">Autosave: alle 10 s bei Änderung (Policy, Stufe, Tricks, Belohnung, Schubser, Konsole, LAYA).</p>
   </div>
 </section>
 

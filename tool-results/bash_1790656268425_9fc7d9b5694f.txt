@@ -18,7 +18,6 @@ import { FeldTrainer } from './trainer.js';
 import { RewModel, RwxModel, RW_FIELDS, PRESETS, RWX_DEFS } from './rewards.js';
 import { Console, BUTTONS } from './console.js';
 import { CmdGen, CMD_MODES, CMD_MODE_LABELS } from './cmdgen.js';
-import { SchubModel, SCHUB_DIR_LABELS } from './schubser.js'; // v3.2.0: AutoSchubser
 import { LayaRouter } from './laya.js';
 import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
 import * as store from './store.js';
@@ -35,7 +34,6 @@ const S = {
   layaActive: false, layaTimer: 0,
   ortInfer: null,           // { session, ep, ort } — Policy über ONNX
   cmdgen: null,             // v3.1.0: Befehls-Generator (Trainings-Einsatz der Joysticks)
-  schubser: null,           // v3.2.0: AutoSchubser (an/aus · wie oft · wie stark)
   cmdFold: false,           // v3.1.0: Konsole im FELD ausgeklappt?
   chartMax: 1,
   booted: false,
@@ -58,10 +56,6 @@ async function boot() {
     // Belohnungsmodell: TRÄGT die rW-Zahlen (Task liest live)
     S.rew = new RewModel(cfg.rW);
     S.rwx = new RwxModel(null);
-    // v3.2.0: AutoSchubser — VOR Task-Bau an cfg binden (Task liest je
-    // reward()-Aufruf live; in-place Mutationen von Autosave/Import gelten)
-    S.schubser = new SchubModel(null);
-    cfg.schubser = S.schubser;
     cfg.rW = S.rew;
     cfg.rWx = S.rwx;
     if (!hasModelInFS(cfg.dir)) {
@@ -94,7 +88,6 @@ async function boot() {
     wireTabs();
     wireTrainUI();
     buildRewardUI();
-    buildSchubUI();
     wireConsoleUI();
     wireCmdUI();
     wireConsoleFold();
@@ -138,7 +131,6 @@ function loop(t) {
 
 /** Trainings-Takt: budgetierte RL-Schritte (UI bleibt bedienbar). */
 function trainTick() {
-  S.task._schubLive = false; // v3.2.0: Schubser gelten im Training (live-Flag aus)
   if (cmdDriven()) pushUserCmd();
   if (S.layaActive) pushLaya();
   if (S.updatePause) { S.updatePause = false; return; }
@@ -183,9 +175,6 @@ function tickCmdGen(dt) {
 /** Live-Takt: Policy ausführen (JS oder ONNX), ohne zu lernen. */
 function liveTick() {
   const task = S.task, sim = S.sim;
-  // v3.2.0: Schubser im POLICY-Betrieb nur, wenn extra eingeschaltet —
-  // so sieht man live, wie die Ente auf Stöße reagiert.
-  task._schubLive = !!(S.schubser && S.schubser.on && S.schubser.live);
   if (cmdDriven()) pushUserCmd();
   task.observe(sim, S.trainer._obs);
   if (S.ortInfer && !S._ortBusy) {
@@ -294,31 +283,13 @@ function hud() {
   if (!el) return;
   const er = t.epRewards.length ? t.epRewards[t.epRewards.length - 1] : 0;
   const ti = t.lastMetrics && t.lastMetrics.trickInfo ? t.lastMetrics.trickInfo : null;
-  // v3.2.0: Schubser-Status (Anzahl + letzter Δv) — nur wenn aktiv
-  let scInfo = '';
-  if (S.schubser && S.schubser.on && S.task && S.task._schubCount) {
-    const sL = S.task._schubLast;
-    scInfo = ' · SCHUBS ' + S.task._schubCount + '×' + (sL ? ' · Δv ' + sL.dv.toFixed(1) : '');
-  }
   el.innerHTML =
     'STUFE ' + S.trainer.stage + ' · ' + S.mode.toUpperCase() +
     ' · UPDATES ' + t.updates +
     ' · EP ' + t.episodes +
     ' · EP-REWARD ' + er.toFixed(1) +
     ' · EMA ' + t.emaEpR.toFixed(1) +
-    (ti ? ' · LR ' + ti.lr.toExponential(1) + ' · T ' + ti.T + ' · σ ' + ti.std.toFixed(2) : '') +
-    scInfo;
-  // v3.2.0: Detailzeile in der SCHUBSER-Karte (Belohnungs-Tab)
-  const ss = $('schState');
-  if (ss) {
-    if (!S.schubser || !S.schubser.on) ss.textContent = 'Aus — die Ente trainiert ohne Stör-Impulse.';
-    else {
-      const sL = S.task ? S.task._schubLast : null;
-      const cN = S.task ? (S.task._schubCount || 0) : 0;
-      const suc = S.task && S.task._schubSuc != null ? (' · Erfolg ' + Math.round(S.task._schubSuc * 100) + ' %') : '';
-      ss.textContent = cN + ' Schubser gesamt' + suc + (sL ? ' · letzter: Δv ' + sL.dv.toFixed(2) + ' m/s (' + (SCHUB_DIR_LABELS[sL.dir] || sL.dir) + ')' : ' · erster kommt');
-    }
-  }
+    (ti ? ' · LR ' + ti.lr.toExponential(1) + ' · T ' + ti.T + ' · σ ' + ti.std.toFixed(2) : '');
 }
 function drawChart() {
   const cv = $('chart');
@@ -368,7 +339,6 @@ function sessionBlob() {
     rwx: S.rwx.toJSON(),
     console: S.konsole ? S.konsole.toJSON() : null,
     cmdgen: S.cmdgen ? S.cmdgen.toJSON() : null,
-    schubser: S.schubser ? S.schubser.toJSON() : null, // v3.2.0: AutoSchubser im Autosave
     cmdFold: S.cmdFold,
     laya: S.laya ? S.laya.toJSON() : null,
     layaActive: S.layaActive,
@@ -409,12 +379,6 @@ function applySession(sess, opts = {}) {
     // v3.1.0: Befehls-Generator + Klappzustand der FELD-Konsole
     if (sess.cmdgen) S.cmdgen = CmdGen.fromJSON(sess.cmdgen);
     if (typeof sess.cmdFold === 'boolean') S.cmdFold = sess.cmdFold;
-    // v3.2.0: AutoSchubser — in-place (cfg-Bindung bleibt), UI aktualisieren
-    if (sess.schubser && S.schubser) {
-      S.schubser.setFrom(sess.schubser);
-      S.schubser.sanitize();
-      buildSchubUI();
-    }
     if (!opts.quiet) log('Speicherstand übernommen', 'ok');
     return true;
   } catch (e) {
@@ -451,7 +415,7 @@ function wireTabs() {
 }
 function setMode(m) {
   S.mode = m;
-  $('modeChip').textContent = { train: 'TRAINING', live: 'POLICY', pause: 'PAUSE' }[m];
+  $('modeChip').textContent = { train: 'TRAINING', live: 'POLICY', pause: 'PAUSE' }];
   $('btnMode').textContent = m === 'pause' ? '▶ START' : '⏸ PAUSE';
 }
 
@@ -626,57 +590,6 @@ function wireRewardUI() {
   });
 }
 
-// ── v3.2.0: AutoSchubser-Regler (Belohnungs-Tab) ─────────
-// Bindet die Karte SCHUBSER an S.schubser (in-place, S.dirty = Autosave).
-// Regler: an/aus · wie oft (Intervall von/bis) · wie stark (Δv von/bis) ·
-// Richtung · Stärke wächst mit Erfolg · auch im POLICY-Betrieb.
-function buildSchubUI() {
-  const m = S.schubser;
-  if (!m) return;
-  const sw = (id, key) => {
-    const el = $(id);
-    if (!el) return;
-    el.checked = !!m[key];
-    el.onchange = () => { m[key] = el.checked ? 1 : 0; m.sanitize(); S.dirty = true; };
-  };
-  sw('schOn', 'on');
-  sw('schGrow', 'grow');
-  sw('schLive', 'live');
-  const sl = (id, outId, key, fix = 1) => {
-    const el = $(id);
-    if (!el) return;
-    el.value = m[key];
-    const out = $(outId);
-    if (out) out.textContent = (+m[key]).toFixed(fix);
-    el.oninput = () => {
-      m[key] = parseFloat(el.value);
-      m.sanitize(); // hält min ≤ max (Intervall/Stärke) — der Partner-Slider folgt erst beim Neuaufbau
-      if (out) out.textContent = (+m[key]).toFixed(fix);
-      S.dirty = true;
-      syncPartner(key);
-    };
-  };
-  sl('schTmin', 'schTminVal', 'sMin', 1);
-  sl('schTmax', 'schTmaxVal', 'sMax', 1);
-  sl('schVmin', 'schVminVal', 'vMin', 2);
-  sl('schVmax', 'schVmaxVal', 'vMax', 2);
-  const dir = $('schDir');
-  if (dir) {
-    dir.value = m.dir;
-    dir.onchange = () => { m.dir = dir.value; m.sanitize(); S.dirty = true; };
-  }
-}
-/** Nach sanitize() den Partner-Slider auf die (geklemmten) Werte bringen. */
-function syncPartner(key) {
-  const m = S.schubser;
-  const map = { sMin: ['schTmin', 'schTminVal'], sMax: ['schTmax', 'schTmaxVal'], vMin: ['schVmin', 'schVminVal'], vMax: ['schVmax', 'schVmaxVal'] };
-  const pair = map[key];
-  if (!pair) return;
-  const el = $(pair[0]), out = $(pair[1]);
-  if (el) el.value = m[key];
-  if (out) out.textContent = (+m[key]).toFixed(key[0] === 's' ? 1 : 2);
-}
-
 // ── UI: Konsole ────────────────────────────────────────────
 function wireConsoleUI() {
   $('consOn').addEventListener('change', (e) => {
@@ -731,7 +644,7 @@ function buildCmdSeg(id, host) {
   host.innerHTML = '';
   for (const m of CMD_MODES) {
     const b = document.createElement('button');
-    b.textContent = CMD_MODE_LABELS[m];
+    b.textContent = CMD_MODE_LABELS];
     b.dataset.mode = m;
     if (chanOf(id).mode === m) b.classList.add('on');
     b.addEventListener('click', () => {
@@ -739,7 +652,7 @@ function buildCmdSeg(id, host) {
       S.dirty = true;
       buildCmdSeg(id, host);
       buildCmdRows();
-      log('Trainingseinsatz ' + (id === 'drive' ? 'BEWEGUNG' : 'KOPF') + ': ' + CMD_MODE_LABELS[m], 'ok');
+      log('Trainingseinsatz ' + (id === 'drive' ? 'BEWEGUNG' : 'KOPF') + ': ' + CMD_MODE_LABELS], 'ok');
     });
     host.appendChild(b);
   }
