@@ -133,6 +133,40 @@
     <div id="schState" class="hint"></div>
     <p class="hint">Schubser = Stör-Impulse (Δv) auf die Basis — die Ente lernt, Stöße wegzuregeln (Robustheit: Verstehen statt Auswendiglernen). Jeder Schubs wird im Intervall „von–bis“ Sekunden gewürfelt, die Stärke gleichverteilt „von–bis“ m/s. Mit „Stärke wächst mit Erfolg“ wird es bei Stürzen automatisch leichter, wenn die Ente standhält, schwerer. Mit „Auch im POLICY-Betrieb“ siehst du im FELD live, wie sie reagiert.</p>
   </div>
+  <div class="card">
+    <h3>BEWEGLICHER BODEN <span class="dim">— kippende Plattform</span></h3>
+    <div class="toggles">
+      <label class="switch"><input id="grOn" type="checkbox"><span>Beweglicher Boden (Training)</span></label>
+      <label class="switch"><input id="grLive" type="checkbox"><span>Auch im POLICY-Betrieb</span></label>
+    </div>
+    <div class="rrow"><label>Muster</label>
+      <select id="grMode" class="select">
+        <option value="sinus">Sinus (rhythmisch)</option>
+        <option value="zufall">Zufall (geglättet)</option>
+        <option value="achter">Achter (Lissajous)</option>
+        <option value="drift">Drift (wandernd)</option>
+      </select>
+    </div>
+    <div class="rrow"><label>Wie stark: Neigung max (°)</label><input id="grAmp" type="range" min="1" max="25" step="1" value="8"><output id="grAmpVal">8</output></div>
+    <div class="rrow"><label>Wie schnell: Frequenz (Hz)</label><input id="grFreq" type="range" min="0.05" max="1.5" step="0.05" value="0.2"><output id="grFreqVal">0.20</output></div>
+    <div id="grState" class="hint"></div>
+    <p class="hint">Die Welt kippt (Schwerkraft schräg = Plattform schief): Die Ente muss sich ausbalancieren, sonst rutscht sie. Sinus = rhythmisch, Zufall = chaotisch geglättet, Achter = Lissajous-Spielfeld, Drift = langsam wandernd. Trainiert Balance-Verständnis statt fester Pfade.</p>
+  </div>
+  <div class="card">
+    <h3>HANDY-SENSOR <span class="dim">— Gyroskop als Spielfeld</span></h3>
+    <div class="toggles">
+      <label class="switch"><input id="phOn" type="checkbox"><span>Sensor lesen (Gyroskop)</span></label>
+      <label class="switch"><input id="phPush" type="checkbox"><span>Bewegung schubst den Roboter</span></label>
+      <label class="switch"><input id="phGround" type="checkbox"><span>Neigung bewegt den Boden</span></label>
+      <label class="switch"><input id="phInv" type="checkbox"><span>Richtung umkehren</span></label>
+    </div>
+    <div class="rrow"><label>Empfindlichkeit</label><input id="phSens" type="range" min="0.2" max="3" step="0.1" value="1"><output id="phSensVal">1.0</output></div>
+    <div class="rrow"><label>Schwelle (m/s²)</label><input id="phThr" type="range" min="0.5" max="12" step="0.5" value="3"><output id="phThrVal">3.0</output></div>
+    <div class="rrow"><label>Schubs-Stärke max (Δv m/s)</label><input id="phVmax" type="range" min="0.2" max="6" step="0.1" value="2.5"><output id="phVmaxVal">2.5</output></div>
+    <div class="rrow"><label>Boden-Neigung max (°)</label><input id="phTilt" type="range" min="2" max="25" step="1" value="12"><output id="phTiltVal">12</output></div>
+    <div id="phState" class="hint"></div>
+    <p class="hint">Handy flach wie einen Joystick halten: Schwingen schubst die Ente in Schwingrichtung (y = vor, x = seitlich — „Richtung umkehren“ dreht es um), Neigen kippt den Boden (vorne runter = rutscht nach vorn). Gilt im Training UND im POLICY-Betrieb — im FELD zusehen, wie sie reagiert. Witzig garantiert.</p>
+  </div>
 </section>
 
 <!-- ═══ STEUERUNG ═══ -->

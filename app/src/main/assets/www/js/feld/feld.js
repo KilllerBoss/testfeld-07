@@ -19,6 +19,8 @@ import { RewModel, RwxModel, RW_FIELDS, PRESETS, RWX_DEFS } from './rewards.js';
 import { Console, BUTTONS } from './console.js';
 import { CmdGen, CMD_MODES, CMD_MODE_LABELS } from './cmdgen.js';
 import { SchubModel, SCHUB_DIR_LABELS } from './schubser.js'; // v3.2.0: AutoSchubser
+import { GroundModel, GroundState, GROUND_MODE_LABELS, probeGravity, setGroundTilt, applyGroundImpulse } from './ground.js'; // v3.2.0: beweglicher Boden
+import { PhoneModel, PhoneSensor, phonePush } from './phone.js'; // v3.2.0: Handy-Gyroskop
 import { LayaRouter } from './laya.js';
 import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
 import * as store from './store.js';
@@ -36,6 +38,9 @@ const S = {
   ortInfer: null,           // { session, ep, ort } — Policy über ONNX
   cmdgen: null,             // v3.1.0: Befehls-Generator (Trainings-Einsatz der Joysticks)
   schubser: null,           // v3.2.0: AutoSchubser (an/aus · wie oft · wie stark)
+  ground: null, groundState: null, groundRng: null, // v3.2.0: beweglicher Boden
+  g0: null, gDirect: true, groundTilt: { x: 0, y: 0 }, // Schwerkraft-Snapshot + Modus
+  phone: null, phoneSensor: null, _phSt: null, // v3.2.0: Handy-Gyroskop
   cmdFold: false,           // v3.1.0: Konsole im FELD ausgeklappt?
   chartMax: 1,
   booted: false,
@@ -60,8 +65,15 @@ async function boot() {
     S.rwx = new RwxModel(null);
     // v3.2.0: AutoSchubser — VOR Task-Bau an cfg binden (Task liest je
     // reward()-Aufruf live; in-place Mutationen von Autosave/Import gelten)
+    // v3.2.0: AutoSchubser + beweglicher Boden + Handy-Sensor
     S.schubser = new SchubModel(null);
     cfg.schubser = S.schubser;
+    S.ground = new GroundModel(null);
+    S.groundState = new GroundState();
+    S.groundRng = new RNG(20260302); // deterministische Plattform
+    S.phone = new PhoneModel(null);
+    S.phoneSensor = new PhoneSensor();
+    S._phSt = { t: 0, last: -9 };
     cfg.rW = S.rew;
     cfg.rWx = S.rwx;
     if (!hasModelInFS(cfg.dir)) {
@@ -71,6 +83,11 @@ async function boot() {
     const worldXml = buildWorldXML(cfg, S.world, 7);
     writeWorldFile(cfg.dir, 'welt_live.xml', worldXml);
     S.sim = new RobotSim(cfg, 'welt_live.xml');
+    // v3.2.0: Schwerkraft-Snapshot + Schreibbarkeit prüfen (beweglicher Boden)
+    S.g0 = new Float64Array([0, 0, -9.81]);
+    try { const gv = S.sim.model.opt.gravity; if (gv && gv.length >= 3) S.g0 = Float64Array.from(gv); } catch (e) { /* Defaults */ }
+    S.gDirect = probeGravity(S.sim);
+    log('Beweglicher Boden: ' + (S.gDirect ? 'Schwerkraft steuerbar' : 'Impuls-Fallback'), 'ok');
     // Task (Soft-MoE-Task des Ducks) + cfg-Rückverweis (Stufen-Glättung)
     S.task = cfg.task(cfg);
     S.task.cfg = cfg;
@@ -95,6 +112,8 @@ async function boot() {
     wireTrainUI();
     buildRewardUI();
     buildSchubUI();
+    buildGroundUI();
+    buildPhoneUI();
     wireConsoleUI();
     wireCmdUI();
     wireConsoleFold();
@@ -117,12 +136,15 @@ function loop(t) {
   _lastT = t;
   if (!S.sim) return;
   try {
+    if (S.phoneSensor && S.phone && S.phone.on) S.phoneSensor.poll(); // v3.2.0: Sensor einmal je Frame
     if (S.mode === 'train') {
       tickCmdGen(dt);
       trainTick(dt);
     } else if (S.mode === 'live') {
       tickCmdGen(dt);
       liveTick();
+    } else {
+      groundPhoneStep(0); // v3.2.0: Pause — Plattform ruht (Neigung 0, Schwerkraft exakt g0)
     }
     applyConsole();
     S.renderer.updateFrame(S.sim, dt);
@@ -139,6 +161,7 @@ function loop(t) {
 /** Trainings-Takt: budgetierte RL-Schritte (UI bleibt bedienbar). */
 function trainTick() {
   S.task._schubLive = false; // v3.2.0: Schubser gelten im Training (live-Flag aus)
+  S.trainer.onStep = groundPhoneStep; // v3.2.0: je Regelzyklus Handy + Boden
   if (cmdDriven()) pushUserCmd();
   if (S.layaActive) pushLaya();
   if (S.updatePause) { S.updatePause = false; return; }
@@ -186,6 +209,7 @@ function liveTick() {
   // v3.2.0: Schubser im POLICY-Betrieb nur, wenn extra eingeschaltet —
   // so sieht man live, wie die Ente auf Stöße reagiert.
   task._schubLive = !!(S.schubser && S.schubser.on && S.schubser.live);
+  groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden auch live
   if (cmdDriven()) pushUserCmd();
   task.observe(sim, S.trainer._obs);
   if (S.ortInfer && !S._ortBusy) {
@@ -213,6 +237,46 @@ function liveTick() {
     if (task.afterAct) task.afterAct(sim, a.act);
   }
   if (S.rwx.on && S.rwx.terms.some((x) => x.source === 'console')) pushConsoleGoals();
+}
+
+/**
+ * v3.2.0: JE REGELZYKLUS (0,02 s) — beweglicher Boden + Handy-Sensor.
+ *   • Trainings-Boden (GroundState) tickt mit Simzeit, wenn an
+ *     (im POLICY-Betrieb nur mit grLive), Muster amp/freq aus der UI.
+ *   • Handy-Neigung (wenn „Neigung bewegt den Boden“) addiert sich.
+ *   • Die Gesamt-Neigung kippt die Schwerkraft (opt.gravity) — oder
+ *     Impuls-Fallback, wenn die WASM-Bindung nicht schreibbar ist.
+ *   • Handy-Bewegung („Bewegung schubst den Roboter“) → Impuls.
+ * dt = 0 (Pause) hält alles ruhig und stellt die gerade Bodenlage her.
+ */
+function groundPhoneStep(dt) {
+  const sim = S.sim;
+  if (!sim) return;
+  let tx = 0, ty = 0, any = false;
+  // Trainings-Plattform (beweglicher Boden)
+  if (S.ground && S.ground.on && (S.mode === 'train' || (S.mode === 'live' && S.ground.live)) && dt > 0) {
+    const g = S.groundState.tick(dt, S.ground, S.groundRng);
+    tx += g.x; ty += g.y; any = true;
+    S.groundTilt.x = g.x; S.groundTilt.y = g.y;
+  } else if (S.groundTilt) {
+    S.groundTilt.x = 0; S.groundTilt.y = 0;
+  }
+  // Handy-Neigung → Boden
+  if (S.phone && S.phone.on && S.phone.groundOn && S.phoneSensor && S.phoneSensor.ok && S.mode !== 'pause') {
+    const p = S.phoneSensor.tilt(S.phone.tiltMax);
+    tx += p.x; ty += p.y; any = true;
+  }
+  // Schwerkraft schreiben (oder exakt g0 bei Neigung 0)
+  const cl = Math.PI / 180 * 25;
+  tx = Math.max(-cl, Math.min(cl, tx));
+  ty = Math.max(-cl, Math.min(cl, ty));
+  if (S.gDirect) setGroundTilt(sim, tx, ty, S.g0);
+  else applyGroundImpulse(sim, tx, ty, dt, S._gMass || (S._gMass = { m: 0 }));
+  // Handy-Schubser (Bewegung → Impuls) — nie in Pause
+  if (S.phone && S.phone.on && S.phone.pushOn && S.phoneSensor && S.phoneSensor.ok && S.mode !== 'pause') {
+    const hit = phonePush(sim, S.phone, S.phoneSensor, S._phSt, dt);
+    if (hit) S._phLast = hit; // Anzeige in der HANDY-SENSOR-Karte (phState)
+  }
 }
 
 /** Konsole → Task-Kommandos (in-Verteilung zum Training). */
@@ -319,6 +383,29 @@ function hud() {
       ss.textContent = cN + ' Schubser gesamt' + suc + (sL ? ' · letzter: Δv ' + sL.dv.toFixed(2) + ' m/s (' + (SCHUB_DIR_LABELS[sL.dir] || sL.dir) + ')' : ' · erster kommt');
     }
   }
+  // v3.2.0: Detailzeile BEWEGLICHER BODEN
+  const gs = $('grState');
+  if (gs) {
+    if (!S.ground || !S.ground.on) gs.textContent = 'Aus — fester Boden.';
+    else {
+      const gt = S.groundTilt || { x: 0, y: 0 };
+      const dg = (r) => Math.round(Math.abs(r) * 180 / Math.PI);
+      gs.textContent = 'Muster ' + (GROUND_MODE_LABELS[S.ground.mode] || S.ground.mode) + ' · Neigung jetzt ' + dg(gt.x) + '° vor/zurück · ' + dg(gt.y) + '° seitlich (max ' + Math.round(S.ground.amp) + '°)';
+    }
+  }
+  // v3.2.0: Detailzeile HANDY-SENSOR
+  const ps = $('phState');
+  if (ps) {
+    if (!S.phone || !S.phone.on) ps.textContent = 'Sensor aus — Schalter „Sensor lesen (Gyroskop)“ einschalten.';
+    else {
+      const src = S.phoneSensor && S.phoneSensor.ok ? (S.phoneSensor.src === 'app' ? 'App-Sensor' : 'WebView-Sensor') : 'kein Signal';
+      const a = S.phoneSensor ? S.phoneSensor.act.toFixed(1) : '0.0';
+      const sL = S._phLast;
+      ps.textContent = 'Quelle: ' + src + ' · Wucht ' + a + ' m/s² (Schwelle ' + S.phone.thr.toFixed(1) + ')' +
+        (sL ? ' · letzter Handy-Schubs: Δv ' + sL.dv.toFixed(2) + ' m/s' : '') +
+        (!S.phone.pushOn && !S.phone.groundOn ? ' · beide Wirkungen aus' : '');
+    }
+  }
 }
 function drawChart() {
   const cv = $('chart');
@@ -369,6 +456,8 @@ function sessionBlob() {
     console: S.konsole ? S.konsole.toJSON() : null,
     cmdgen: S.cmdgen ? S.cmdgen.toJSON() : null,
     schubser: S.schubser ? S.schubser.toJSON() : null, // v3.2.0: AutoSchubser im Autosave
+    ground: S.ground ? S.ground.toJSON() : null,       // v3.2.0: beweglicher Boden
+    phone: S.phone ? S.phone.toJSON() : null,          // v3.2.0: Handy-Sensor
     cmdFold: S.cmdFold,
     laya: S.laya ? S.laya.toJSON() : null,
     layaActive: S.layaActive,
@@ -414,6 +503,17 @@ function applySession(sess, opts = {}) {
       S.schubser.setFrom(sess.schubser);
       S.schubser.sanitize();
       buildSchubUI();
+    }
+    // v3.2.0: beweglicher Boden + Handy-Sensor
+    if (sess.ground && S.ground) {
+      S.ground.setFrom(sess.ground);
+      S.ground.sanitize();
+      buildGroundUI();
+    }
+    if (sess.phone && S.phone) {
+      S.phone.setFrom(sess.phone);
+      S.phone.sanitize();
+      buildPhoneUI();
     }
     if (!opts.quiet) log('Speicherstand übernommen', 'ok');
     return true;
@@ -675,6 +775,85 @@ function syncPartner(key) {
   const el = $(pair[0]), out = $(pair[1]);
   if (el) el.value = m[key];
   if (out) out.textContent = (+m[key]).toFixed(key[0] === 's' ? 1 : 2);
+}
+
+// ── v3.2.0: BEWEGLICHER BODEN (Belohnungs-Tab) ───────────
+// Muster (Sinus/Zufall/Achter/Drift) · Neigung max (°) · Frequenz (Hz) ·
+// an/aus · auch im POLICY-Betrieb. Wirkt je Regelzyklus (onStep-Haken).
+function buildGroundUI() {
+  const m = S.ground;
+  if (!m) return;
+  const sw = (id, key) => {
+    const el = $(id);
+    if (!el) return;
+    el.checked = !!m[key];
+    el.onchange = () => { m[key] = el.checked ? 1 : 0; m.sanitize(); S.dirty = true; };
+  };
+  sw('grOn', 'on');
+  sw('grLive', 'live');
+  const mode = $('grMode');
+  if (mode) {
+    mode.value = m.mode;
+    mode.onchange = () => { m.mode = mode.value; m.sanitize(); S.groundState.reset(); S.dirty = true; };
+  }
+  const sl = (id, outId, key, fix = 2) => {
+    const el = $(id);
+    if (!el) return;
+    el.value = m[key];
+    const out = $(outId);
+    if (out) out.textContent = (+m[key]).toFixed(fix);
+    el.oninput = () => {
+      m[key] = parseFloat(el.value);
+      m.sanitize();
+      if (out) out.textContent = (+m[key]).toFixed(fix);
+      S.dirty = true;
+    };
+  };
+  sl('grAmp', 'grAmpVal', 'amp', 0);
+  sl('grFreq', 'grFreqVal', 'freq', 2);
+}
+
+// ── v3.2.0: HANDY-SENSOR (Belohnungs-Tab) ────────────────
+// Sensor starten/stoppen · Bewegung schubst Roboter · Neigung bewegt
+// Boden · Richtung umkehren · Empfindlichkeit/Schwelle/Stärke/Neigung.
+function buildPhoneUI() {
+  const m = S.phone;
+  if (!m) return;
+  const sw = (id, key) => {
+    const el = $(id);
+    if (!el) return;
+    el.checked = !!m[key];
+    el.onchange = () => {
+      m[key] = el.checked ? 1 : 0;
+      m.sanitize();
+      // Sensor-Laufzeit je „Sensor lesen“-Schalter
+      if (key === 'on') {
+        if (m.on) S.phoneSensor.start(); else S.phoneSensor.stop();
+      }
+      S.dirty = true;
+    };
+  };
+  sw('phOn', 'on');
+  sw('phPush', 'pushOn');
+  sw('phGround', 'groundOn');
+  sw('phInv', 'inv');
+  const sl = (id, outId, key, fix = 1) => {
+    const el = $(id);
+    if (!el) return;
+    el.value = m[key];
+    const out = $(outId);
+    if (out) out.textContent = (+m[key]).toFixed(fix);
+    el.oninput = () => {
+      m[key] = parseFloat(el.value);
+      m.sanitize();
+      if (out) out.textContent = (+m[key]).toFixed(fix);
+      S.dirty = true;
+    };
+  };
+  sl('phSens', 'phSensVal', 'sens', 1);
+  sl('phThr', 'phThrVal', 'thr', 1);
+  sl('phVmax', 'phVmaxVal', 'vMax', 1);
+  sl('phTilt', 'phTiltVal', 'tiltMax', 0);
 }
 
 // ── UI: Konsole ────────────────────────────────────────────

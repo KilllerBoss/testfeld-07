@@ -34,8 +34,8 @@
 
 import { clamp } from '../math.js';
 
-/** Ein RL-Schritt in Simzeit (Sekunden) — FeldTrainer: substeps 10 × CTRL_DT 0.02 */
-export const SCHUB_STEP_S = 0.2;
+/** Ein Regelzyklus in Simzeit (Sekunden) — FeldTrainer: substeps 10 × timestep 0.002 = CTRL_DT */
+export const SCHUB_STEP_S = 0.02;
 
 export const SCHUB_DIRS = ['auto', 'fwd', 'back', 'left', 'right'];
 export const SCHUB_DIR_LABELS = {
@@ -96,7 +96,7 @@ export class SchubModel {
 
 /**
  * Fälligkeit: liefert Basis-Δv (m/s) wenn JETZT geschubst werden soll,
- * sonst 0. _schubNext zählt RL-Schritte (0,2 s) — Intervall gleichverteilt
+ * sonst 0. _schubNext zählt Regelzyklen (0,02 s) — Intervall gleichverteilt
  * in [sMin, sMax] Sekunden, frisch gewürfelt je Episode und nach jedem
  * Schubs. grow skaliert auf die Erfolgs-EMA (task._schubSuc).
  * @param rng optional deterministischer RNG (Tests); sonst Math.random

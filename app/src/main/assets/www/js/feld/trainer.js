@@ -180,6 +180,12 @@ export class FeldTrainer {
     if (task.setRouting && ppo.lastW) task.setRouting(ppo.lastW);
     task.actionToCtrl(sim, a.act);
     sim.stepN(this.hyper.substeps);
+    // v3.2.0: PER-ZYKLUS-HAKEN — Handy-Schubser + beweglicher Boden
+    // (feld.js setzt onStep; läuft je Regelzyklus, VOR dem Reward, damit
+    // die Belohnung die Störung schon sieht — wie bei den DR-Schüben).
+    if (this.onStep) {
+      try { this.onStep(CTRL_DT * this.hyper.substeps); } catch (e) { /* bricht nie das Training */ }
+    }
     let { r, done: dn } = task.reward(sim);
     for (let i = 0; i < A; i++) task.lastAct[i] = a.act[i];
     if (task.afterAct) task.afterAct(sim, a.act);

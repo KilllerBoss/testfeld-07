@@ -33,10 +33,10 @@ const WWW = join(ROOT, 'app/src/main/assets/www');
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
 ok(APP_NAME === 'Feld', 'App-Name = Feld');
-ok(VERSION === '3.1.0', 'VERSION = 3.1.0');
-ok(VERSION_CODE === 101, 'VERSION_CODE = 101');
+ok(VERSION === '3.2.0', 'VERSION = 3.2.0');
+ok(VERSION_CODE === 102, 'VERSION_CODE = 102');
 const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
-ok(gradle.includes('versionCode 101') && gradle.includes('versionName "3.1.0"'), 'build.gradle 101 / 3.1.0');
+ok(gradle.includes('versionCode 102') && gradle.includes('versionName "3.2.0"') || (gradle.includes('versionCode 102') && gradle.includes('versionName "3.2.0"')), 'build.gradle 101 / 3.1.0');
 
 // ════════════════ 2 · MODELS/DEFINITIONEN ════════════════
 sec('CMD_MODES');

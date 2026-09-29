@@ -4,6 +4,11 @@
 
     <!-- Nur der KI-Trainer (Gemini) braucht Netz — Rest der App bleibt offline -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- v3.2.0: Handy-Gyroskop als Spielfeld (HANDY-SENSOR-Karte) —
+         Sensor-Rate > 200 Hz braucht diese normale Berechtigung (Android 12+) -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
 
     <application
         android:label="Feld"

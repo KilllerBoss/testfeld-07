@@ -39,6 +39,10 @@ public class MainActivity extends Activity {
 
     private WebView webView;
 
+    // v3.2.0: Sensor-Brücke (Gyroskop/Beschleunigung) — Laufzeit über
+    // Pause/Resume hinweg konsistent (want = von JS gewünscht)
+    private MotionBridge motionBridge;
+
     // Dateimanager-Brücke: <input type="file"> (GLB-Import, Policy-Import)
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST = 7001;
@@ -152,6 +156,10 @@ public class MainActivity extends Activity {
         // KI-Trainer-Brücke: HTTPS zu generativelanguage.googleapis.com
         // (deterministisch, ohne WebView-CORS-Unwägbarkeiten)
         webView.addJavascriptInterface(new AIBridge(), "TrainrobotAI");
+        // v3.2.0: Bewegungs-Sensor-Brücke — Gyroskop/Beschleunigung fürs
+        // HANDY-SENSOR-Spielfeld (Schubser + beweglicher Boden)
+        motionBridge = new MotionBridge();
+        webView.addJavascriptInterface(motionBridge, "FeldMotion");
 
         if (savedInstanceState == null) {
             webView.loadUrl("https://appassets.androidplatform.net/assets/www/index.html");
@@ -415,6 +423,118 @@ public class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (motionBridge != null) motionBridge.onHostPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (motionBridge != null) motionBridge.onHostResume();
+    }
+
+    /**
+     * v3.2.0: JS-Brücke für die Handy-Bewegungssensoren — Gyroskop,
+     * Schwerkraft und lineare Beschleunigung (schwerebefreit). JS pollt
+     * read() einmal je Frame (JSON); Listener nativ mit GAME-Rate.
+     * Registrierung läuft im Bridge-Thread — SensorManager ist
+     * thread-sicher; Werte volatile für den Cross-Thread-Lesezugriff.
+     */
+    private class MotionBridge implements android.hardware.SensorEventListener {
+        private final android.hardware.SensorManager sm;
+        private volatile boolean want = false;   // JS will den Sensor
+        private volatile boolean running = false;
+        private volatile float wx, wy, wz;       // Gyro rad/s
+        private volatile float gx, gy, gz;       // Schwerkraft m/s²
+        private volatile float lx, ly, lz;       // linear m/s²
+        private volatile long ts;
+
+        MotionBridge() {
+            android.hardware.SensorManager m =
+                (android.hardware.SensorManager) getSystemService(SENSOR_SERVICE);
+            sm = m;
+        }
+
+        @JavascriptInterface public boolean available() { return sm != null; }
+
+        @JavascriptInterface public void start() {
+            want = true;
+            startNow();
+        }
+
+        private void startNow() {
+            if (sm == null || running) return;
+            boolean ok = false;
+            ok |= reg(android.hardware.Sensor.TYPE_GYROSCOPE);
+            ok |= reg(android.hardware.Sensor.TYPE_GRAVITY);
+            ok |= reg(android.hardware.Sensor.TYPE_LINEAR_ACCELERATION);
+            ok |= reg(android.hardware.Sensor.TYPE_ACCELEROMETER);
+            running = ok;
+        }
+
+        private boolean reg(int type) {
+            android.hardware.Sensor s = sm.getDefaultSensor(type);
+            return s != null && sm.registerListener(this, s, android.hardware.SensorManager.SENSOR_DELAY_GAME);
+        }
+
+        @JavascriptInterface public void stop() {
+            want = false;
+            if (sm != null) sm.unregisterListener(this);
+            running = false;
+        }
+
+        @JavascriptInterface public boolean running() { return running; }
+
+        @JavascriptInterface public String read() {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("ok", running);
+                o.put("t", ts);
+                o.put("wx", wx); o.put("wy", wy); o.put("wz", wz);
+                o.put("gx", gx); o.put("gy", gy); o.put("gz", gz);
+                o.put("lx", lx); o.put("ly", ly); o.put("lz", lz);
+                return o.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false}";
+            }
+        }
+
+        void onHostPause() {
+            if (sm != null) sm.unregisterListener(this);
+            running = false;
+        }
+
+        void onHostResume() {
+            if (want) startNow();
+        }
+
+        @Override
+        public void onSensorChanged(android.hardware.SensorEvent e) {
+            switch (e.sensor.getType()) {
+                case android.hardware.Sensor.TYPE_GYROSCOPE:
+                    wx = e.values[0]; wy = e.values[1]; wz = e.values[2];
+                    ts = System.currentTimeMillis();
+                    break;
+                case android.hardware.Sensor.TYPE_GRAVITY:
+                    gx = e.values[0]; gy = e.values[1]; gz = e.values[2];
+                    ts = System.currentTimeMillis();
+                    break;
+                case android.hardware.Sensor.TYPE_LINEAR_ACCELERATION:
+                    lx = e.values[0]; ly = e.values[1]; lz = e.values[2];
+                    ts = System.currentTimeMillis();
+                    break;
+                default:
+                    ts = System.currentTimeMillis();
+                    break;
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(android.hardware.Sensor s, int a) { }
     }
 
     @Override
