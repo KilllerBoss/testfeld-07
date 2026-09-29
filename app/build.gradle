@@ -10,8 +10,8 @@ android {
         applicationId "de.feld.app"  // v3.0.0: KOMPLETT NEUE App „Feld" — minimalistisch
         minSdk 30
         targetSdk 34
-        versionCode 104
-        versionName "3.4.0"
+        versionCode 105
+        versionName "3.5.0"
     }
 
     signingConfigs {

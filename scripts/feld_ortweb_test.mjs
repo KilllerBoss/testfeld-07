@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════
 // feld_ortweb_test.mjs — Parität mit ORT-WEB 1.27.0 (App-Version!)
 // Lädt das echte ort-web vom CDN (lokal gespiegelt) in Node und
-// prüft: Export-Bytes (fp32/fp16/int8) laden + mu-Parität.
+// prüft: Export-Bytes (fp32/fp16/int8) laden + actions-Parität
+// (v3.5.0 Pollen-Profil: Ausgang heißt „actions“).
 // ═══════════════════════════════════════════════════════════
 
 import { SoftMoEPolicy } from '../app/src/main/assets/www/js/train.js';
@@ -32,7 +33,7 @@ for (const [fmt, tol] of [['fp32', 1e-5], ['fp16', 3e-2], ['int8', 3e-1]]) {
   const session = await ort.InferenceSession.create(bytes, { graphOptimizationLevel: 'all' });
   const t = new ort.Tensor('float32', Float32Array.from(raw), [1, D]);
   const out = await session.run({ obs: t });
-  const mu = Array.from(out.mu.data);
+  const mu = Array.from(out.actions.data);
   let mx = 0;
   for (let i = 0; i < mu.length; i++) mx = Math.max(mx, Math.abs(mu[i] - muRef[i]));
   ok(mx < tol, fmt.toUpperCase() + ': max|Δ| = ' + mx.toExponential(3) + ' < ' + tol + ' (' + ops + ' Knoten)');

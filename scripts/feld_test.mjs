@@ -35,7 +35,7 @@ function sec(s) { console.log('\n── ' + s + ' ──'); }
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
 ok(APP_NAME === 'Feld', 'App-Name = Feld');
-ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0', 'VERSION = 3.2.0/3.3.0/3.4.0');
+ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0' || VERSION === '3.5.0', 'VERSION = 3.2.0/3.3.0/3.4.0/3.5.0');
 
 // ════════════════ 2 · STUFEN (FeldMoE) ════════════════
 sec('STUFEN — Freeze-Semantik');
@@ -260,10 +260,10 @@ const graphF = byName(mf, 7);
 ok(graphF.length === 1, 'ModelProto: graph (Feld 7) genau 1×');
 const g = readFields(graphF[0][2]);
 const nodesF = byName(g, 1), initsF = byName(g, 5), inF = byName(g, 11), outF = byName(g, 12);
-ok(byName(g, 2).length === 1 && new TextDecoder().decode(byName(g, 2)[0][2]) === 'feld_policy', 'Graphname feld_policy');
+ok(byName(g, 2).length === 1 && new TextDecoder().decode(byName(g, 2)[0][2]) === 'main_graph', 'Graphname main_graph (Pollen-Original-Konvention)');
 ok(initsF.length >= 20, 'Initializer: ' + initsF.length);
 ok(inF.length === 1 && new TextDecoder().decode(readFields(inF[0][2])[0][2]) === 'obs', 'Eingang: obs');
-ok(outF.length >= 1 && new TextDecoder().decode(readFields(outF[0][2])[0][2]) === 'mu', 'Ausgang: mu');
+ok(outF.length >= 1 && new TextDecoder().decode(readFields(outF[0][2])[0][2]) === 'actions', 'Ausgang: actions (Pollen-Original-Konvention)');
 // enc1-Wert verifizieren (fp32)
 let enc1 = null;
 for (const [, , tb] of initsF) {
@@ -310,7 +310,7 @@ ok(m8.bytes.length < m32.bytes.length * 0.6, 'int8 deutlich kleiner als fp32');
 // Norm-Variante + valueHead
 const mn = moeToOnnx(net, { format: 'fp32', norm: { mean: new Array(74).fill(0), std: new Array(74).fill(1) }, valueHead: true });
 const outs = readFields(byName(readFields(mn.bytes), 7)[0][2]).filter((x) => x[0] === 12);
-ok(outs.length === 2, 'mit valueHead: 2 Ausgänge (mu + val)');
+ok(outs.length === 2, 'mit valueHead: 2 Ausgänge (actions + val)');
 
 // ════════════════ 9 · STORE ════════════════
 sec('STORE — base64 + Policy-Parität');

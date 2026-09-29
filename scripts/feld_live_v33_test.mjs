@@ -30,9 +30,9 @@ const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.3.0 / 103');
-ok(vjs.includes("export const VERSION = '3.3.0';") || vjs.includes("export const VERSION = '3.4.0';"), 'version.js VERSION = 3.3.0/3.4.0');
-ok(vjs.includes('export const VERSION_CODE = 103;') || vjs.includes('export const VERSION_CODE = 104;'), 'version.js VERSION_CODE = 103/104');
-ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"')), 'build.gradle 103 / 3.3.0');
+ok(vjs.includes("export const VERSION = '3.3.0';") || vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';"), 'version.js VERSION = 3.3.0/3.4.0/3.5.0');
+ok(vjs.includes('export const VERSION_CODE = 103;') || vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;'), 'version.js VERSION_CODE = 103/104/105');
+ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"'))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')))), 'build.gradle 103 / 3.3.0');
 
 // ════════════════ 2 · ECHTZEIT-LOOP ════════════════
 sec('LIVE-LOOP — wanduhrgetrieben');
@@ -50,7 +50,7 @@ ok(feldjs.includes('if (cmdDriven()) pushUserCmd();'), 'Konsole/Befehls-Generato
 // ════════════════ 3 · ONNX ENTKOPPELT ════════════════
 sec('ONNX — Physik wartet nicht mehr auf die Inferenz');
 ok(feldjs.includes('function liveCycle()'), 'liveCycle: ein Regelzyklus gekapselt');
-ok(feldjs.includes("S._ortMu = Float32Array.from(out.mu.data);"), 'Inferenz-Ergebnis wird gehalten (S._ortMu)');
+ok(feldjs.includes("S._ortMu = Float32Array.from(out.actions.data);"), 'Inferenz-Ergebnis wird gehalten (S._ortMu)');
 ok(feldjs.includes('const mu = S._ortMu || (S._ortMu = new Float32Array(task.actDim));'), 'Hält letzten Befehl, solange Inferenz läuft');
 // Physikschritt muss IMMER laufen — auch wenn S._ortBusy noch true ist:
 const ortBlock = feldjs.slice(feldjs.indexOf('if (S.ortInfer) {'), feldjs.indexOf('} else {', feldjs.indexOf('if (S.ortInfer) {')));

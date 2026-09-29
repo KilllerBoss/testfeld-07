@@ -22,6 +22,26 @@
 // + DequantizeLinear vor jedem Gemm)
 // AUSFÜHRUNG: onnxruntime-web (CDN + Cache), EP: CPU=wasm · GPU=webgpu
 // · NPU=webnn (Samsung S26 Ultra) · Auto (webnn→webgpu→wasm)
+//
+// v3.5.0 POLLEN-PROFIL — Format 1:1 wie die Original-Policies von Pollen
+// Robotics (microduck-policies, exportiert über rsl_rl export_policy_to_onnx
+// opset 18 + torch 2.9.1 + mjlab attach_metadata_to_onnx):
+//   • ir_version 8 · producer_name 'pytorch' · producer_version '2.9.1'
+//   • opset 18 (domain '') · Graph-Name 'main_graph'
+//   • Eingang  „obs“     fp32, FEST [1, obsDim]  (kein dynamisches N —
+//     die Originale tracen mit torch.zeros(1, D), dynamische Batch-Dims
+//     hat KEIN Original)
+//   • Ausgang „actions“  fp32, FEST [1, actDim] (vorher 'mu' — Loader auf
+//     dem Duck/Playground greifen namentlich nach 'actions')
+//   • 8 metadata_props wie im Original (mjlab get_base_metadata):
+//     run_path · joint_names · joint_stiffness · joint_damping ·
+//     default_joint_pos · command_names · observation_names · action_scale
+//     — Listen als %.3f-Komma-CSV (list_to_csv_str), ehrliche Werte aus
+//     unserem Microduck (dasselbe Pollen-MJCF: Aktuator-Order, STAND-
+//     Keyframe, kp 2.2 / kv 0 aus chosen_actuator, actSpan 0.35)
+//   • KEINE value_info für Zwischentensoren (das Original hat auch keine;
+//     feste Dims machen die Shape-Inferenz vollständig)
+//   • Softmax ab opset 13: axis als int64-SCALAR-Input, nicht Attribut
 // ═══════════════════════════════════════════════════════════
 
 import { SoftMoEPolicy } from '../train.js';
@@ -63,6 +83,87 @@ function concatBytes(parts) {
   return out;
 }
 const utf8 = (s) => new TextEncoder().encode(s);
+
+// ── v3.5.0 Pollen-Formatprofil ─────────────────────────────
+export const POLL_PROFILE = {
+  ir: 8, producer: 'pytorch', producerVer: '2.9.1', graph: 'main_graph',
+  inName: 'obs', outName: 'actions', opset: 18,
+};
+/** Aktuator-/Joint-Order = microduck.xml <actuator>-Reihenfolge (identisch
+ *  mit den Original-Modellen von Pollen — dieselbe MJCF-Basis). */
+export const POLL_JOINTS = [
+  'left_hip_yaw', 'left_hip_roll', 'left_hip_pitch', 'left_knee', 'left_ankle',
+  'neck_pitch', 'head_pitch', 'head_yaw', 'head_roll',
+  'right_hip_yaw', 'right_hip_roll', 'right_hip_pitch', 'right_knee', 'right_ankle',
+];
+/** STAND-Keyframe (ctrl) des Pollen-MJCF = default_joint_pos der Originale. */
+export const POLL_DEFAULT_POS = [
+  0, -0.08726646259971647, -0.457924, -0.004940, 0.452984,
+  0.3490658503988659, 0.3490658503988659, 0, 0, 0,
+  0.08726646259971647, 0.457924, 0.004940, -0.452984,
+];
+/** chosen_actuator im Pollen-MJCF: position kp=2.2, kv=0 (gainprm/biasprm). */
+export const POLL_STIFFNESS = 2.2, POLL_DAMPING = 0.0;
+/** Obs-Blöcke in EXAKTER Reihenfolge des observe()-Layouts (74 Dims). */
+export const POLL_OBS_NAMES = [
+  'joint_pos', 'joint_vel', 'proj_gravity_quat', 'yaw_rate', 'base_vel_yaw',
+  'cmd', 'actions', 'gyro', 'proj_gravity', 'height', 'foot_contacts',
+  'phase_clock', 'soft_cmd', 'skill', 'style',
+];
+/** Kommando-Blöcke (wie command_manager.active_terms der Originale). */
+export const POLL_CMD_NAMES = ['soft_cmd', 'skill', 'style'];
+
+/** %.3f-Komma-CSV — Format von mjlab list_to_csv_str (decimals=3). */
+const csv3 = (arr) => Array.from(arr, (x) => Number(x).toFixed(3)).join(',');
+
+/** metadata_props-Eintrag (StringStringEntryProto: key=1, value=2). */
+const metaEntry = (k, v) => concatBytes([bf(1, utf8(k)), bf(2, utf8(v))]);
+
+/**
+ * Die 8 Original-Metadaten (mjlab get_base_metadata-Reihenfolge) mit ECHTEN
+ * Werten unseres Microduck-Policies. meta-Overrides (feld.js):
+ *   { defaultJointPos, actionScale, runPath }
+ */
+export function buildPollenMeta(net, meta = {}) {
+  const djp = meta.defaultJointPos && meta.defaultJointPos.length === net.actDim
+    ? meta.defaultJointPos : POLL_DEFAULT_POS;
+  const actScale = meta.actionScale != null ? Number(meta.actionScale) : 0.35;
+  return [
+    ['run_path', meta.runPath != null ? String(meta.runPath) : 'None'],
+    ['joint_names', POLL_JOINTS.join(',')],
+    ['joint_stiffness', csv3(new Array(net.actDim).fill(POLL_STIFFNESS))],
+    ['joint_damping', csv3(new Array(net.actDim).fill(POLL_DAMPING))],
+    ['default_joint_pos', csv3(djp)],
+    ['command_names', POLL_CMD_NAMES.join(',')],
+    ['observation_names', POLL_OBS_NAMES.join(',')],
+    ['action_scale', actScale.toFixed(3)],
+  ];
+}
+
+/**
+ * manifest.json (Pollen policy-manifest schema 2) — kommt ALS DATEI neben
+ * das .onnx (die Originale fahren als policy.onnx + manifest.json):
+ * robotctl/Playground lesen obs_len/action_len/robot.model daraus.
+ */
+export function buildManifest(net, meta = {}) {
+  return {
+    schema_version: 2,
+    model_api: 1, // Feed-Forward (LSTM wäre 2)
+    obs_len: net.obsDim,
+    action_len: net.actDim,
+    robot: { model: 'microduck', hw_rev: 1, servos: 'xl330', control_hz: 50 },
+    name: meta.name || 'feld-policy',
+    kind: 'perpetual',
+    entry_pose: 'standing',
+    description: 'Soft-MoE policy trained on-device in the Feld app. '
+      + 'Obs/action layout: see observation_names/joint_names metadata in the ONNX file.',
+    command: { encoding: 'constant', idle: [0, 0, 0] },
+    training: {
+      task_id: 'feld-softmoe', repo: 'Feld-App (On-Device-RL)',
+      exported: new Date().toISOString(),
+    },
+  };
+}
 
 // ── Tensoren ───────────────────────────────────────────────
 const DT = { FLOAT: 1, INT8: 3, INT64: 7, FLOAT16: 10 };
@@ -254,6 +355,8 @@ export function moeToOnnx(net, opts = {}) {
   nodes.push(node('Log', ['skill_a'], ['skill_l']));
   nodes.push(node('Mul', ['skill_l', 'k_prior'], ['skill_p']));
   nodes.push(node('Add', ['rlogits_pure', 'skill_p'], ['rlogits']));
+  // Softmax: axis bleibt bis einschließlich opset 18 ein ATTRIBUT (das
+  // axis-als-Input-Muster gilt nur für die Reduce-Ops) — [1, E] → Achse 1.
   nodes.push(node('Softmax', ['rlogits'], ['w'], [attrI('axis', 1)]));
 
   // Experten
@@ -303,53 +406,37 @@ export function moeToOnnx(net, opts = {}) {
     extraOut = ['val'];
   }
 
-  // Ausgänge immer float32
-  nodes.push(node('Cast', ['mu_raw'], ['mu'], [attrI('to', DT.FLOAT)]));
+  // Ausgänge immer float32 — v3.5.0 heißt der Hauptausgang „actions“
+  // (wie bei den Pollen-Originalen; „mu“ verstand ihr Loader nicht).
+  nodes.push(node('Cast', ['mu_raw'], [POLL_PROFILE.outName], [attrI('to', DT.FLOAT)]));
   if (opts.valueHead) nodes.push(node('Cast', ['val_raw'], ['val'], [attrI('to', DT.FLOAT)]));
 
-  // ── VALUE_INFOS für ALLE Zwischentensoren (statisch typiert) ──
-  // ORTs Shape-Inference bleibt sonst an Concat/Router-Stellen unter-
-  // bestimmt und meldet Pseudo-Konflikte (Inferred vs Declared).
-  const NUL = null;
-  const vi = [
-    ['enc1_a', [NUL, H]], ['h1', [NUL, H]], ['enc2_a', [NUL, H]], ['h2', [NUL, H]],
-    ['skill_raw', [NUL, 4]], ['skill', [NUL, 4]],
-    ['rout1_h', [NUL, RH]], ['rout1_s', [NUL, RH]], ['rout1_hs', [NUL, RH]], ['rout1_a', [NUL, RH]], ['rh', [NUL, RH]],
-    ['rlogits_pure', [NUL, E]],
-    ['skill_a', [NUL, E]], ['skill_l', [NUL, E]], ['skill_p', [NUL, E]],
-    ['rlogits', [NUL, E]], ['w', [NUL, E]],
-    ['mix', [NUL, EL]], ['style_raw', [NUL, net.NS]], ['stylein', [NUL, net.NS]],
-    ['style', [NUL, SL]],
-    ['dec1_m', [NUL, DH]], ['dec1_s', [NUL, DH]], ['dec1_ms', [NUL, DH]], ['dec1_a', [NUL, DH]], ['dech', [NUL, DH]],
-    ['mu_raw', [NUL, A]], ['mu', [NUL, A]],
-  ];
-  if (opts.valueHead) vi.push(['val_raw', [NUL, 1]], ['val', [NUL, 1]]);
-  const F32_ALWAYS = new Set(['skill_raw', 'style_raw']);
-const valueInfos = vi.map(([n2, dims]) => bf(13, valueInfo(n2, F32_ALWAYS.has(n2) ? DT.FLOAT : dt, dims)));
-
+  // v3.5.0: KEINE value_info für Zwischentensoren mehr — das Pollen-Original
+  // hat auch keine, und mit FESTEN Dims ([1, D]) ist ORTs Shape-Inferenz
+  // vollständig (die alte „Inferred vs Declared“-Sorge galt dynamischen Dims).
   const graph = concatBytes([
     ...nodes.map((n) => bf(1, n)),
-    bf(2, utf8('feld_policy')),
+    bf(2, utf8(POLL_PROFILE.graph)),
     ...inits.map((t) => bf(5, t)),
-    bf(11, valueInfo('obs', DT.FLOAT, [null, D])),
-    ...valueInfos,
-    bf(12, valueInfo('mu', DT.FLOAT, [null, A])),
-    ...(opts.valueHead ? [bf(12, valueInfo('val', DT.FLOAT, [null, 1]))] : []),
-    // Diagnose-Ausgänge (opts.debugOutputs): Zwischenwerte sichtbar machen
-    ...(Array.isArray(opts.debugOutputs)
-      ? vi
-          .filter(([vn]) => opts.debugOutputs.includes(vn))
-          .map(([n2, dims]) => bf(12, valueInfo(n2, fmt === 'fp16' ? DT.FLOAT16 : DT.FLOAT, dims)))
-      : []),
+    bf(11, valueInfo(POLL_PROFILE.inName, DT.FLOAT, [1, D])),
+    bf(12, valueInfo(POLL_PROFILE.outName, DT.FLOAT, [1, A])),
+    ...(opts.valueHead ? [bf(12, valueInfo('val', DT.FLOAT, [1, 1]))] : []),
   ]);
-  const opset = concatBytes([bf(1, utf8('')), vf(2, 13)]);
+  const opset = concatBytes([bf(1, utf8('')), vf(2, POLL_PROFILE.opset)]);
   const model = concatBytes([
-    vf(1, 8),
-    bf(2, utf8('feld-' + fmt)),
+    vf(1, POLL_PROFILE.ir),
+    bf(2, utf8(POLL_PROFILE.producer)),
+    bf(3, utf8(POLL_PROFILE.producerVer)),
     bf(7, graph),
     bf(8, opset),
+    ...buildPollenMeta(net, opts.meta || {}).map(([k, v]) => bf(14, metaEntry(k, v))),
   ]);
-  return { bytes: model, format: fmt, ops: nodes.length, params: net.paramCount(), outputs: ['mu'].concat(extraOut) };
+  return {
+    bytes: model, format: fmt, ops: nodes.length, params: net.paramCount(),
+    outputs: [POLL_PROFILE.outName].concat(extraOut),
+    meta: buildPollenMeta(net, opts.meta || {}),
+  };
+
 }
 
 // ── onnxruntime-web (CDN + Cache) ──────────────────────────
@@ -462,7 +549,7 @@ export async function selfTest(net, epMode = 'cpu', opts = {}) {
   const mu = net.forward(raw, raw).slice();
   const t = new ort.Tensor('float32', Float32Array.from(raw), [1, D]);
   const out = await session.run({ obs: t });
-  const onnxMu = Array.from(out.mu.data);
+  const onnxMu = Array.from(out[POLL_PROFILE.outName].data);
   let mx = 0, sum = 0;
   for (let i = 0; i < onnxMu.length; i++) {
     const d = Math.abs(onnxMu[i] - mu[i]);

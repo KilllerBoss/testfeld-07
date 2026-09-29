@@ -1,0 +1,28 @@
++ mkdir -p /home/z/tools
++ cd /home/z/tools
++ '[' '!' -d /home/z/tools/gradle-8.7 ']'
++ curl -sL -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
++ unzip -q gradle.zip
++ rm gradle.zip
++ '[' '!' -d /home/z/tools/android-sdk/cmdline-tools/latest ']'
++ curl -sL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
++ mkdir -p android-sdk/cmdline-tools
++ unzip -q cmdtools.zip -d android-sdk/cmdline-tools
++ mv android-sdk/cmdline-tools/cmdline-tools android-sdk/cmdline-tools/latest
++ rm cmdtools.zip
++ export ANDROID_HOME=/home/z/tools/android-sdk
++ ANDROID_HOME=/home/z/tools/android-sdk
++ yes
++ /home/z/tools/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=/home/z/tools/android-sdk 'platforms;android-34' 'build-tools;34.0.0' platform-tools
++ echo TOOLS_DONE
+TOOLS_DONE
++ ls /home/z/tools/
+android-sdk
+gradle-8.7
+sdk_install.log
++ ls /home/z/tools/android-sdk
+build-tools
+cmdline-tools
+licenses
+platform-tools
+platforms

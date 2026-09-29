@@ -231,7 +231,7 @@ console.log('\n[5] Verdrahtung (main.js / index.html / ai.js / Doku / Notebook /
   const ai = await readFile(path.join(WWW, 'js/ai.js'), 'utf8');
   ok(ai.includes('ARDY-BRÜCKE') && ai.includes('ardy_colab.ipynb') && ai.includes('v2.22.0'), 'ai.js: System-Prompt + WANN-WAS dokumentieren die Brücke');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok((gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')) && /versionCode (3[4-9]|4[0-9]|5[0-2]|100|101|102|103|104)/.test(gradle), 'build.gradle (>= 34-Pin, LerTrain/Feld-Package)');
+  ok((gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')) && /versionCode (3[4-9]|4[0-9]|5[0-2]|100|101|102|103|104|105)/.test(gradle), 'build.gradle (>= 34-Pin, LerTrain/Feld-Package)');
   let nb = null;
   try { nb = JSON.parse(await readFile(path.join(ROOT, 'scripts/ardy_colab.ipynb'), 'utf8')); } catch (e) { /* invalid */ }
   ok(nb && Array.isArray(nb.cells), 'ardy_colab.ipynb existiert + valides JSON', nb ? nb.cells.length + ' Zellen' : '—');

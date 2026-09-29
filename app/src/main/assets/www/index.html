@@ -230,7 +230,7 @@
       <button id="btnSelfTest" class="ghost">SELBSTTEST</button>
     </div>
     <div id="expState" class="hint"></div>
-    <p class="hint">Schreibt <b>feld-policy-fp32.onnx</b> (rohe ONNX-Datei) in den <b>Download-Ordner</b> des Handys — direkt verwendbar auf dem echten Roboter (onnxruntime, Python/C++/Java). Eingang „obs“: 1×74 fp32 (Rohtags, Layout 3·14 Gelenke + 8 Basis + 11 Kontakte + 13 Befehle: vx,vy,wz, skill 4, style 6), Ausgang „mu“: 1×14 fp32 (Gelenk-Sollwerte). „Norm einbauen“ = Eingang darf Rohtags sein, Normalisierung steckt im Graphen.</p>
+    <p class="hint">Schreibt <b>feld-policy-fp32.onnx</b> + <b>feld-policy-fp32.manifest.json</b> in den <b>Download-Ordner</b> des Handys. Format = 1:1 wie die Original-Policies von Pollen Robotics (microduck-policies): opset 18, producer „pytorch/2.9.1“, Graph „main_graph“, Ausgang heißt <b>„actions“</b>, feste Shapes, 8 Metadaten (joint_names, observation_names, default_joint_pos …) — lädt im selben Loader wie die Originale. Eingang „obs“: <b>1×74</b> fp32 fix (Rohtags, Layout 3·14 Gelenke + 8 Basis + 11 Kontakte + 13 Befehle: vx,vy,wz, skill 4, style 6 — exakte Kanäle im ONNX-Metadatum „observation_names“), Ausgang „actions“: <b>1×14</b> fp32 fix. „Norm einbauen“ = Eingang darf Rohtags sein, Normalisierung steckt im Graphen.</p>
   </div>
   <div class="card">
     <h3>AUSFÜHRUNG <span class="dim">CPU · GPU · NPU</span></h3>

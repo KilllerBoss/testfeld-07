@@ -43,9 +43,9 @@ const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.4.0 / 104');
-ok(vjs.includes("export const VERSION = '3.4.0';"), 'version.js VERSION = 3.4.0');
-ok(vjs.includes('export const VERSION_CODE = 104;'), 'version.js VERSION_CODE = 104');
-ok(gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"'), 'build.gradle 104 / 3.4.0');
+ok(vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';"), 'version.js VERSION = 3.4.0/3.5.0');
+ok(vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;'), 'version.js VERSION_CODE = 104/105');
+ok((((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"'))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')), 'build.gradle 104/3.4.0 oder 105/3.5.0');
 
 // ════════════════ 2 · EXPORT — DOWNLOAD-ORDNER ════════════════
 sec('ONNX-EXPORT — echte .onnx über die Android-Brücke');
@@ -63,7 +63,7 @@ ok(!feldjs.includes("'feld-policy-' + fmt + '.onnx.json'") && !feldjs.includes('
 ok(feldjs.includes("' → Ordner Download'"), 'feld: Statuszeile nennt den Download-Ordner');
 ok(feldjs.includes("store.exportJSON('feld-sitzung-'"), 'feld: Sitzungs-JSON über exportJSON (gleicher Weg)');
 ok(html.includes('Download-Ordner</b> des Handys'), 'html: Hinweis nennt den Download-Ordner');
-ok(html.includes('Eingang „obs“') && html.includes('Ausgang „mu“'), 'html: Obs/Mu-Layout für den echten Roboter dokumentiert');
+ok(html.includes('Eingang „obs“') && html.includes('„actions“'), 'html: Obs/Actions-Layout für den echten Roboter dokumentiert');
 // Android-Seite unverändert vorhanden (Bridge schreibt nach MediaStore/Downloads):
 const mainJava = readFileSync(join(ROOT, 'app/src/main/java/com/trainrobot/app/MainActivity.java'), 'utf8');
 ok(mainJava.includes('public boolean saveFile(String name, String base64, String mime)'), 'Android: saveFile-Bridge vorhanden');
@@ -105,7 +105,7 @@ ok(onnxjs.includes('if (lastOk) return lastOk; // alles über Budget → schnell
 ok(onnxjs.includes('export async function createSession(onnxBytes, epMode = \'auto\', ort = null, opts = {})'), 'onnxexport: createSession-API rückwärtskompatibel (opts optional)');
 ok(feldjs.includes("{ warmDim: D, budgetMs: 8 }"), 'feld: Aktivierung übergibt warmDim (Probe aktiv)');
 ok(feldjs.includes("warm[D - 13 + 3] = 1; // skill balance") && feldjs.includes("warm[D - 13 + 7] = 1; // style neutral"), 'feld: Warm-up-Obs mit Skill/Style-Einschaltvektor');
-ok(feldjs.includes('S._ortMu = Float32Array.from(out.mu.data);') && feldjs.includes('Startbefehl aus dem Warm-up'), 'feld: Startbefehl aus dem Warm-up (keine Null-Phase)');
+ok(feldjs.includes('S._ortMu = Float32Array.from(out.actions.data);') && feldjs.includes('Startbefehl aus dem Warm-up'), 'feld: Startbefehl aus dem Warm-up (keine Null-Phase)');
 ok(feldjs.includes("' · ~' + ms.toFixed(1) + ' ms/Inferenz'"), 'feld: epReal zeigt die gemessenen ms');
 ok(feldjs.includes('S._liveAcc = 0; // frischer Takt'), 'feld: Zeitakkumulator startet frisch nach der Aktivierung');
 // EP-Ketten unverändert (auto/cpu/gpu/npu):

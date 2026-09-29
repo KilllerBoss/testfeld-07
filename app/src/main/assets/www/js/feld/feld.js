@@ -22,7 +22,7 @@ import { SchubModel, SCHUB_DIR_LABELS } from './schubser.js'; // v3.2.0: AutoSch
 import { GroundModel, GroundState, GROUND_MODE_LABELS, probeGravity, setGroundTilt, applyGroundImpulse } from './ground.js'; // v3.2.0: beweglicher Boden
 import { PhoneModel, PhoneSensor, phonePush } from './phone.js'; // v3.2.0: Handy-Gyroskop
 import { LayaRouter } from './laya.js';
-import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
+import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES, buildManifest } from './onnxexport.js';
 import * as store from './store.js';
 
 // ── Zustand ────────────────────────────────────────────────
@@ -262,7 +262,7 @@ function liveCycle() {
       S.ortInfer.run({ obs: new S._ortT('float32', obs, [1, obs.length]) })
         .then((out) => {
           S._ortBusy = false;
-          S._ortMu = Float32Array.from(out.mu.data);
+          S._ortMu = Float32Array.from(out.actions.data); // v3.5.0: Pollen-Ausgangsname
         })
         .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
     }
@@ -1083,8 +1083,14 @@ function wireModelUI() {
       const norm = $('expNorm').checked
         ? { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) }
         : null;
+      const meta = {
+        // v3.5.0: ECHTE Pollen-Metadaten — default_joint_pos aus dem laufenden
+        // Sim (STAND-Keyframe), action_scale = actSpan des Microduck.
+        defaultJointPos: (S.sim && S.sim.keyCtrl) ? Array.from(S.sim.keyCtrl) : null,
+        actionScale: getRobot('duck').actSpan,
+      };
       const { bytes, ops, params } = moeToOnnx(S.trainer.ppo.net, {
-        format: fmt, norm, valueHead: $('expValue').checked,
+        format: fmt, norm, valueHead: $('expValue').checked, meta,
       });
       // v3.4.0: ECHTE .onnx-Datei (rohes Protobuf) in den Download-Ordner —
       // über die Android-Brücke (TrainrobotBridge.saveFile → MediaStore).
@@ -1092,10 +1098,19 @@ function wireModelUI() {
       // WebView nie und war für echte Roboter unlesbar.
       const name = 'feld-policy-' + fmt + '.onnx';
       const how = store.exportBytes(name, bytes, 'application/octet-stream');
-      $('expState').textContent = 'Export OK: ' + name + ' · ' + (bytes.length / 1024).toFixed(0) + ' KB · ' +
-        ops + ' Knoten, ' + params + ' Parameter (' + fmt + ')' +
+      // v3.5.0: manifest.json (Pollen policy-manifest schema 2) DANEBen —
+      // robotctl policy add / Playground lesen obs_len/action_len/robot.model
+      // daraus; die Originale fahren immer als ONNX + manifest.json.
+      const manName = 'feld-policy-' + fmt + '.manifest.json';
+      const man = buildManifest(S.trainer.ppo.net, { name: 'feld-policy' });
+      let manHow = '', manErr = '';
+      try { manHow = store.exportJSON(manName, man); } catch (e2) { manErr = e2.message; }
+      $('expState').textContent = 'Export OK: ' + name + ' + ' + manName + ' · ' + (bytes.length / 1024).toFixed(0) + ' KB · ' +
+        ops + ' Knoten, ' + params + ' Parameter (' + fmt + ', Pollen-Format: obs→actions, opset 18, 8 Metadaten)' +
         (how === 'download' ? ' → Ordner Download' : ' → Browser-Download');
-      log('ONNX-Export (' + fmt + '): ' + name + ', ' + bytes.length + ' Bytes → ' + (how === 'download' ? 'Download-Ordner' : 'Browser'), 'ok');
+      log('ONNX-Export (' + fmt + ', Pollen-Profil): ' + name + ' + ' + manName +
+        ', ' + bytes.length + ' Bytes → ' + (how === 'download' ? 'Download-Ordner' : 'Browser') +
+        (manHow ? ' (Manifest OK)' : ' (Manifest fehlgeschlagen: ' + (manErr || 'unbekannt') + ')'), 'ok');
     } catch (e) {
       $('expState').textContent = 'Export-Fehler: ' + e.message;
     }
@@ -1128,7 +1143,7 @@ function wireModelUI() {
       // v3.4.0: Startbefehl aus dem Warm-up (keine Null-Phase beim ersten Start)
       try {
         const out = await session.run({ obs: new ort.Tensor('float32', warm, [1, D]) });
-        S._ortMu = Float32Array.from(out.mu.data);
+        S._ortMu = Float32Array.from(out.actions.data); // v3.5.0: Pollen-Ausgangsname
       } catch (e) { /* Null-Start genügt */ }
       S._liveAcc = 0; // frischer Takt
       $('epReal').textContent = 'Aktiv: ' + ep + (ms > 0 ? ' · ~' + ms.toFixed(1) + ' ms/Inferenz' : '');

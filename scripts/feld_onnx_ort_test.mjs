@@ -2,9 +2,10 @@
 // feld_onnx_ort_test.mjs — ECHTE ORT-Parität des Feld-Exports
 //
 // onnxruntime-node lädt die selbstgebauten ONNX-Bytes (fp32, fp16,
-// int8) und führt sie aus; wir vergleichen mu gegen den JS-Forward
+// int8) und führt sie aus; wir vergleichen actions gegen den JS-Forward
 // der SoftMoEPolicy. Beweis: der Export ist ein ECHTES, lauffähiges
-// ONNX-Modell — gleiche Bytes, die auch ort-web im WebView nutzt.
+// ONNX-Modell — seit v3.5.0 im POLLEN-PROFIL (obs→actions, feste
+// [1,·]-Dims, opset 18, Metadaten), wie die Originale von Pollen.
 // ═══════════════════════════════════════════════════════════
 
 import { createRequire } from 'node:module';
@@ -36,9 +37,12 @@ const muRef = net.forward(raw, raw).slice();
 async function checkFormat(fmt, tol) {
   const { bytes, ops } = moeToOnnx(net, { format: fmt, valueHead: false });
   const session = await ort.InferenceSession.create(bytes, { graphOptimizationLevel: 'all' });
+  // v3.5.0: Pollen-Loader-Konvention — Ein-/Ausgang heißt obs/actions
+  ok(session.inputNames[0] === 'obs', fmt + ': Eingang „obs“ (nicht dynamisch benannt)');
+  ok(session.outputNames[0] === 'actions', fmt + ': Ausgang „actions“ (Pollen-Konvention)');
   const t = new ort.Tensor('float32', Float32Array.from(raw), [1, D]);
   const out = await session.run({ obs: t });
-  const mu = Array.from(out.mu.data);
+  const mu = Array.from(out.actions.data);
   let mx = 0, sum = 0;
   for (let i = 0; i < mu.length; i++) {
     const d = Math.abs(mu[i] - muRef[i]);
