@@ -1234,3 +1234,19 @@ Stage Summary:
 - v3.1.0: Joysticks klappen im FELD ein/aus (Spiel-Overlay, Roboter bleibt sichtbar, Sticks zeigen auch die virtuelle Hand) + Trainings-Einsatz je Joystick-Kanal wählbar (Aus/Manuell/Fix/Zufallssprünge/Flüssig/Schlangelinien) mit allen Reglern — die Policy lernt Befehle zu VERSTEHEN (vielfältige Kommandoverläufe statt Episoden-Memorieren)
 - APK lokal: download/feld.apk sha256 4c1807f6981a30021f5aebde39f2d983ba3987d4f6f78aca88cdf7d981920d80, versionCode 101/3.1.0, Signatur 1c0422b9…3c4 (CN=Trainrobot) identisch zu ALLEN Vorgängern — Update-fähig
 - Alle Suiten grün (feld_cmd 73 neu, pins_v31 erweitert 12 Suiten)
+---
+Task ID: 64-Release
+Agent: Super Z (Hauptagent)
+Task: v3.1.0 Release abschließen (CI-Hart-Check-Fix + Release verifizieren)
+
+Work Log:
+- CI-Run 141/142 (v3.1.0) ZUERST FAILED: Hart-Check-Zeile pinnte HARD grep -q "3.0.0" version.js — Workflow-Patch: OR-Kette grep -qE "3\.(0\.0|1\.0)" (bewährtes Pin-Muster), Commit 351248d, Tag v3.1.0 moved (forced)
+- Neue Runs: 143 (main) + 144 (v3.1.0) BEIDE GRÜN
+- Release v3.1.0 automatisch erstellt: Asset feld.apk 28.170.049 bytes, state=uploaded
+- CI-APK anonym heruntergeladen und verifiziert: apksigner CN=Trainrobot OU=Testfeld07, SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 = erwartete Signatur EXAKT (über alle v2.x/v3.x identisch); aapt: de.feld.app versionCode 101 versionName 3.1.0 label „Feld"; Asset-Stichprobe im CI-APK: version.js 3.1.0/101, cmdgen.js (schlange ×10) im APK
+
+Stage Summary:
+- Release v3.1.0 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/tag/v3.1.0
+- Download: https://github.com/KilllerBoss/testfeld-07/releases/download/v3.1.0/feld.apk (sha256 75c465696ebe065dfa01c02c34264859434b70b1f465797be3f4d535dc6e3646)
+- Lokale Kopie: download/feld.apk (stabiler Keystore-Build, 4c1807f6…)
+- Update-fähig über alle bisherigen Installationen (Signatur-Konsistenz gewahrt)
