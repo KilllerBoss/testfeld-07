@@ -34,9 +34,15 @@ export class Console {
     this.goalFollow = opts.goalFollow !== false;  // Konsole → goTo
     this.headFollow = opts.headFollow !== false;  // Konsole → faceYaw
     this._goalTimer = 0;
+    // v3.1.0: Berührungs-Flags — eine ECHTE Hand gewinnt gegen den
+    // Befehls-Generator (virtuelle Hand, cmdgen.js) pro Kanal.
     // DOM nur im Browser aufbauen (Node-Tests reichen die Logik-API)
     if (typeof document !== 'undefined' && container) this._build();
   }
+
+  /** Echte Hand auf dem linken/rechten Pad? (Getter — DOM-Flag) */
+  get touchL() { return !!(this.padL && this.padL._touch); }
+  get touchR() { return !!(this.padR && this.padR._touch); }
 
   _build() {
     this.el.innerHTML = '';
@@ -95,10 +101,26 @@ export class Console {
       pid = null; store.x = 0; store.y = 0;
       stick.style.transform = 'translate(0,0)';
     };
-    base.addEventListener('pointerdown', (e) => { e.preventDefault(); pid = e.pointerId; base.setPointerCapture(pid); set(e); });
+    base.addEventListener('pointerdown', (e) => { e.preventDefault(); pid = e.pointerId; base.setPointerCapture(pid); set(e); padEl._touch = true; });
     base.addEventListener('pointermove', (e) => { if (pid === e.pointerId) set(e); });
-    base.addEventListener('pointerup', () => clear());
-    base.addEventListener('pointercancel', () => clear());
+    const up = () => { clear(); padEl._touch = false; };
+    base.addEventListener('pointerup', up);
+    base.addEventListener('pointercancel', up);
+  }
+
+  /**
+   * v3.1.0: Sticks nachführen OHNE Berührung — die „virtuelle Hand“
+   * des Befehls-Generators (cmdgen.js) schreibt drive/head direkt;
+   * hier wandern die Sticks sichtbar mit (Overlay im FELD-Tab).
+   */
+  renderSticks() {
+    if (!this.padL || !this.padR) return;
+    const put = (pad, sx, sy) => {
+      const stick = pad.querySelector('.pad-stick');
+      if (stick) stick.style.transform = 'translate(' + (sx * 36).toFixed(1) + 'px,' + (sy * 36).toFixed(1) + 'px)';
+    };
+    put(this.padL, this.drive.x, this.drive.y);
+    put(this.padR, this.head.x, this.head.y);
   }
 
   /** Aktuelle Kommandos (roh, −1…1-Bereich der Joysticks). */

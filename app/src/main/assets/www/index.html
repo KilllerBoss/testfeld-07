@@ -12,6 +12,12 @@
 <section class="page on" id="pgFeld">
   <canvas id="gl"></canvas>
   <div id="hud" class="hud"></div>
+  <div id="feldConsole" class="feldconsole">
+    <div id="feldConsolePanel" class="fold-panel">
+      <div id="feldConsoleHost" class="padwrap padwrap-fold"></div>
+    </div>
+    <button id="btnConsoleFold" class="fold-btn">▲ STEUERUNG</button>
+  </div>
   <div id="bootOverlay" class="boot">
     <div class="boot-mark"><span class="sq"></span><span class="dot"></span></div>
     <div class="boot-name">FELD</div>
@@ -111,9 +117,23 @@
   <header class="ph">STEUERUNG <span class="dim">Konsole</span></header>
   <div class="card">
     <label class="switch"><input id="consOn" type="checkbox"><span>Konsole übernimmt Kommandos</span></label>
-    <p id="consHint" class="hint">Aus: Kommandos kommen aus dem Training (Zufallsplaner).</p>
+    <p id="consHint" class="hint">Aus: Kommandos kommen aus dem Training (Zufallsplaner oder Trainingseinsatz unten).</p>
   </div>
-  <div class="card padcard">
+  <div class="card">
+    <h3>TRAININGSEINSATZ <span class="dim">— wie Joysticks trainieren</span></h3>
+    <p class="hint">Vielfältige Befehle im Training: Die Policy lernt, Kommandos aus der Beobachtung in Bewegung zu übersetzen — Verstehen statt Positionen auswendig lernen. Im FELD-Tab zusehen: Joysticks klappen unten ein und bewegen sich sichtbar.</p>
+    <div class="cmd-chan" data-chan="drive">
+      <div class="cmd-chan-head">LINKER STICK · BEWEGUNG <span class="dim">(vor/zurück/seitlich)</span></div>
+      <div class="seg" id="segDrive"></div>
+      <div class="cmd-rows" id="cmdRowsDrive"></div>
+    </div>
+    <div class="cmd-chan" data-chan="head">
+      <div class="cmd-chan-head">RECHTER STICK · KOPF <span class="dim">(drehen/wenden)</span></div>
+      <div class="seg" id="segHead"></div>
+      <div class="cmd-rows" id="cmdRowsHead"></div>
+    </div>
+  </div>
+  <div class="card padcard" id="consoleHome">
     <div id="consolePad" class="padwrap"></div>
   </div>
   <div class="card">

@@ -17,6 +17,7 @@ import { Renderer3D } from '../render3d.js';
 import { FeldTrainer } from './trainer.js';
 import { RewModel, RwxModel, RW_FIELDS, PRESETS, RWX_DEFS } from './rewards.js';
 import { Console, BUTTONS } from './console.js';
+import { CmdGen, CMD_MODES, CMD_MODE_LABELS } from './cmdgen.js';
 import { LayaRouter } from './laya.js';
 import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
 import * as store from './store.js';
@@ -32,6 +33,8 @@ const S = {
   dirty: false, lastSave: 0,
   layaActive: false, layaTimer: 0,
   ortInfer: null,           // { session, ep, ort } — Policy über ONNX
+  cmdgen: null,             // v3.1.0: Befehls-Generator (Trainings-Einsatz der Joysticks)
+  cmdFold: false,           // v3.1.0: Konsole im FELD ausgeklappt?
   chartMax: 1,
   booted: false,
 };
@@ -70,6 +73,8 @@ async function boot() {
     // Trainer + Speicherstand
     S.trainer = new FeldTrainer(S.task, S.sim, { seed: 20260929, rWBase: S.rew.snapshot() });
     S.laya = new LayaRouter({});
+    // v3.1.0: Befehls-Generator (vor applySession — der Import kann ihn überschreiben)
+    S.cmdgen = new CmdGen({});
     const sess = store.loadSession();
     if (sess) applySession(sess, { quiet: true });
     // Renderer
@@ -84,6 +89,8 @@ async function boot() {
     wireTrainUI();
     buildRewardUI();
     wireConsoleUI();
+    wireCmdUI();
+    wireConsoleFold();
     wireModelUI();
     wireGesture();
     $('bootOverlay').classList.add('hidden');
@@ -104,8 +111,10 @@ function loop(t) {
   if (!S.sim) return;
   try {
     if (S.mode === 'train') {
+      tickCmdGen(dt);
       trainTick(dt);
     } else if (S.mode === 'live') {
+      tickCmdGen(dt);
       liveTick();
     }
     applyConsole();
@@ -122,7 +131,7 @@ function loop(t) {
 
 /** Trainings-Takt: budgetierte RL-Schritte (UI bleibt bedienbar). */
 function trainTick() {
-  if (S.konsole && S.konsole.driveActive) pushUserCmd();
+  if (cmdDriven()) pushUserCmd();
   if (S.layaActive) pushLaya();
   if (S.updatePause) { S.updatePause = false; return; }
   const did = S.trainer.pump(S.budget);
@@ -134,10 +143,39 @@ function trainTick() {
   }
 }
 
+/** Kommandos nötig: echte Hand (Konsole) ODER Befehls-Generator aktiv. */
+function cmdDriven() {
+  return !!(S.konsole && (S.konsole.driveActive || (S.cmdgen && S.cmdgen.active())));
+}
+
+/**
+ * v3.1.0: VIRTUELLE HAND — der Befehls-Generator (Trainings-Einsatz:
+ * Fix / Zufallssprünge / Flüssig / Schlangelinien) schreibt seine Werte
+ * in die Konsole. Alle bestehenden Wege gelten unverändert (setUserCmd,
+ * Konsole→goTo/faceYaw, LAYA); die Sticks bewegen sich sichtbar.
+ * Eine echte Hand (touchL/touchR) gewinnt pro Kanal.
+ */
+function tickCmdGen(dt) {
+  const g = S.cmdgen, k = S.konsole;
+  if (!g || !k) return;
+  if (g.drive.mode !== 'manuell' || g.head.mode !== 'manuell') {
+    const out = g.tick(dt);
+    if (g.drive.mode !== 'manuell' && !k.touchL) {
+      k.drive.x = g.drive.mode === 'aus' ? 0 : out.x;
+      k.drive.y = g.drive.mode === 'aus' ? 0 : -out.y; // Generator +y = vorwärts → Stick hoch (−y)
+    }
+    if (g.head.mode !== 'manuell' && !k.touchR) {
+      k.head.x = g.head.mode === 'aus' ? 0 : out.hx;
+      k.head.y = g.head.mode === 'aus' ? 0 : out.hy;
+    }
+  }
+  k.renderSticks();
+}
+
 /** Live-Takt: Policy ausführen (JS oder ONNX), ohne zu lernen. */
 function liveTick() {
   const task = S.task, sim = S.sim;
-  if (S.konsole && S.konsole.driveActive) pushUserCmd();
+  if (cmdDriven()) pushUserCmd();
   task.observe(sim, S.trainer._obs);
   if (S.ortInfer && !S._ortBusy) {
     // ONNX-Ausführung (CPU/GPU/NPU — EP wie im Modell-Tab gewählt)
@@ -300,6 +338,8 @@ function sessionBlob() {
     rewards: S.rew.toJSON(),
     rwx: S.rwx.toJSON(),
     console: S.konsole ? S.konsole.toJSON() : null,
+    cmdgen: S.cmdgen ? S.cmdgen.toJSON() : null,
+    cmdFold: S.cmdFold,
     laya: S.laya ? S.laya.toJSON() : null,
     layaActive: S.layaActive,
     world: S.world,
@@ -336,6 +376,9 @@ function applySession(sess, opts = {}) {
       S.konsole.goalFollow = sess.console.goalFollow !== false;
       S.konsole.headFollow = sess.console.headFollow !== false;
     }
+    // v3.1.0: Befehls-Generator + Klappzustand der FELD-Konsole
+    if (sess.cmdgen) S.cmdgen = CmdGen.fromJSON(sess.cmdgen);
+    if (typeof sess.cmdFold === 'boolean') S.cmdFold = sess.cmdFold;
     if (!opts.quiet) log('Speicherstand übernommen', 'ok');
     return true;
   } catch (e) {
@@ -558,6 +601,102 @@ function wireConsoleUI() {
     // kurzer Selbstdruck aller 4 Buttons (Anzeige-Demo)
     for (let i = 0; i < 4; i++) setTimeout(() => S.konsole.press(i), i * 160);
   });
+}
+
+// ── v3.1.0: Konsole im FELD ein-/ausklappen ────────────────
+function wireConsoleFold() {
+  $('btnConsoleFold').addEventListener('click', () => foldConsole(!S.cmdFold));
+  foldConsole(S.cmdFold === true); // gespeicherten Zustand ins DOM bringen
+}
+
+/**
+ * Klappen die Steuerkonsole über der 3D-Ansicht ein/aus — wie bei
+ * Spielen: Pads + Buttons als halbtransparentes Overlay, der Roboter
+ * bleibt sichtbar („sehen, wie er reagiert“). Das GLEICHE consolePad
+ * wandert zwischen Overlay und STEUER-Tab (eine Instanz, Zustand bleibt).
+ */
+function foldConsole(open) {
+  S.cmdFold = !!open;
+  const fc = $('feldConsole');
+  if (!fc) return;
+  fc.classList.toggle('open', S.cmdFold);
+  $('btnConsoleFold').textContent = S.cmdFold ? '▼ EINKLAPPEN' : '▲ STEUERUNG';
+  const padEl = $('consolePad');
+  if (!padEl) return;
+  if (S.cmdFold) {
+    $('feldConsoleHost').appendChild(padEl);
+  } else {
+    $('consoleHome').appendChild(padEl);
+  }
+}
+
+// ── v3.1.0: UI Trainingseinsatz der Joysticks ──────────────
+function chanOf(id) { return id === 'drive' ? S.cmdgen.drive : S.cmdgen.head; }
+
+function wireCmdUI() {
+  buildCmdSeg('drive', $('segDrive'));
+  buildCmdSeg('head', $('segHead'));
+  buildCmdRows();
+}
+
+function buildCmdSeg(id, host) {
+  if (!host) return;
+  host.innerHTML = '';
+  for (const m of CMD_MODES) {
+    const b = document.createElement('button');
+    b.textContent = CMD_MODE_LABELS[m];
+    b.dataset.mode = m;
+    if (chanOf(id).mode === m) b.classList.add('on');
+    b.addEventListener('click', () => {
+      chanOf(id).mode = m;
+      S.dirty = true;
+      buildCmdSeg(id, host);
+      buildCmdRows();
+      log('Trainingseinsatz ' + (id === 'drive' ? 'BEWEGUNG' : 'KOPF') + ': ' + CMD_MODE_LABELS[m], 'ok');
+    });
+    host.appendChild(b);
+  }
+}
+
+function buildCmdRows() {
+  buildCmdRowsFor('drive', $('cmdRowsDrive'));
+  buildCmdRowsFor('head', $('cmdRowsHead'));
+}
+
+function buildCmdRowsFor(id, host) {
+  if (!host) return;
+  const c = chanOf(id);
+  host.innerHTML = '';
+  const mkRow = (label, lo, hi, st, key, modes) => {
+    const row = document.createElement('div');
+    row.className = 'rrow' + (modes && !modes.includes(c.mode) ? ' dimrow' : '');
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const sl = document.createElement('input');
+    sl.type = 'range'; sl.min = lo; sl.max = hi; sl.step = st; sl.value = c[key];
+    const out = document.createElement('output');
+    out.textContent = (+c[key]).toFixed(2);
+    sl.addEventListener('input', () => {
+      c[key] = parseFloat(sl.value);
+      out.textContent = (+sl.value).toFixed(2);
+      S.cmdgen.sanitize();
+      S.dirty = true;
+    });
+    row.appendChild(lab); row.appendChild(sl); row.appendChild(out);
+    host.appendChild(row);
+  };
+  mkRow('Amplitude', 0, 1, 0.05, 'amp', ['fix', 'sprung', 'fluessig', 'schlange']);
+  if (id === 'drive') {
+    mkRow('Fix: vor (+) / zurück (−)', -1, 1, 0.05, 'fixY', ['fix']);
+    mkRow('Fix: seitlich', -1, 1, 0.05, 'fixX', ['fix']);
+  } else {
+    mkRow('Fix: drehen (− links, + rechts)', -1, 1, 0.05, 'fixX', ['fix']);
+  }
+  mkRow('Sprungdauer (s)', 0.3, 10, 0.1, 'holdS', ['sprung']);
+  mkRow('Aktiv-Chance', 0, 1, 0.05, 'prob', ['sprung']);
+  mkRow('Glättung (s)', 0.1, 3, 0.05, 'tauS', ['fluessig']);
+  mkRow('Neues Ziel alle (s)', 0.3, 6, 0.1, 'retargetS', ['fluessig']);
+  mkRow('Schlangenfrequenz (Hz)', 0.05, 1.5, 0.05, 'freqHz', ['schlange']);
 }
 
 // ── UI: Modell (Export/Quantisierung/EP/Speicher) ──────────

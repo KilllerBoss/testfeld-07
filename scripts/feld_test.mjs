@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// feld_test.mjs — Tests für die neue App „Feld" v3.0.0
+// feld_test.mjs — Tests für die neue App „Feld" (≥ v3.1.0)
 //
 // Beweisziele:
 //  1. 3-Stufen-Semantik: Stufe 2 friert Experten BIT-GENAU ein,
@@ -35,7 +35,7 @@ function sec(s) { console.log('\n── ' + s + ' ──'); }
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
 ok(APP_NAME === 'Feld', 'App-Name = Feld');
-ok(VERSION === '3.0.0', 'VERSION = 3.0.0');
+ok(VERSION === '3.1.0', 'VERSION = 3.1.0');
 
 // ════════════════ 2 · STUFEN (FeldMoE) ════════════════
 sec('STUFEN — Freeze-Semantik');

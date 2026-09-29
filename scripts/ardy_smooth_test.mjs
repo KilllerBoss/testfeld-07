@@ -249,7 +249,7 @@ console.log('\n[E] Verdrahtungs-Pins');
   // Version
   ok(main.includes("const VERSION = '2.28.11'"), 'F1 main.js VERSION 2.28.11');
   const gradle = await readFile(path.join(ROOT, 'app/build.gradle'), 'utf8');
-  ok((/versionCode 52/.test(gradle) && /versionName "2.28\.11"/.test(gradle)) || (/versionCode 100/.test(gradle) && /versionName "3\.0\.0"/.test(gradle)), 'F2 build.gradle 52/2.28.11 oder 100/3.0.0');
+  ok((/versionCode 52/.test(gradle) && /versionName "2\.28\.11"/.test(gradle)) || (/versionCode 100/.test(gradle) && /versionName "3\.0\.0"/.test(gradle)) || (/versionCode 101/.test(gradle) && /versionName "3\.1\.0"/.test(gradle)), 'F2 build.gradle 52/2.28.11 oder 100/3.0.0 oder 101/3.1.0');
 }
 
 console.log(`\n═══ ardy_smooth_test: ${count - fails}/${count} Checks bestanden ═══`);
