@@ -720,8 +720,18 @@ export class SoftMoEPolicy {
     const Eopt = opts && Number.isFinite(opts.E) ? Math.round(opts.E) : 4;
     this.E = Math.max(2, Math.min(8, Eopt));
     this.NS = 6;
-    this.CMD_OFF = obsDim - 13;      // vx,vy,wz, skill×4, style×6
-    this.kPrior = 1.2;               // Router-Vorspülung durch Skill-Kommando
+    // v3.6.0 ABS-KOMMANDO-MODUS (Feld/Pollen-Obs): der Router liest die 3
+    // Kommando-Kanäle (vx,vy,wz) an FESTER Position cmdOff; Style = neutral
+    // (SE-Zeile 0, fest); kein Skill-Prior mehr (skill/style sind KEINE Obs
+    // mehr — der echte Duck liefert sie nicht). Default ohne cmdOff:
+    // Legacy-Trailing-Layout (vx,vy,wz,skill[4],style[6] hinten) — Drohne/
+    // Alt-App bleiben unverändert.
+    const absCmd = !!(opts && opts.cmdOff != null);
+    this.absCmd = absCmd;
+    this.cmdOff = absCmd ? Math.max(0, opts.cmdOff | 0) : null;
+    this.RIN = this.H + (absCmd ? 3 : 4); // Router-Eingang: h2 ⊕ Kommando
+    this.CMD_OFF = obsDim - 13;      // Legacy: vx,vy,wz, skill×4, style×6
+    this.kPrior = absCmd ? 0 : 1.2;  // Router-Vorspülung nur im Legacy-Modus
 
     this.pNames = ['W1','b1','W2','b2','Wr1','br1','Wr2','br2',
                    'EW1','Eb1','EW2','Eb2','SE','Wd1','bd1','Wd2','bd2','Wv','bv','logStd'];
@@ -730,7 +740,7 @@ export class SoftMoEPolicy {
     this.b1 = new Float32Array(this.H);
     this.W2 = I(this.H * this.H, Math.SQRT2 / this.H);
     this.b2 = new Float32Array(this.H);
-    this.Wr1 = I(this.RH * (this.H + 4), 0.5 / Math.sqrt(this.H + 4));
+    this.Wr1 = I(this.RH * this.RIN, 0.5 / Math.sqrt(this.RIN));
     this.br1 = new Float32Array(this.RH);
     this.Wr2 = I(this.E * this.RH, 0.5 / Math.sqrt(this.RH));
     this.br2 = new Float32Array(this.E);
@@ -758,7 +768,7 @@ export class SoftMoEPolicy {
     // Aktivierungs-Caches (für Backprop)
     this.x = new Float32Array(obsDim);
     this.h1 = new Float32Array(this.H); this.h2 = new Float32Array(this.H);
-    this.rin = new Float32Array(this.H + 4); this.rh = new Float32Array(this.RH);
+    this.rin = new Float32Array(this.RIN); this.rh = new Float32Array(this.RH);
     this.logits = new Float32Array(this.E); this.w = new Float32Array(this.E);
     this.eHid = []; this.eLat = [];
     for (let e = 0; e < this.E; e++) { this.eHid.push(new Float32Array(this.HL)); this.eLat.push(new Float32Array(this.EL)); }
@@ -766,13 +776,14 @@ export class SoftMoEPolicy {
     this.decIn = new Float32Array(this.EL + this.SL); this.decH = new Float32Array(this.DH);
     this.mu = new Float32Array(actDim); this.val = 0;
     this.cmdSkill = new Float32Array(4); this.sw = new Float32Array(this.NS);
+    this.cmdV = new Float32Array(3); // v3.6.0: RAW-Kommando (ABS-Modus)
 
     // Backprop-Scratch
     this._dH2 = new Float32Array(this.H); this._dH1 = new Float32Array(this.H);
     this._dDH = new Float32Array(this.DH); this._dIn = new Float32Array(this.EL + this.SL);
     this._dw = new Float32Array(this.E); this._dE = new Float32Array(this.E * this.EL);
     this._dHL = new Float32Array(this.HL); this._dlog = new Float32Array(this.E);
-    this._dRH = new Float32Array(this.RH); this._dRin = new Float32Array(this.H + 4);
+    this._dRH = new Float32Array(this.RH); this._dRin = new Float32Array(this.RIN);
   }
   _init(n, rng, s) {
     const w = new Float32Array(n);
@@ -789,9 +800,15 @@ export class SoftMoEPolicy {
     const D = this.obsDim, A = this.actDim, H = this.H, RH = this.RH, HL = this.HL,
           EL = this.EL, SL = this.SL, DH = this.DH, E = this.E, NS = this.NS;
     this.x.set(xn);
-    const co = this.CMD_OFF;
-    for (let i = 0; i < 4; i++) this.cmdSkill[i] = raw ? Math.max(0, raw[co + 3 + i]) : Math.max(0, xn[co + 3 + i]);
-    for (let s = 0; s < NS; s++) this.sw[s] = raw ? Math.max(0, raw[co + 7 + s]) : Math.max(0, xn[co + 7 + s]);
+    const co = this.absCmd ? this.cmdOff : this.CMD_OFF;
+    if (this.absCmd) {
+      // v3.6.0: RAW-Kommando (vx,vy,wz) an fester Position — der Router
+      // liest es UNnormalisiert (gleiche Philosophie wie der Legacy-Skill).
+      for (let i = 0; i < 3; i++) this.cmdV[i] = raw ? raw[co + i] : xn[co + i];
+    } else {
+      for (let i = 0; i < 4; i++) this.cmdSkill[i] = raw ? Math.max(0, raw[co + 3 + i]) : Math.max(0, xn[co + 3 + i]);
+      for (let s = 0; s < NS; s++) this.sw[s] = raw ? Math.max(0, raw[co + 7 + s]) : Math.max(0, xn[co + 7 + s]);
+    }
     // Encoder
     for (let j = 0; j < H; j++) {
       let s2 = this.b1[j]; const off = j * D;
@@ -803,19 +820,21 @@ export class SoftMoEPolicy {
       for (let i = 0; i < H; i++) s2 += this.W2[off + i] * this.h1[i];
       this.h2[j] = Math.tanh(s2);
     }
-    // Soft Router: [h2 | Skill-Kommando] → 64 → 4 → softmax
+    // Soft Router: [h2 | Kommando] → 64 → E → softmax
+    //   Legacy: Skill-Onehot + kPrior·log-Prior · ABS: RAW vx,vy,wz ohne Prior
     for (let i = 0; i < H; i++) this.rin[i] = this.h2[i];
-    for (let i = 0; i < 4; i++) this.rin[H + i] = this.cmdSkill[i];
+    const RIN = this.RIN;
+    for (let i = H; i < RIN; i++) this.rin[i] = this.absCmd ? this.cmdV[i - H] : this.cmdSkill[i - H];
     for (let j = 0; j < RH; j++) {
-      let s2 = this.br1[j]; const off = j * (H + 4);
-      for (let k = 0; k < H + 4; k++) s2 += this.Wr1[off + k] * this.rin[k];
+      let s2 = this.br1[j]; const off = j * RIN;
+      for (let k = 0; k < RIN; k++) s2 += this.Wr1[off + k] * this.rin[k];
       this.rh[j] = Math.tanh(s2);
     }
     let mx = -1e30;
     for (let e = 0; e < E; e++) {
       let s2 = this.br2[e]; const off = e * RH;
       for (let j = 0; j < RH; j++) s2 += this.Wr2[off + j] * this.rh[j];
-      s2 += this.kPrior * Math.log(this.cmdSkill[e] + 0.06); // Vorspülung (§5: kontinuierlich)
+      if (!this.absCmd) s2 += this.kPrior * Math.log(this.cmdSkill[e] + 0.06); // Vorspülung (§5: kontinuierlich)
       this.logits[e] = s2;
       if (s2 > mx) mx = s2;
     }
@@ -844,11 +863,17 @@ export class SoftMoEPolicy {
       for (let k = 0; k < EL; k++) this.mix[k] += we * l[k];
     }
     // Style-Latent = Embedding-Mischung (§9/§10: stil-abhängig, skill-UNabhängig)
+    // v3.6.0 ABS-Modus: neutral fest = SE-Zeile 0 (der Export faltet sie in
+    // den Decoder-Bias — im Graphen bleibt ein reiner Gemm-Pfad wie im Original).
     for (let k = 0; k < SL; k++) this.style[k] = 0;
-    for (let s = 0; s < NS; s++) {
-      const sw2 = this.sw[s]; if (sw2 < 1e-9) continue;
-      const off = s * SL;
-      for (let k = 0; k < SL; k++) this.style[k] += sw2 * this.SE[off + k];
+    if (this.absCmd) {
+      for (let k = 0; k < SL; k++) this.style[k] = this.SE[k];
+    } else {
+      for (let s = 0; s < NS; s++) {
+        const sw2 = this.sw[s]; if (sw2 < 1e-9) continue;
+        const off = s * SL;
+        for (let k = 0; k < SL; k++) this.style[k] += sw2 * this.SE[off + k];
+      }
     }
     // Shared Decoder: [mix | style] → DH → 14 mu
     for (let k = 0; k < EL; k++) this.decIn[k] = this.mix[k];
@@ -895,11 +920,15 @@ export class SoftMoEPolicy {
       const off = j * (EL + SL);
       for (let k = 0; k < EL + SL; k++) { this.gWd1[off + k] += g * this.decIn[k]; dIn[k] += g * this.Wd1[off + k]; }
     }
-    // Style-Embedding: dL/dSE_s = sw_s · dstyle
-    for (let s = 0; s < NS; s++) {
-      const sw2 = this.sw[s]; if (sw2 === 0) continue;
-      const off = s * SL, dOff = EL;
-      for (let k = 0; k < SL; k++) this.gSE[off + k] += sw2 * dIn[dOff + k];
+    // Style-Embedding: dL/dSE_s = sw_s · dstyle (ABS: nur Zeile 0, Gewicht 1)
+    if (this.absCmd) {
+      for (let k = 0; k < SL; k++) this.gSE[k] += dIn[EL + k];
+    } else {
+      for (let s = 0; s < NS; s++) {
+        const sw2 = this.sw[s]; if (sw2 === 0) continue;
+        const off = s * SL, dOff = EL;
+        for (let k = 0; k < SL; k++) this.gSE[off + k] += sw2 * dIn[dOff + k];
+      }
     }
     // Routing-Gewichts-Gradienten + Expertengradiente (gewichtet w_i)
     const dMix = this._dIn; // Aliasing: dIn[0..EL) == dMix
@@ -944,13 +973,14 @@ export class SoftMoEPolicy {
       for (let j = 0; j < RH; j++) { this.gWr2[off + j] += g * this.rh[j]; dRH[j] += g * this.Wr2[off + j]; }
     }
     for (let j = 0; j < RH; j++) dRH[j] *= (1 - this.rh[j] * this.rh[j]);
-    // Router L1 (RH × (H+4)) → dh2-Anteil
+    // Router L1 (RH × RIN) → dh2-Anteil
     const dRin = this._dRin; dRin.fill(0);
+    const RIN = this.RIN;
     for (let j = 0; j < RH; j++) {
       const g = dRH[j]; if (g === 0) continue;
       this.gbr1[j] += g;
-      const off = j * (H + 4);
-      for (let k = 0; k < H + 4; k++) { this.gWr1[off + k] += g * this.rin[k]; dRin[k] += g * this.Wr1[off + k]; }
+      const off = j * RIN;
+      for (let k = 0; k < RIN; k++) { this.gWr1[off + k] += g * this.rin[k]; dRin[k] += g * this.Wr1[off + k]; }
     }
     for (let i = 0; i < H; i++) dH2[i] += dRin[i];
     // Wertkopf
@@ -1036,12 +1066,13 @@ export class SoftMoEPolicy {
       obsDim: this.obsDim, actDim: this.actDim,
       H: this.H, RH: this.RH, HL: this.HL, EL: this.EL, SL: this.SL, DH: this.DH,
       E: this.E, NS: this.NS, kPrior: this.kPrior,
+      cmdOff: this.cmdOff, // v3.6.0: ABS-Modus (null = Legacy-Trailing)
     };
     for (const n of this.pNames) o[n] = Array.from(this[n]);
     return o;
   }
   static fromJSON(src) {
-    const p = new SoftMoEPolicy(src.obsDim, src.actDim, new RNG(1), { E: src.E });
+    const p = new SoftMoEPolicy(src.obsDim, src.actDim, new RNG(1), { E: src.E, cmdOff: src.cmdOff != null ? src.cmdOff : undefined });
     for (const n of p.pNames) {
       if (!src[n]) throw new Error('SoftMoE-Feld fehlt: ' + n);
       p[n].set(src[n]);

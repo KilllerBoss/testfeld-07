@@ -37,6 +37,7 @@ export function policyToJSON(ppo) {
     obsDim: net.obsDim, actDim: net.actDim, E: net.E,
     H: net.H, RH: net.RH, HL: net.HL, EL: net.EL, SL: net.SL, DH: net.DH,
     NS: net.NS, kPrior: net.kPrior,
+    cmdOff: net.cmdOff != null ? net.cmdOff : null, // v3.6.0: ABS-Modus
     norm: { mean: f32ToB64(ppo.norm.mean), M2: f32ToB64(ppo.norm.M2), count: ppo.norm.count },
     params: {},
   };
@@ -44,7 +45,7 @@ export function policyToJSON(ppo) {
   return o;
 }
 export function policyFromJSON(p, SoftMoECtor, RNGCtor) {
-  const net = new SoftMoECtor(p.obsDim, p.actDim, new RNGCtor(1), { E: p.E });
+  const net = new SoftMoECtor(p.obsDim, p.actDim, new RNGCtor(1), { E: p.E, cmdOff: p.cmdOff != null ? p.cmdOff : undefined });
   for (const n of net.pNames) {
     if (!p.params[n]) throw new Error('Policy-Feld fehlt: ' + n);
     net[n].set(b64ToF32(p.params[n]));

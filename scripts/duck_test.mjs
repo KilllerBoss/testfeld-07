@@ -51,7 +51,7 @@ check('14 Aktuatoren', sim.nu === 14, 'nu=' + sim.nu);
 const task = makeDuckMoeTask(cfg);
 const rng = new RNG(4242);
 task.reset(rng, sim);
-check('obsDim = 74 (61er-Basis + 13 cmd)', task.obsDim === 74, 'obsDim=' + task.obsDim);
+check('obsDim = 61 (Pollen-Layout, wie velstand.onnx)', task.obsDim === 61, 'obsDim=' + task.obsDim);
 check('actDim = 14', task.actDim === 14);
 
 // ── 2) Stand-Stabilität ─────────────────────────────────────
@@ -73,23 +73,22 @@ console.log('[2] Stand-Stabilität (STAND-Keyframe, 3 s)');
 }
 
 // ── 3) Observation ──────────────────────────────────────────
-console.log('[3] Observation (74 Dims)');
+console.log('[3] Observation (61 Dims, POLLEN-Layout)');
 {
   task.reset(rng, sim);
   const o = new Float32Array(task.obsDim);
   const n = task.observe(sim, o);
   check('observe füllt obsDim', n === task.obsDim, n + '/' + task.obsDim);
   check('obs finit', Array.from(o).every(Number.isFinite));
-  // Soft-Block: Position obsDim−13 … obsDim−1
-  const off = task.obsDim - 13;
-  check('Soft-Block: neutral=1 (style[0])', o[off + 7] === 1 && o[off + 8] === 0);
-  check('Soft-Block: skill balance=1', o[off + 3] === 1);
+  // Pollen-Layout: gyro(0..3) · projGravity(3..6) · cmd(48..51) · Kopf/Körper=0 (51..61)
+  check('command-Block an 48 = softCmd.vx', Math.abs(o[48] - task.softCmd.vx) < 1e-9);
+  check('head/body-Befehle neutral (51..61 = 0)', o.slice(51).every((v) => v === 0));
 }
 
 // ── 4) Rollout + PPO-Update (SoftMoE) ───────────────────────
 console.log('[4] Training: Rollout + PPO-Update (echte Physik)');
 {
-  const ppo = new PPO(task.obsDim, task.actDim, { T: 512, mb: 128, epochs: 3 }, 77, SoftMoEPolicy);
+  const ppo = new PPO(task.obsDim, task.actDim, { T: 512, mb: 128, epochs: 3, policyOpts: { cmdOff: task.cmdOff } }, 77, SoftMoEPolicy);
   const trng = new RNG(99);
   task.reset(trng, sim);
   let stored = 0;

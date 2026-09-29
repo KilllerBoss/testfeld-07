@@ -30,9 +30,9 @@ const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.3.0 / 103');
-ok(vjs.includes("export const VERSION = '3.3.0';") || vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';"), 'version.js VERSION = 3.3.0/3.4.0/3.5.0');
-ok(vjs.includes('export const VERSION_CODE = 103;') || vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;'), 'version.js VERSION_CODE = 103/104/105');
-ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"'))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')))), 'build.gradle 103 / 3.3.0');
+ok(vjs.includes("export const VERSION = '3.3.0';") || vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';") || vjs.includes("export const VERSION = '3.6.0';"), 'version.js VERSION = 3.3.0/3.4.0/3.5.0');
+ok(vjs.includes('export const VERSION_CODE = 103;') || vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;') || vjs.includes('export const VERSION_CODE = 106;'), 'version.js VERSION_CODE = 103/104/105');
+ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"'))))) || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"')))))), 'build.gradle 103 / 3.3.0');
 
 // ════════════════ 2 · ECHTZEIT-LOOP ════════════════
 sec('LIVE-LOOP — wanduhrgetrieben');
@@ -54,7 +54,7 @@ ok(feldjs.includes("S._ortMu = Float32Array.from(out.actions.data);"), 'Inferenz
 ok(feldjs.includes('const mu = S._ortMu || (S._ortMu = new Float32Array(task.actDim));'), 'Hält letzten Befehl, solange Inferenz läuft');
 // Physikschritt muss IMMER laufen — auch wenn S._ortBusy noch true ist:
 const ortBlock = feldjs.slice(feldjs.indexOf('if (S.ortInfer) {'), feldjs.indexOf('} else {', feldjs.indexOf('if (S.ortInfer) {')));
-ok(ortBlock.includes('task.actionToCtrl(sim, mu);') && ortBlock.includes('sim.stepN(10);'), 'ONNX-Pfad: actionToCtrl + stepN(10) JE Zyklus (kein Einfrieren mehr)');
+ok(ortBlock.includes('sim.ctrl[i] = task._ref[i] + mu[i];') && ortBlock.includes('sim.stepN(10);'), 'ONNX-Pfad: Referenz+Offset aufs ctrl + stepN(10) JE Zyklus (kein Einfrieren; v3.6.0 Roboter-Aktuation)');
 ok(!/\} else if \(!S\._ortBusy\) \{/.test(feldjs), 'Alter Fehlerzustand weg: „kein Schritt solange _ortBusy" ist entfernt');
 ok(ortBlock.includes('task.reward(sim);') && ortBlock.includes('task.lastAct[i] = mu[i];'), 'ONNX-Pfad: reward + lastAct je Zyklus');
 ok(feldjs.includes('groundPhoneStep(0.02); // v3.2.0: Handy + beweglicher Boden JE Zyklus (wie im Training)'), 'Boden+Handy JE Zyklus (Simzeit — war vorher fps-abhängig)');

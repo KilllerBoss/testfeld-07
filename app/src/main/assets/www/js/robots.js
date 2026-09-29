@@ -626,9 +626,16 @@ export function makeHoverTask(cfg) {
 
 // ═══════════════════════════════════════════════════════════
 // v2.12.0 — MicroDuck Soft-MoE-Task (MASTER-PROMPT §1/§3/§34)
-//   Beobachtung = 61er-Basis der v2.7.0-Sensorik (Gyro, projizierte
-//   Gravitation, Höhe, Fußkontakte, Phasen-Uhr — Schnittstellenkompatibel)
-//   (61 Dims) + 13 SOFT-KOMMANDO-Kanäle: vx, vy, wz, skill[4], style[6] → 74 obs.
+//   v3.6.0 POLLEN-OBS: Beobachtung = EXAKT das Obs-Layout der Original-
+//   Policies von Pollen Robotics (microduck-policies, velstand.onnx:
+//   obs [1,61]) — der echte Duck speist genau diese 61 Kanäle:
+//     base_ang_vel(3) · projected_gravity(3) · joint_pos−ref(nu) ·
+//     joint_vel(nu) · actions(nu, als ausgeführte Offsets in rad) ·
+//     command(3: vx,vy,wz) · head_command(4)=0 · body_command(6)=0
+//   Kanäle, die der echte Duck NICHT liefert (Höhe, Fußkontakte, Phase,
+//   Quat-Gravitation, Skill/Style-Onehots), sind AUS der Obs raus —
+//   sie leben nur noch im Reward/Curriculum fort. Nur so läuft ein
+//   exportiertes ONNX 1:1 am echten Roboter („GOT 61 EXPECTED 74“-Fix).
 //   Skills: balance · walk · turn · recover (weiche Gewichte, §5);
 //   Styles: neutral/elegant/energetic/careful/playful/minimal — v2.12.0
 //   ist nur 'neutral' belegt (weitere: Architektur bereit, Phase 4).
@@ -669,13 +676,14 @@ export function makeDuckMoeTask(cfg) {
   const nu = cfg.nu;
   const J = cfg.jointResidual;
   const nFeet = Array.isArray(cfg.footBodies) ? cfg.footBodies.length : 0;
-  const CMD_DIMS = 13; // vx, vy, wz, skill[4], style[6]
-  const baseObs = 3 * nu + 8 + (9 + nFeet); // v2.7.0-Basis (Speed-Task-Layout inkl. Phasen-Uhr)
-  const obsDim = baseObs + CMD_DIMS;
+  // v3.6.0 POLLEN-OBS (61 Dims beim Duck) — siehe Blockkommentar oben.
+  const obsDim = 6 + 3 * nu + 3 + 10; // 6 IMU + 3·nu Pose/Act + cmd + 10 Kopf/Körper-Befehle
+  const cmdOff = 6 + 3 * nu;          // Router liest RAW-Kommandos hier (Duck: 48)
   return {
     kind: 'speed', // bleibt 'speed': KI-Patches (rW/cmd/done/actSpan) greifen unverändert
     moe: true,
     obsDim, actDim: nu,
+    cmdOff, cmdDims: 3, // v3.6.0: Router-Kommando-Slice (SoftMoEPolicy ABS-Modus)
     cmd: { vx: 0, yaw: 0 },           // Legacy-Block (Position 3·nu+6/7)
     softCmd: { vx: 0, vy: 0, wz: 0 }, // Soft-Block
     skillW: new Float64Array([1, 0, 0, 0]),
@@ -944,63 +952,51 @@ export function makeDuckMoeTask(cfg) {
 
     observe(sim, out) {
       let o = 0;
-      // ── 1:1 das Speed-Task-Layout (Schnittstellenkompatibilität) ──
+      // ── v3.6.0 POLLEN-OBS (1:1 wie velstand.onnx des Original-Ducks) ──
+      // 1) base_ang_vel (Winkelgeschwindigkeit im Körper-Frame)
+      sim.gyroBody(this._gy || (this._gy = new Float64Array(3)));
+      out[o++] = this._gy[0]; out[o++] = this._gy[1]; out[o++] = this._gy[2];
+      // 2) projected_gravity (Schwerkraft projiziert in den Körper-Frame)
+      sim.projectedGravity(this._pg || (this._pg = new Float64Array(3)));
+      out[o++] = this._pg[0]; out[o++] = this._pg[1]; out[o++] = this._pg[2];
+      // 3+4) joint_pos (relativ zur Referenzpose) + joint_vel
       const q = this._q, dq = this._dq;
       sim.jointPositions(q); sim.jointVelocities(dq);
       for (let i = 0; i < nu; i++) out[o++] = q[i] - this._ref[i];
       for (let i = 0; i < nu; i++) out[o++] = dq[i];
-      sim.baseQuat(this._bq || (this._bq = new Float64Array(4)));
-      const bq = this._bq, w = bq[0], x = bq[1], y = bq[2], z = bq[3];
-      out[o++] = 2 * (x * z + w * y);
-      out[o++] = 2 * (y * z - w * x);
-      out[o++] = 1 - 2 * (x * x + y * y);
-      out[o++] = sim._qvel[5];
-      const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-      sim.baseVelWorld(this._bv || (this._bv = new Float64Array(3)));
-      const c = Math.cos(yaw), s = Math.sin(yaw);
-      out[o++] = c * this._bv[0] + s * this._bv[1];
-      out[o++] = -s * this._bv[0] + c * this._bv[1];
-      out[o++] = this.cmd.vx; out[o++] = this.cmd.yaw;
-      for (let i = 0; i < nu; i++) out[o++] = this.lastAct[i];
-      // Sensorblock (v2.7.0)
-      sim.gyroBody(this._gy || (this._gy = new Float64Array(3)));
-      out[o++] = this._gy[0]; out[o++] = this._gy[1]; out[o++] = this._gy[2];
-      sim.projectedGravity(this._pg || (this._pg = new Float64Array(3)));
-      out[o++] = this._pg[0]; out[o++] = this._pg[1]; out[o++] = this._pg[2];
-      sim.basePos(this._hp || (this._hp = new Float64Array(3)));
-      out[o++] = this._hp[2];
-      if (nFeet) {
-        sim.footContacts(this._fc || (this._fc = new Float64Array(nFeet)));
-        for (let f = 0; f < nFeet; f++) out[o++] = this._fc[f] ? 1 : 0;
-      }
-      // Sensorrauschen (DR, v2.11.0) über die letzten 7 IMU-Kanäle
+      // 5) actions — als AUSGEFÜHRTE Offsets in rad (wie der echte Duck sie
+      //    als letzte Policy-Ausgabe zurückliest): actSpan·tanh(a·J).
+      //    Level-Curriculum skaliert mit (L5 = Export-Niveau, spanScale 1).
+      const aspan = cfg.actSpan * (this.spanScale || 1) * J;
+      for (let i = 0; i < nu; i++) out[o++] = aspan * Math.tanh(this.lastAct[i] * J);
+      // 6) command (vx, vy, wz — der Router liest diesen Slice RAW)
+      out[o++] = this.softCmd.vx; out[o++] = this.softCmd.vy; out[o++] = this.softCmd.wz;
+      // 7+8) head_command(4) + body_command(6): der echte Duck kann Kopf-/
+      //    Körperpose-Befehle bekommen — die App hat keine Quelle → 0
+      //    (Training UND Einsatz = neutral; im Robotereinsatz Kopf/Körper
+      //    neutral lassen, dann ist die Verteilung identisch).
+      while (o < obsDim) out[o++] = 0;
+      // Sensorrauschen (DR, v2.11.0) auf die 6 IMU-Kanäle vorn
       if (this.drSpec && this.drSpec.sensor > 0) {
         const nR = this._rng || { next: Math.random };
-        for (let k = o - 7; k < o; k++) out[k] += drSensor(nR, this.drSpec.sensor);
+        for (let k = 0; k < 6; k++) out[k] += drSensor(nR, this.drSpec.sensor);
       }
-      // Phasen-Uhr
       this._tick++;
-      const ph = (this._tick * 0.02 * (cfg.gaitFreq || 1.2)) % 1;
-      out[o++] = Math.sin(2 * Math.PI * ph);
-      out[o++] = Math.cos(2 * Math.PI * ph);
-      // ── v2.12.0 SOFT-KOMMANDO-BLOCK (13) ──
-      out[o++] = this.softCmd.vx; out[o++] = this.softCmd.vy; out[o++] = this.softCmd.wz;
-      for (let i = 0; i < 4; i++) out[o++] = this.skillW[i];
-      for (let i = 0; i < 6; i++) out[o++] = this.styleW[i];
       return o;
     },
 
     reward(sim) {
       const rW = cfg.rW;
-      sim.baseQuat(this._bq);
+      // v3.6.0: Lazy-Inits hier (die Obs liefert _bq/_bv/_hp nicht mehr)
+      sim.baseQuat(this._bq || (this._bq = new Float64Array(4)));
       const q = this._bq, w = q[0], x = q[1], y = q[2], z = q[3];
       const upz = 1 - 2 * (x * x + y * y);
       const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-      sim.baseVelWorld(this._bv);
+      sim.baseVelWorld(this._bv || (this._bv = new Float64Array(3)));
       const c = Math.cos(yaw), s = Math.sin(yaw);
       const vFwd = c * this._bv[0] + s * this._bv[1];
       const yawRate = sim._qvel[5];
-      sim.basePos(this._hp);
+      sim.basePos(this._hp || (this._hp = new Float64Array(3)));
       const gz = this._hp[2];
 
       let r = 0;
@@ -1035,6 +1031,9 @@ export function makeDuckMoeTask(cfg) {
       }
       // ── §12/§13 UNNÖTIGE SCHRITTE: Fuß-Geschwindigkeit + Kontaktwechsel ──
       if (rW.foot > 0 && this._footIds && this._footIds.length) {
+        // v3.6.0: Kontakte werden jetzt HIER frisch gelesen (Obs enthält sie
+        // nicht mehr — der Reward braucht sie aber weiterhin).
+        if (nFeet) sim.footContacts(this._fc || (this._fc = new Float64Array(nFeet)));
         let fp = 0, flips = 0;
         for (let f = 0; f < this._footIds.length; f++) {
           const bi = this._footIds[f];

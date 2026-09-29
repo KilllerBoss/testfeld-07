@@ -43,9 +43,9 @@ const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.4.0 / 104');
-ok(vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';"), 'version.js VERSION = 3.4.0/3.5.0');
-ok(vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;'), 'version.js VERSION_CODE = 104/105');
-ok((((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"'))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')))) || (gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"')), 'build.gradle 104/3.4.0 oder 105/3.5.0');
+ok(vjs.includes("export const VERSION = '3.4.0';") || vjs.includes("export const VERSION = '3.5.0';") || vjs.includes("export const VERSION = '3.6.0';"), 'version.js VERSION = 3.4.0/3.5.0');
+ok(vjs.includes('export const VERSION_CODE = 104;') || vjs.includes('export const VERSION_CODE = 105;') || vjs.includes('export const VERSION_CODE = 106;'), 'version.js VERSION_CODE = 104/105');
+ok((((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"'))))) || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"')))))) || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"')))), 'build.gradle 104/3.4.0 oder 105/3.5.0');
 
 // ════════════════ 2 · EXPORT — DOWNLOAD-ORDNER ════════════════
 sec('ONNX-EXPORT — echte .onnx über die Android-Brücke');
@@ -104,7 +104,7 @@ ok(onnxjs.includes('lastOk = cand; // zu langsam — gemerkt, Kette weiterprobie
 ok(onnxjs.includes('if (lastOk) return lastOk; // alles über Budget → schnellster gefunden'), 'onnxexport: Notfall liefert den SCHNELLESTEN statt zu werfen');
 ok(onnxjs.includes('export async function createSession(onnxBytes, epMode = \'auto\', ort = null, opts = {})'), 'onnxexport: createSession-API rückwärtskompatibel (opts optional)');
 ok(feldjs.includes("{ warmDim: D, budgetMs: 8 }"), 'feld: Aktivierung übergibt warmDim (Probe aktiv)');
-ok(feldjs.includes("warm[D - 13 + 3] = 1; // skill balance") && feldjs.includes("warm[D - 13 + 7] = 1; // style neutral"), 'feld: Warm-up-Obs mit Skill/Style-Einschaltvektor');
+ok(feldjs.includes('const warm = new Float32Array(D); // v3.6.0: Null-Kommando = neutrale Stand-Startlage'), 'feld: Warm-up-Obs = Null-Kommando (v3.6.0: kein Skill/Style-Vektor mehr — Pollen-Obs)');
 ok(feldjs.includes('S._ortMu = Float32Array.from(out.actions.data);') && feldjs.includes('Startbefehl aus dem Warm-up'), 'feld: Startbefehl aus dem Warm-up (keine Null-Phase)');
 ok(feldjs.includes("' · ~' + ms.toFixed(1) + ' ms/Inferenz'"), 'feld: epReal zeigt die gemessenen ms');
 ok(feldjs.includes('S._liveAcc = 0; // frischer Takt'), 'feld: Zeitakkumulator startet frisch nach der Aktivierung');

@@ -22,7 +22,7 @@ import { SchubModel, SCHUB_DIR_LABELS } from './schubser.js'; // v3.2.0: AutoSch
 import { GroundModel, GroundState, GROUND_MODE_LABELS, probeGravity, setGroundTilt, applyGroundImpulse } from './ground.js'; // v3.2.0: beweglicher Boden
 import { PhoneModel, PhoneSensor, phonePush } from './phone.js'; // v3.2.0: Handy-Gyroskop
 import { LayaRouter } from './laya.js';
-import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES, buildManifest } from './onnxexport.js';
+import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
 import * as store from './store.js';
 
 // ── Zustand ────────────────────────────────────────────────
@@ -267,7 +267,13 @@ function liveCycle() {
         .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
     }
     const mu = S._ortMu || (S._ortMu = new Float32Array(task.actDim));
-    task.actionToCtrl(sim, mu);
+    // v3.6.0: der Export backt actSpan·tanh(·) ein — „actions“ sind fertige
+    // Positionsoffsets in rad (wie beim echten Duck): Ziel = Referenzpose +
+    // Offset. Genau so setzt der Roboter-Loader die Servos → 1:1-Vorschau.
+    for (let i = 0; i < task.actDim; i++) {
+      sim.ctrl[i] = task._ref[i] + mu[i];
+      task._curAct[i] = mu[i];
+    }
     sim.stepN(10);
     task.reward(sim);
     for (let i = 0; i < task.actDim; i++) task.lastAct[i] = mu[i];
@@ -514,6 +520,12 @@ function applySession(sess, opts = {}) {
     if (!sess || !sess.policy) return false;
     const pol = sess.policy;
     const net = S.trainer.ppo.net;
+    // v3.6.0: altes Policy-Format (74er-Obs) sauber abweisen — das neue
+    // Pollen-Layout (61 Obs, wie der echte Duck) ist nicht kompatibel dazu.
+    if (pol.obsDim && pol.obsDim !== net.obsDim) {
+      log('Speicherstand gehört zum alten Policy-Format (' + pol.obsDim + ' Obs) — das neue Pollen-Layout hat ' + net.obsDim + ' Obs. Bitte neu trainieren.', 'err');
+      return false;
+    }
     const params = {};
     for (const n of net.pNames) {
       if (!pol.params[n]) return false;
@@ -1083,34 +1095,28 @@ function wireModelUI() {
       const norm = $('expNorm').checked
         ? { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) }
         : null;
+      const duck = getRobot('duck');
       const meta = {
-        // v3.5.0: ECHTE Pollen-Metadaten — default_joint_pos aus dem laufenden
-        // Sim (STAND-Keyframe), action_scale = actSpan des Microduck.
+        // v3.6.0: ECHTE Pollen-Metadaten — default_joint_pos aus dem laufenden
+        // Sim (STAND-Keyframe). action_scale bleibt 1.000 (die Skalierung ist
+        // EINGEBACKEN — „actions“ = fertige Positionsoffsets in rad).
         defaultJointPos: (S.sim && S.sim.keyCtrl) ? Array.from(S.sim.keyCtrl) : null,
-        actionScale: getRobot('duck').actSpan,
       };
       const { bytes, ops, params } = moeToOnnx(S.trainer.ppo.net, {
         format: fmt, norm, valueHead: $('expValue').checked, meta,
+        actSpan: duck.actSpan, jointResidual: duck.jointResidual != null ? duck.jointResidual : 1,
       });
-      // v3.4.0: ECHTE .onnx-Datei (rohes Protobuf) in den Download-Ordner —
-      // über die Android-Brücke (TrainrobotBridge.saveFile → MediaStore).
-      // Vorher: <a download>-Klick mit JSON-Wrapper (.onnx.json) — lief im
-      // WebView nie und war für echte Roboter unlesbar.
+      // v3.6.0: NUR die .onnx (Nutzer: „Manifest brauche ich auch nicht“) —
+      // rohes Protobuf über die Android-Brücke (TrainrobotBridge.saveFile →
+      // MediaStore) in den Download-Ordner; der Duck-Loader lädt die Datei
+      // direkt (obs [1,61] wie velstand.onnx, Ausgang „actions“).
       const name = 'feld-policy-' + fmt + '.onnx';
       const how = store.exportBytes(name, bytes, 'application/octet-stream');
-      // v3.5.0: manifest.json (Pollen policy-manifest schema 2) DANEBen —
-      // robotctl policy add / Playground lesen obs_len/action_len/robot.model
-      // daraus; die Originale fahren immer als ONNX + manifest.json.
-      const manName = 'feld-policy-' + fmt + '.manifest.json';
-      const man = buildManifest(S.trainer.ppo.net, { name: 'feld-policy' });
-      let manHow = '', manErr = '';
-      try { manHow = store.exportJSON(manName, man); } catch (e2) { manErr = e2.message; }
-      $('expState').textContent = 'Export OK: ' + name + ' + ' + manName + ' · ' + (bytes.length / 1024).toFixed(0) + ' KB · ' +
-        ops + ' Knoten, ' + params + ' Parameter (' + fmt + ', Pollen-Format: obs→actions, opset 18, 8 Metadaten)' +
+      $('expState').textContent = 'Export OK: ' + name + ' · ' + (bytes.length / 1024).toFixed(0) + ' KB · ' +
+        ops + ' Knoten, ' + params + ' Parameter (' + fmt + ', Pollen-Format: obs [1,' + S.task.obsDim + '] → actions [1,' + S.task.actDim + '], opset 18, 8 Metadaten, Skalierung eingebacken)' +
         (how === 'download' ? ' → Ordner Download' : ' → Browser-Download');
-      log('ONNX-Export (' + fmt + ', Pollen-Profil): ' + name + ' + ' + manName +
-        ', ' + bytes.length + ' Bytes → ' + (how === 'download' ? 'Download-Ordner' : 'Browser') +
-        (manHow ? ' (Manifest OK)' : ' (Manifest fehlgeschlagen: ' + (manErr || 'unbekannt') + ')'), 'ok');
+      log('ONNX-Export (' + fmt + ', Pollen-Profil): ' + name + ', ' + bytes.length + ' Bytes → ' +
+        (how === 'download' ? 'Download-Ordner' : 'Browser'), 'ok');
     } catch (e) {
       $('expState').textContent = 'Export-Fehler: ' + e.message;
     }
@@ -1118,7 +1124,11 @@ function wireModelUI() {
   $('btnSelfTest').addEventListener('click', async () => {
     $('expState').textContent = 'Selbsttest läuft (ORT wird geladen) …';
     try {
-      const r = await selfTest(S.trainer.ppo.net, $('epSel').value);
+      const duck = getRobot('duck');
+      const r = await selfTest(S.trainer.ppo.net, $('epSel').value, {
+        actSpan: duck.actSpan,
+        jointResidual: duck.jointResidual != null ? duck.jointResidual : 1,
+      });
       $('expState').textContent = 'Parität ONNX ↔ JS: maxΔ = ' + r.maxDiff.toExponential(2) + ' (n=' + r.n + ')';
       log('ONNX-Selbsttest: maxΔ ' + r.maxDiff.toExponential(2), 'ok');
     } catch (e) {
@@ -1129,14 +1139,18 @@ function wireModelUI() {
     try {
       $('expState').textContent = 'Erzeuge Session …';
       const norm = { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) };
-      const { bytes } = moeToOnnx(S.trainer.ppo.net, { format: 'fp32', norm, valueHead: false });
+      const { bytes } = moeToOnnx(S.trainer.ppo.net, {
+        format: 'fp32', norm, valueHead: false,
+        // v3.6.0: gleiche Einbackung wie der Export — liveCycle legt die
+        // „actions“ direkt als Referenz + Offset auf die Servos.
+        actSpan: getRobot('duck').actSpan,
+        jointResidual: getRobot('duck').jointResidual != null ? getRobot('duck').jointResidual : 1,
+      });
       // v3.4.0: Latenz-Probe (Warm-up + Median, Budget 8 ms) — trägele
       // NPU/GPU-Provider werden automatisch übersprungen (ruckartige
       // Befehle in Schüben), der schnellste Provider gewinnt.
       const D = S.task.obsDim;
-      const warm = new Float32Array(D);
-      warm[D - 13 + 3] = 1; // skill balance
-      warm[D - 13 + 7] = 1; // style neutral
+      const warm = new Float32Array(D); // v3.6.0: Null-Kommando = neutrale Stand-Startlage
       const { session, ep, ort, ms } = await createSession(bytes, $('epSel').value, null, { warmDim: D, budgetMs: 8 });
       S.ortInfer = session;
       S._ortT = ort.Tensor;

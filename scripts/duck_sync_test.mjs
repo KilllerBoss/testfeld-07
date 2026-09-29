@@ -5,7 +5,7 @@
 //   B) recoverOnFall: Sturz → Aufsteh-Fenster (stay) / Sofort-done (reset)
 //   C) setUserCmd: Stick steuert Policy-Modus, Scheduler pausiert
 //   D) Curriculum-Selbstkorrektur: Level sinkt bei Kollaps
-//   E) obs-Layout unverändert (74) + Scheduler-Regression (Training)
+//   E) obs-Layout = POLLEN-61 (v3.6.0, wie velstand.onnx) + Scheduler-Regression (Training)
 // Aufruf: node scripts/duck_sync_test.mjs
 // ═══════════════════════════════════════════════════════════
 import { makeDuckMoeTask, getRobot } from '../app/src/main/assets/www/js/robots.js';
@@ -148,11 +148,11 @@ console.log('D) Stick → Soft-Kommandos (Policy-Modus)');
   task.setUserCmd(0, 0, 0);
   for (let i = 0; i < 80; i++) task.afterAct(sim, null);
   check('Skill-Form „balance" bei Stillstand', task.skillW[0] > 0.9);
-  // obs: Soft-Block am Ende unverändert 13 Kanäle
+  // obs: command-Block an Position 48 (Pollen-Layout, v3.6.0)
   const obs = new Float64Array(task.obsDim);
   const o = task.observe(sim, obs);
-  check('obsDim 74 unverändert (Schnittstelle)', o === 74 && task.obsDim === 74, 'o=' + o);
-  check('obs enthält Stick-Kommandos (letzte 13)', Math.abs(obs[61] - task.softCmd.vx) < 1e-9);
+  check('obsDim 61 = Pollen-Layout (v3.6.0, wie velstand.onnx)', o === 61 && task.obsDim === 61, 'o=' + o);
+  check('obs enthält Stick-Kommandos (command an 48)', Math.abs(obs[48] - task.softCmd.vx) < 1e-9);
 }
 
 // ── E) Training-Regression: Scheduler läuft weiter ──────────

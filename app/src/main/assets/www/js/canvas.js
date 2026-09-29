@@ -73,8 +73,21 @@ export function obsGroups(task, cfg) {
       g.push({ name: 'Skill-Descend', n: 1 });
       g.push({ name: 'Style 1–6', n: 6 });
     }
+  } else if (task.moe) {
+    // v3.6.0: POLLEN-OBS (MicroDuck 61 / G1 106 Dims — Layout wie die
+    // Original-Policies, Reihenfolge exakt wie makeDuckMoeTask.observe())
+    g.push({ name: 'Gyro (x,y,z)', n: 3 });
+    g.push({ name: 'Gravitation (x,y,z)', n: 3 });
+    g.push({ name: 'Gelenk Δ-Referenz', n: nu });
+    g.push({ name: 'Gelenk-Tempo', n: nu });
+    g.push({ name: 'Aktion (rad-Offset)', n: nu });
+    g.push({ name: 'Befehl vx', n: 1 });
+    g.push({ name: 'Befehl vy', n: 1 });
+    g.push({ name: 'Befehl wz', n: 1 });
+    g.push({ name: 'Kopf-Befehl (neutral)', n: 4 });
+    g.push({ name: 'Körper-Befehl (neutral)', n: 6 });
   } else {
-    // speed/recovery (3·nu + 17 + nFeet) + Soft-MoE-Kommandos (13) beim Duck
+    // speed/recovery (3·nu + 17 + nFeet) + Soft-MoE-Kommandos (13) bei Legacy-MoE
     g.push({ name: 'Gelenk Δ-Referenz', n: nu });
     g.push({ name: 'Gelenk-Tempo', n: nu });
     g.push({ name: 'Aufwärts (x,y,z)', n: 3 });
@@ -91,6 +104,7 @@ export function obsGroups(task, cfg) {
     g.push({ name: 'Takt sin', n: 1 });
     g.push({ name: 'Takt cos', n: 1 });
     if (task.moe) {
+      // Legacy-MoE (Drohne/Alt-App): Soft-Kommandos hinten angehängt
       g.push({ name: 'Soft vx', n: 1 });
       g.push({ name: 'Soft vy', n: 1 });
       g.push({ name: 'Soft wz', n: 1 });

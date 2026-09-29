@@ -67,7 +67,7 @@ console.log('\n[1] Obs-Layout (Port-Namen)');
   const duck = getRobot('duck');
   const dspeed = makeDuckMoeTask(duck);
   const dn = canvasMod.obsPortNames(dspeed, duck);
-  ok(dn.length === dspeed.obsDim && dn[dn.length - 1] === 'Style 1–6[5]', `Duck-MoE: Ports ${dn.length} == obsDim ${dspeed.obsDim}, letzter Port Style[5]`);
+  ok(dn.length === dspeed.obsDim && dn[dn.length - 1] === 'Körper-Befehl (neutral)[5]', `Duck-MoE: Ports ${dn.length} == obsDim ${dspeed.obsDim}, letzter Port Körper-Befehl[5] (Pollen-Layout v3.6.0)`);
 }
 
 // ── 2) FlexNet ─────────────────────────────────────────────

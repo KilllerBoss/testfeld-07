@@ -36,12 +36,26 @@
 //   • 8 metadata_props wie im Original (mjlab get_base_metadata):
 //     run_path · joint_names · joint_stiffness · joint_damping ·
 //     default_joint_pos · command_names · observation_names · action_scale
-//     — Listen als %.3f-Komma-CSV (list_to_csv_str), ehrliche Werte aus
-//     unserem Microduck (dasselbe Pollen-MJCF: Aktuator-Order, STAND-
-//     Keyframe, kp 2.2 / kv 0 aus chosen_actuator, actSpan 0.35)
+//     — Listen als %.3f-Komma-CSV (list_to_csv_str)
 //   • KEINE value_info für Zwischentensoren (das Original hat auch keine;
 //     feste Dims machen die Shape-Inferenz vollständig)
 //   • Softmax ab opset 13: axis als int64-SCALAR-Input, nicht Attribut
+//
+// v3.6.0 OBS-/AKTIONSKONTRAKT WIE DER ECHTE DUCK („GOT 61 EXPECTED 74“-Fix):
+//   Der Feld-Duck trainiert jetzt auf EXAKT dem Obs-Layout der Originale
+//   (61 Dims: base_ang_vel, projected_gravity, joint_pos, joint_vel,
+//   actions, command, head_command, body_command — siehe robots.js).
+//   Daraus folgt im Export (ABS-Modus, net.absCmd):
+//   • Router liest RAW vx,vy,wz aus dem command-Slice (kein Skill-Onehot,
+//     kein kPrior·log-Prior mehr)
+//   • Style neutral (SE-Zeile 0) wird in den Decoder-Bias GEFALTET —
+//     der Graph bleibt ein reiner Gemm-Pfad (wie die 9-Knoten-Originale)
+//   • Skalierung EINGEBACKEN: Ausgang = actSpan·tanh(mu·jointResidual) —
+//     „actions“ sind POSITIONSOFFSETS in rad wie bei den Originalen
+//     (action_scale 1.0) → jeder rohe ORT-Loader kann sie direkt anwenden
+//   • obs [1,61] == velstand.onnx — DER Loader-Fehler ist damit behoben
+//   Legacy-Netze (Drohne/Alt-App, Trailing-Skill-Layout) exportieren
+//   weiterhin unverändert im alten Graphen-Pfad.
 // ═══════════════════════════════════════════════════════════
 
 import { SoftMoEPolicy } from '../train.js';
@@ -104,14 +118,15 @@ export const POLL_DEFAULT_POS = [
 ];
 /** chosen_actuator im Pollen-MJCF: position kp=2.2, kv=0 (gainprm/biasprm). */
 export const POLL_STIFFNESS = 2.2, POLL_DAMPING = 0.0;
-/** Obs-Blöcke in EXAKTER Reihenfolge des observe()-Layouts (74 Dims). */
+/** Obs-Blöcke in EXAKTER Reihenfolge und BENENNUNG der Pollen-Originale
+ *  (velstand.onnx observation_names — das Obs-Layout des echten Ducks,
+ *  61 Dims: 3+3+14+14+14+3+4+6). */
 export const POLL_OBS_NAMES = [
-  'joint_pos', 'joint_vel', 'proj_gravity_quat', 'yaw_rate', 'base_vel_yaw',
-  'cmd', 'actions', 'gyro', 'proj_gravity', 'height', 'foot_contacts',
-  'phase_clock', 'soft_cmd', 'skill', 'style',
+  'base_ang_vel', 'projected_gravity', 'joint_pos', 'joint_vel', 'actions',
+  'command', 'head_command', 'body_command',
 ];
-/** Kommando-Blöcke (wie command_manager.active_terms der Originale). */
-export const POLL_CMD_NAMES = ['soft_cmd', 'skill', 'style'];
+/** Kommando-Blöcke (command_manager.active_terms der Originale). */
+export const POLL_CMD_NAMES = ['twist', 'head_pose', 'body_pose'];
 
 /** %.3f-Komma-CSV — Format von mjlab list_to_csv_str (decimals=3). */
 const csv3 = (arr) => Array.from(arr, (x) => Number(x).toFixed(3)).join(',');
@@ -123,11 +138,13 @@ const metaEntry = (k, v) => concatBytes([bf(1, utf8(k)), bf(2, utf8(v))]);
  * Die 8 Original-Metadaten (mjlab get_base_metadata-Reihenfolge) mit ECHTEN
  * Werten unseres Microduck-Policies. meta-Overrides (feld.js):
  *   { defaultJointPos, actionScale, runPath }
+ * action_scale: v3.6.0 = 1.000 — die Skalierung (actSpan·tanh) ist EINGEBACKEN,
+ * „actions“ sind bereits Positionsoffsets in rad (wie bei den Originalen).
  */
 export function buildPollenMeta(net, meta = {}) {
   const djp = meta.defaultJointPos && meta.defaultJointPos.length === net.actDim
     ? meta.defaultJointPos : POLL_DEFAULT_POS;
-  const actScale = meta.actionScale != null ? Number(meta.actionScale) : 0.35;
+  const actScale = meta.actionScale != null ? Number(meta.actionScale) : 1.0;
   return [
     ['run_path', meta.runPath != null ? String(meta.runPath) : 'None'],
     ['joint_names', POLL_JOINTS.join(',')],
@@ -273,7 +290,19 @@ export function moeToOnnx(net, opts = {}) {
   if (net.E !== 4) throw new Error('Export aktuell für 4 Experten (Standard) — gefunden: ' + net.E);
   const D = net.obsDim, A = net.actDim, E = net.E;
   const H = net.H, RH = net.RH, HL = net.HL, EL = net.EL, SL = net.SL, DH = net.DH;
-  const CMD = D - 13;
+  const ABS = !!net.absCmd;      // v3.6.0: Pollen-Obs (Router liest cmd an cmdOff)
+  const CMD = D - 13;            // Legacy-Trailing-Basis (Drohne/Alt-App)
+  const RIN = net.RIN || (H + 4);
+  // v3.6.0 Aktionen EINGEBACKEN: Ausgang = actSpan·tanh(mu·jointResidual)
+  // → „actions“ = Positionsoffsets in rad (wie die Originale, action_scale 1.0).
+  const bakeJ = ABS && opts.jointResidual != null ? Number(opts.jointResidual) : 1;
+  const bakeSpan = ABS && opts.actSpan != null ? Number(opts.actSpan) : 1;
+  const mulArr = (arr, m) => {
+    if (m === 1) return arr;
+    const o = new Float32Array(arr.length);
+    for (let i = 0; i < arr.length; i++) o[i] = arr[i] * m;
+    return o;
+  };
 
   const dt = fmt === 'fp16' ? DT.FLOAT16 : DT.FLOAT;
   const pack = (arr) => (fmt === 'fp16' ? rawF16(arr) : rawF32(arr));
@@ -331,30 +360,47 @@ export function moeToOnnx(net, opts = {}) {
   const b2 = Wb('enc2b', [1, H], N.b2);
   nodes.push(gemm('h1', W2, b2, 'enc2_a'), node('Tanh', ['enc2_a'], ['h2']));
 
-  // Router: Skill-Kommandos (RAW, reluiert — wie forward)
+  // Router: Kommando-Slice RAW aus dem Eingang (wie forward)
   const S64 = (n, v) => tensorI64(n, [1], [v]);
-  inits.push(S64('sk_s', CMD + 3), S64('sk_e', CMD + 7), S64('ax1', 1), S64('st1', 1));
-  nodes.push(node('Slice', ['obs', 'sk_s', 'sk_e', 'ax1', 'st1'], ['skill_raw']));
-  nodes.push(node('Relu', ['skill_raw'], ['skill_f']));
-  if (fmt === 'fp16') nodes.push(node('Cast', ['skill_f'], ['skill'], [attrI('to', DT.FLOAT16)]));
-  else nodes.push(node('Identity', ['skill_f'], ['skill']));
-  // Router L1 DISTRIBUIV (kein Concat): rh = Tanh(Wr1h·h2 + Wr1s·skill + br1)
-  const Wr1h = W('rout1h', [RH, H], sliceCols(N.Wr1, RH, H + 4, 0, H));
-  const Wr1s = W('rout1s', [RH, 4], sliceCols(N.Wr1, RH, H + 4, H, H + 4));
+  inits.push(S64('ax1', 1), S64('st1', 1));
+  let cmdName;
+  if (ABS) {
+    // v3.6.0: vx,vy,wz an fester Position — KEIN Relu (Rückwärts ist legitim!)
+    inits.push(S64('cm_s', net.cmdOff), S64('cm_e', net.cmdOff + 3));
+    nodes.push(node('Slice', ['obs', 'cm_s', 'cm_e', 'ax1', 'st1'], ['cmd_raw']));
+    if (fmt === 'fp16') nodes.push(node('Cast', ['cmd_raw'], ['cmdin'], [attrI('to', DT.FLOAT16)]));
+    else nodes.push(node('Identity', ['cmd_raw'], ['cmdin']));
+    cmdName = 'cmdin';
+  } else {
+    inits.push(S64('sk_s', CMD + 3), S64('sk_e', CMD + 7));
+    nodes.push(node('Slice', ['obs', 'sk_s', 'sk_e', 'ax1', 'st1'], ['skill_raw']));
+    nodes.push(node('Relu', ['skill_raw'], ['skill_f']));
+    if (fmt === 'fp16') nodes.push(node('Cast', ['skill_f'], ['skill'], [attrI('to', DT.FLOAT16)]));
+    else nodes.push(node('Identity', ['skill_f'], ['skill']));
+    cmdName = 'skill';
+  }
+  // Router L1 DISTRIBUIV (kein Concat): rh = Tanh(Wr1h·h2 + Wr1s·cmd + br1)
+  const Wr1h = W('rout1h', [RH, H], sliceCols(N.Wr1, RH, RIN, 0, H));
+  const Wr1s = W('rout1s', [RH, RIN - H], sliceCols(N.Wr1, RH, RIN, H, RIN));
   const br1 = Wb('rout1b', [1, RH], N.br1);
-  nodes.push(gemm('h2', Wr1h, null, 'rout1_h'), gemm('skill', Wr1s, null, 'rout1_s'));
+  nodes.push(gemm('h2', Wr1h, null, 'rout1_h'), gemm(cmdName, Wr1s, null, 'rout1_s'));
   nodes.push(node('Add', ['rout1_h', 'rout1_s'], ['rout1_hs']));
   nodes.push(node('Add', ['rout1_hs', 'rout1b'], ['rout1_a']));
   nodes.push(node('Tanh', ['rout1_a'], ['rh']));
   const Wr2 = W('rout2', [E, RH], N.Wr2);
   const br2 = Wb('rout2b', [1, E], N.br2);
   nodes.push(gemm('rh', Wr2, br2, 'rlogits_pure'));
-  inits.push(tensorScalar('k_eps', 0.06, dt));
-  inits.push(tensorScalar('k_prior', N.kPrior, dt));
-  nodes.push(node('Add', ['skill', 'k_eps'], ['skill_a']));
-  nodes.push(node('Log', ['skill_a'], ['skill_l']));
-  nodes.push(node('Mul', ['skill_l', 'k_prior'], ['skill_p']));
-  nodes.push(node('Add', ['rlogits_pure', 'skill_p'], ['rlogits']));
+  if (!ABS) {
+    // Legacy: Skill-Prior kPrior·log(Relu(skill)+0.06)
+    inits.push(tensorScalar('k_eps', 0.06, dt));
+    inits.push(tensorScalar('k_prior', N.kPrior, dt));
+    nodes.push(node('Add', ['skill', 'k_eps'], ['skill_a']));
+    nodes.push(node('Log', ['skill_a'], ['skill_l']));
+    nodes.push(node('Mul', ['skill_l', 'k_prior'], ['skill_p']));
+    nodes.push(node('Add', ['rlogits_pure', 'skill_p'], ['rlogits']));
+  } else {
+    nodes.push(node('Identity', ['rlogits_pure'], ['rlogits']));
+  }
   // Softmax: axis bleibt bis einschließlich opset 18 ein ATTRIBUT (das
   // axis-als-Input-Muster gilt nur für die Reduce-Ops) — [1, E] → Achse 1.
   nodes.push(node('Softmax', ['rlogits'], ['w'], [attrI('axis', 1)]));
@@ -375,27 +421,54 @@ export function moeToOnnx(net, opts = {}) {
   }
   nodes.push(node('Sum', mixParts, ['mix']));
 
-  // Style
-  inits.push(S64('ss_s', CMD + 7), S64('ss_e', D));
-  nodes.push(node('Slice', ['obs', 'ss_s', 'ss_e', 'ax1', 'st1'], ['style_raw']));
-  nodes.push(node('Relu', ['style_raw'], ['style_f']));
-  if (fmt === 'fp16') nodes.push(node('Cast', ['style_f'], ['stylein'], [attrI('to', DT.FLOAT16)]));
-  else nodes.push(node('Identity', ['style_f'], ['stylein']));
-  const SE = W('style_e', [net.NS, SL], N.SE);
-  // SE ist eine [in,out]-Embedding-Matrix (NS→SL) — hier OHNE transB:
-  nodes.push(node('Gemm', ['stylein', SE], ['style'], [attrF('alpha', 1), attrF('beta', 1), attrI('transA', 0), attrI('transB', 0)]));
+  // Style: Legacy = Embedding-Mischung aus dem Obs-Slice · ABS (v3.6.0) =
+  // neutral fest (SE-Zeile 0) → in den Decoder-Bias GEFALTET, der Graph
+  // bleibt ein reiner Gemm-Pfad (wie die 9-Knoten-Originale).
+  let dec1Bias = N.bd1;
+  if (!ABS) {
+    inits.push(S64('ss_s', CMD + 7), S64('ss_e', D));
+    nodes.push(node('Slice', ['obs', 'ss_s', 'ss_e', 'ax1', 'st1'], ['style_raw']));
+    nodes.push(node('Relu', ['style_raw'], ['style_f']));
+    if (fmt === 'fp16') nodes.push(node('Cast', ['style_f'], ['stylein'], [attrI('to', DT.FLOAT16)]));
+    else nodes.push(node('Identity', ['style_f'], ['stylein']));
+    const SE = W('style_e', [net.NS, SL], N.SE);
+    // SE ist eine [in,out]-Embedding-Matrix (NS→SL) — hier OHNE transB:
+    nodes.push(node('Gemm', ['stylein', SE], ['style'], [attrF('alpha', 1), attrF('beta', 1), attrI('transA', 0), attrI('transB', 0)]));
+  } else {
+    // dec1Bias' = bd1 + Wd1s·SE[0] — der konstante Style-Anteil wandert
+    // exakt (lineare Faltung) in den Bias.
+    const Wd1sFold = sliceCols(N.Wd1, DH, EL + SL, EL, EL + SL);
+    const folded = new Float32Array(DH);
+    for (let j = 0; j < DH; j++) {
+      folded[j] = N.bd1[j];
+      for (let k = 0; k < SL; k++) folded[j] += Wd1sFold[j * SL + k] * N.SE[k];
+    }
+    dec1Bias = folded;
+  }
 
-  // Decoder L1 DISTRIBUIV (kein Concat): Tanh(Wd1m·mix + Wd1s·style + bd1)
+  // Decoder L1 DISTRIBUIV (kein Concat): Tanh(Wd1m·mix [+ Wd1s·style] + bd1)
   const Wd1m = W('dec1m', [DH, EL], sliceCols(N.Wd1, DH, EL + SL, 0, EL));
-  const Wd1s = W('dec1s', [DH, SL], sliceCols(N.Wd1, DH, EL + SL, EL, EL + SL));
-  const bd1 = Wb('dec1b', [1, DH], N.bd1);
-  nodes.push(gemm('mix', Wd1m, null, 'dec1_m'), gemm('style', Wd1s, null, 'dec1_s'));
-  nodes.push(node('Add', ['dec1_m', 'dec1_s'], ['dec1_ms']));
-  nodes.push(node('Add', ['dec1_ms', 'dec1b'], ['dec1_a']));
+  const bd1 = Wb('dec1b', [1, DH], dec1Bias);
+  if (ABS) {
+    nodes.push(gemm('mix', Wd1m, bd1, 'dec1_a')); // Bias enthält den gefalteten Style
+  } else {
+    const Wd1s = W('dec1s', [DH, SL], sliceCols(N.Wd1, DH, EL + SL, EL, EL + SL));
+    nodes.push(gemm('mix', Wd1m, null, 'dec1_m'), gemm('style', Wd1s, null, 'dec1_s'));
+    nodes.push(node('Add', ['dec1_m', 'dec1_s'], ['dec1_ms']));
+    nodes.push(node('Add', ['dec1_ms', 'dec1b'], ['dec1_a']));
+  }
   nodes.push(node('Tanh', ['dec1_a'], ['dech']));
-  const Wd2 = W('dec2', [A, DH], N.Wd2);
+  // v3.6.0: jointResidual in die dec2-Gewichte gefaltet → Tanh → actSpan-Mul
+  const Wd2 = W('dec2', [A, DH], mulArr(N.Wd2, bakeJ));
   const bd2 = Wb('dec2b', [1, A], N.bd2);
   nodes.push(gemm('dech', Wd2, bd2, 'mu_raw'));
+  let muOut = 'mu_raw';
+  if (ABS) {
+    nodes.push(node('Tanh', ['mu_raw'], ['mu_t']));
+    inits.push(tensorScalar('act_scale', bakeSpan, dt));
+    nodes.push(node('Mul', ['mu_t', 'act_scale'], ['mu_s']));
+    muOut = 'mu_s';
+  }
 
   // Value-Kopf (optional)
   let extraOut = [];
@@ -408,7 +481,8 @@ export function moeToOnnx(net, opts = {}) {
 
   // Ausgänge immer float32 — v3.5.0 heißt der Hauptausgang „actions“
   // (wie bei den Pollen-Originalen; „mu“ verstand ihr Loader nicht).
-  nodes.push(node('Cast', ['mu_raw'], [POLL_PROFILE.outName], [attrI('to', DT.FLOAT)]));
+  // v3.6.0: ABS-Export liefert actSpan·tanh(mu·J) — fertige Offsets in rad.
+  nodes.push(node('Cast', [muOut], [POLL_PROFILE.outName], [attrI('to', DT.FLOAT)]));
   if (opts.valueHead) nodes.push(node('Cast', ['val_raw'], ['val'], [attrI('to', DT.FLOAT)]));
 
   // v3.5.0: KEINE value_info für Zwischentensoren mehr — das Pollen-Original
@@ -543,16 +617,28 @@ export async function selfTest(net, epMode = 'cpu', opts = {}) {
   const D = net.obsDim;
   const raw = new Float32Array(D);
   for (let i = 0; i < D; i++) raw[i] = (Math.random() * 2 - 1) * 0.3;
-  raw[D - 13] = 0.1;   // vx
-  raw[D - 13 + 3] = 1; // skill balance
-  raw[D - 13 + 7] = 1; // style neutral
+  if (net.absCmd) {
+    raw[net.cmdOff] = 0.1; // vx-Kommando (Pollen-Obs: command an cmdOff)
+  } else {
+    raw[D - 13] = 0.1;   // vx
+    raw[D - 13 + 3] = 1; // skill balance
+    raw[D - 13 + 7] = 1; // style neutral
+  }
   const mu = net.forward(raw, raw).slice();
+  // v3.6.0: ABS-Export backt actSpan·tanh(mu·J) ein — Vergleichsbasis entsprechend
+  let ref = mu;
+  if (net.absCmd) {
+    const J = opts.jointResidual != null ? Number(opts.jointResidual) : 1;
+    const span = opts.actSpan != null ? Number(opts.actSpan) : 1;
+    ref = new Float32Array(mu.length);
+    for (let i = 0; i < mu.length; i++) ref[i] = span * Math.tanh(mu[i] * J);
+  }
   const t = new ort.Tensor('float32', Float32Array.from(raw), [1, D]);
   const out = await session.run({ obs: t });
   const onnxMu = Array.from(out[POLL_PROFILE.outName].data);
   let mx = 0, sum = 0;
   for (let i = 0; i < onnxMu.length; i++) {
-    const d = Math.abs(onnxMu[i] - mu[i]);
+    const d = Math.abs(onnxMu[i] - ref[i]);
     if (d > mx) mx = d;
     sum += d;
   }

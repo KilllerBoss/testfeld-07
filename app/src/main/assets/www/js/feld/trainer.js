@@ -63,7 +63,10 @@ export class FeldTrainer {
       T: this.hyper.T, gamma: this.hyper.gamma, lam: this.hyper.lam,
       clip: this.hyper.clip, epochs: this.hyper.epochs, mb: this.hyper.mb,
       lr: this.hyper.lr, cV: this.hyper.cV, cE: this.hyper.cE,
-      maxGrad: this.hyper.maxGrad, policyOpts: { E: this.hyper.E },
+      maxGrad: this.hyper.maxGrad,
+      // v3.6.0: ABS-Kommandomodus des Duck-Tasks (cmdOff = Router-Slice);
+      // undefined bei anderen Tasks → Legacy-Trailing-Layout.
+      policyOpts: { E: this.hyper.E, cmdOff: task.cmdOff },
     }, opts.seed || 20260929, SoftMoEPolicy);
     this.moe = new FeldMoE(this.ppo.net);
     // STUFEN-FREIHEIT: PPO._update macht Adam-Schritte je Minibatch —

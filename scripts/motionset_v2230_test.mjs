@@ -5,7 +5,7 @@
 //      Skill-/Umlaut-Normalisierung, Experten-Clip-Mapping, Buttons
 //   B) skill.js: expertRFor/setExpertR (pro Roboter, Klemmen, Persistenz)
 //      + expertRouterReward mit Profil-Parameter
-//   C) robots.js: makeMoeTask-Verallgemeinerung (duck 74 obs, G1 119),
+//   C) robots.js: makeMoeTask-Verallgemeinerung (duck 61 obs Pollen-Layout v3.6.0, G1 106),
 //      Hover-Task 28 obs, makeMoeTask-Alias, setUserCmd+Buttons,
 //      LEHRER (reward-only): Loop-Funktion, Once-Map, Fade (teacherW=0
 //      ⇒ exakt alter Reward), Trigger + Ablauf
@@ -109,10 +109,10 @@ function stubSim(cfg, footNames) {
 
 const duckCfg = robots.getRobot('duck');
 const tDuck = duckCfg.task(duckCfg);
-check('Duck-MoE-Task obsDim bleibt 74', tDuck.obsDim === 74, String(tDuck.obsDim));
+check('Duck-MoE-Task obsDim = 61 (Pollen-Layout, v3.6.0)', tDuck.obsDim === 61, String(tDuck.obsDim));
 const g1Cfg = robots.getRobot('g1');
 const tG1 = g1Cfg.task(g1Cfg);
-check('G1-MoE-Task obsDim 119 (106 Basis + 13 Kommando)', tG1.obsDim === 119, String(tG1.obsDim));
+check('G1-MoE-Task obsDim 106 (6 IMU + 87 Basis + cmd + 10, Pollen-Layout)', tG1.obsDim === 106, String(tG1.obsDim));
 tG1._applyLevel(5);
 check('G1-Curriculum skaliert (L5 vxMax = 0,6)', Math.abs(tG1.vxMax - 0.6) < 1e-9, tG1.vxMax.toFixed(3));
 const x2Cfg = robots.getRobot('x2');
@@ -192,7 +192,7 @@ check('index.html: Gamepad-Overlay (2 Zonen + 4 Buttons)', _feldApp || ['#padOve
 check('index.html: LEHRER-Panel + Experten-Editor + btnPad', _feldApp || ['teacherChip', 'teacherW', 'teacherWVal', 'teacherReload', 'teacherSrc', 'erToggle', 'expertRPanel', 'btnPad'].every((id) => html.includes(`id="${id}"`)));
 check('CSS: padOverlay-Layout', _feldApp || (css.includes('#padOverlay.on') && css.includes('.padZone') && css.includes('.padBtn')));
 check('main.js: VERSION >= 2.26.0 + Teacher-Verdrahtung (v2.26.0-Pin)', (mainJs.includes("const VERSION = '2.26.0';") || mainJs.includes("const VERSION = '2.27.0';") || mainJs.includes("const VERSION = '2.27.1';") || mainJs.includes("const VERSION = '2.28.0';") || mainJs.includes("const VERSION = '2.28.1';") || mainJs.includes("const VERSION = '2.28.4';") || mainJs.includes("const VERSION = '2.28.5';") || mainJs.includes("const VERSION = '2.28.6';") || mainJs.includes("const VERSION = '2.28.7';") || mainJs.includes("const VERSION = '2.28.8';") || mainJs.includes("const VERSION = '2.28.9';") || mainJs.includes("const VERSION = '2.28.10';") || mainJs.includes("const VERSION = '2.28.11';")) && mainJs.includes('initTeacherUI();') && mainJs.includes('downloadMotionSetBg();') && mainJs.includes('wireTeacher(t);'));
-check('build.gradle: versionCode 38 / versionName 2.26.0 (v2.26.0-Pin)', (gradle.includes('versionCode 38') || gradle.includes('versionCode 39') || gradle.includes('versionCode 40') || gradle.includes('versionCode 41') || gradle.includes('versionCode 42') || gradle.includes('versionCode 43') || gradle.includes('versionCode 44') || gradle.includes('versionCode 45') || gradle.includes('versionCode 46') || gradle.includes('versionCode 47') || gradle.includes('versionCode 48') || gradle.includes('versionCode 49') || gradle.includes('versionCode 50') || gradle.includes('versionCode 51') || gradle.includes('versionCode 52') || gradle.includes('versionCode 100') || gradle.includes('versionCode 101') || gradle.includes('versionCode 102') || gradle.includes('versionCode 103') || gradle.includes('versionCode 104') || gradle.includes('versionCode 105')) && (gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')));
+check('build.gradle: versionCode 38 / versionName 2.26.0 (v2.26.0-Pin)', (gradle.includes('versionCode 38') || gradle.includes('versionCode 39') || gradle.includes('versionCode 40') || gradle.includes('versionCode 41') || gradle.includes('versionCode 42') || gradle.includes('versionCode 43') || gradle.includes('versionCode 44') || gradle.includes('versionCode 45') || gradle.includes('versionCode 46') || gradle.includes('versionCode 47') || gradle.includes('versionCode 48') || gradle.includes('versionCode 49') || gradle.includes('versionCode 50') || gradle.includes('versionCode 51') || gradle.includes('versionCode 52') || gradle.includes('versionCode 100') || gradle.includes('versionCode 101') || gradle.includes('versionCode 102') || gradle.includes('versionCode 103') || gradle.includes('versionCode 104') || gradle.includes('versionCode 105') || gradle.includes('versionCode 106')) && (gradle.includes('applicationId "com.lertrain.app"') || gradle.includes('applicationId "de.feld.app"')));
 check('README/Doku: Datensatz dokumentiert', readFileSync(join(HERE, '..', 'dataset', 'README.md'), 'utf8').includes('Kommando-Spur'));
 
 console.log(`\n═══ ERGEBNIS: ${pass} OK · ${fails} FEHLER ═══`);
