@@ -399,17 +399,50 @@ export const EP_MODES = {
   npu: [{ name: 'webnn', deviceType: 'npu' }, { name: 'webnn', deviceType: 'gpu' }, 'webgpu', 'wasm'],
 };
 
-/** ONNX-Session mit EP-Fallback-Kette. */
-export async function createSession(onnxBytes, epMode = 'auto', ort = null) {
+/**
+ * v3.4.0: LATENZ-PROBE — Winz-Netze (diese Policy) laufen auf NPU/GPU oft
+ * LANGSAMER als auf der CPU, weil der Dispatch-Roundtrip je Aufruf dominiert
+ * (WebNN/WebGPU: 10–60 ms je run() → Befehle kommen in Schüben = ruckartig,
+ * während die Physik weiterläuft). Deshalb: nach dem Session-Bau 2 Warm-ups
+ * (Kernel-Kompilierung/Allocator) + 3 gemessene Läufe → Median. Über Budget
+ * → nächster Provider der Kette. Liefert {ms} mit zurück.
+ */
+async function probeMs(session, ort, dim, runs = 3) {
+  const run1 = async () => {
+    const t0 = performance.now();
+    await session.run({ obs: new ort.Tensor('float32', new Float32Array(dim), [1, dim]) });
+    return performance.now() - t0;
+  };
+  await run1(); await run1(); // Warm-up: erstes run() kompiliert/allocationiert
+  const xs = [];
+  for (let i = 0; i < runs; i++) xs.push(await run1());
+  xs.sort((a, b) => a - b);
+  return xs[Math.floor(runs / 2)];
+}
+const epLabel = (ep) => (typeof ep === 'string' ? ep : ep.name + ':' + ep.deviceType);
+
+/**
+ * ONNX-Session mit EP-Fallback-Kette + LATENZ-AUSWAHL.
+ * @param opts { warmDim, budgetMs } — warmDim = Obs-Dimension (aktiviert die
+ *   Probe); budgetMs = Zielzeit je Inferenz (Default 8 ms, Regelzyklus 20 ms).
+ *   Trifft KEIN Provider das Budget, wird der SCHNELLESTE trotzdem geliefert.
+ */
+export async function createSession(onnxBytes, epMode = 'auto', ort = null, opts = {}) {
   ort = ort || (await loadOrt());
   const chain = EP_MODES[epMode] || EP_MODES.auto;
-  let lastErr = null;
+  const budgetMs = opts.budgetMs || 8;
+  const dim = opts.warmDim | 0;
+  let lastErr = null, lastOk = null;
   for (const ep of chain) {
     try {
       const session = await ort.InferenceSession.create(new Uint8Array(onnxBytes), { executionProviders: [ep], graphOptimizationLevel: 'all' });
-      return { session, ep: typeof ep === 'string' ? ep : ep.name + ':' + ep.deviceType, ort };
+      const ms = dim > 0 ? await probeMs(session, ort, dim) : -1;
+      const cand = { session, ep: epLabel(ep), ort, ms };
+      if (ms < 0 || ms <= budgetMs) return cand; // schnell genug (oder ungemessen)
+      lastOk = cand; // zu langsam — gemerkt, Kette weiterprobieren
     } catch (e) { lastErr = e; }
   }
+  if (lastOk) return lastOk; // alles über Budget → schnellster gefunden läuft trotzdem
   throw new Error('Kein Execution-Provider verfügbar: ' + (lastErr ? lastErr.message : ''));
 }
 

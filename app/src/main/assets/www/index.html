@@ -65,6 +65,16 @@
     <p class="hint">Erfolg steigt → Lernrate +, Rollout länger, σ kleiner. Erfolg fällt → Lernrate −, Rollout kürzer, σ größer. Begrenzt und gebremst; Werte stehen im HUD.</p>
   </div>
 
+  <div class="card">
+    <h3>STURZ-VERHALTEN <span class="dim">— was passiert beim Hinfallen</span></h3>
+    <div class="seg" id="fallSeg"></div>
+    <div class="rrow" id="fallWinRow"><label>Aufsteh-Fenster (s)</label>
+      <input id="fallWin" type="range" min="2" max="20" step="1" value="6">
+      <output id="fallWinVal">6</output>
+    </div>
+    <p class="hint">NEUSTART: Sturz beendet die Runde sofort — neue Lage, neues Glück (klassisch, schnelle Vielfalt). WEITERÜBEN: Die Runde läuft weiter — die Ente bekommt ein Aufsteh-Fenster, um sich selbst hochzuziehen. Längeres Anpassen pro Runde, Aufstehen wird mittrainiert (dafür Belohnung „Aufstehen“ &gt; 0 im Belohnungs-Tab). Gilt auch im POLICY-Betrieb: statt liegen zu bleiben, steht sie wieder auf.</p>
+  </div>
+
   <div class="card" id="layaSec">
     <h3>LAYA-ROUTER <span class="dim">— System 1, Stufe 3</span></h3>
     <div class="toggles">
@@ -220,6 +230,7 @@
       <button id="btnSelfTest" class="ghost">SELBSTTEST</button>
     </div>
     <div id="expState" class="hint"></div>
+    <p class="hint">Schreibt <b>feld-policy-fp32.onnx</b> (rohe ONNX-Datei) in den <b>Download-Ordner</b> des Handys — direkt verwendbar auf dem echten Roboter (onnxruntime, Python/C++/Java). Eingang „obs“: 1×74 fp32 (Rohtags, Layout 3·14 Gelenke + 8 Basis + 11 Kontakte + 13 Befehle: vx,vy,wz, skill 4, style 6), Ausgang „mu“: 1×14 fp32 (Gelenk-Sollwerte). „Norm einbauen“ = Eingang darf Rohtags sein, Normalisierung steckt im Graphen.</p>
   </div>
   <div class="card">
     <h3>AUSFÜHRUNG <span class="dim">CPU · GPU · NPU</span></h3>
@@ -236,7 +247,7 @@
       <button id="btnStopOrt">AUS</button>
     </div>
     <div id="epReal" class="hint"></div>
-    <p class="hint">Samsung S26 Ultra: NPU über WebNN (wenn der WebView es anbietet), GPU über WebGPU, CPU immer. Fallback-Kette automatisch.</p>
+    <p class="hint">Samsung S26 Ultra: NPU über WebNN (wenn der WebView es anbietet), GPU über WebGPU, CPU immer. Fallback-Kette automatisch. v3.4.0: Jede Aktivierung MISST die Inferenz-Zeit (Warm-up + Median) — Provider, die für dieses Winz-Netz zu träge sind (NPU/GPU-Dispatch &gt; 8 ms), werden automatisch übersprungen. Die gemessenen ms stehen bei „Aktiv“.</p>
   </div>
   <div class="card">
     <h3>SPEICHER <span class="dim">Autosave · Import · Export</span></h3>

@@ -90,6 +90,45 @@ export function exportFile(obj, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+// ── v3.4.0: BYTES exportieren — Download-Ordner (Android) ──
+// Die Android-WebView führt KEINE <a download>-Klicks aus (blob:-URLs
+// landen im Nichts) — deshalb schreibt der native Weg über
+// TrainrobotBridge.saveFile (MediaStore/Downloads, MainActivity).
+// Der Browser-Fallback bleibt für Desktop-Tests.
+function u8ToB64(u8) {
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+/**
+ * Rohe Bytes als Datei speichern.
+ * @returns {'download'|'browser'} 'download' = im Download-Ordner des Handys.
+ * @throws wenn die Brücke da ist, aber das Schreiben fehlschlug.
+ */
+export function exportBytes(name, u8, mime) {
+  const B = (typeof window !== 'undefined') ? window.TrainrobotBridge : null;
+  if (B && typeof B.saveFile === 'function') {
+    const ok = B.saveFile(name, u8ToB64(u8), mime || 'application/octet-stream');
+    if (!ok) throw new Error('Android-Speicherung fehlgeschlagen (Download-Ordner)');
+    return 'download';
+  }
+  const blob = new Blob([u8], { type: mime || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return 'browser';
+}
+/** JSON-Objekt als Datei (gleicher Weg wie exportBytes). */
+export function exportJSON(name, obj) {
+  return exportBytes(name, new TextEncoder().encode(JSON.stringify(obj)), 'application/json');
+}
+
 /** Datei-Import (Picker) → Promise<Object>. */
 export function importFile() {
   return new Promise((resolve, reject) => {

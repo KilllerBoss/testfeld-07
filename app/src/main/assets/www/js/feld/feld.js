@@ -44,6 +44,8 @@ const S = {
   g0: null, gDirect: true, groundTilt: { x: 0, y: 0 }, // Schwerkraft-Snapshot + Modus
   phone: null, phoneSensor: null, _phSt: null, // v3.2.0: Handy-Gyroskop
   cmdFold: false,           // v3.1.0: Konsole im FELD ausgeklappt?
+  fallMode: 'reset',        // v3.4.0: Sturz-Verhalten 'reset' (Neustart) | 'ueben' (Weiterüben)
+  fallWinS: 6,              // v3.4.0: Aufsteh-Fenster in Sekunden
   chartMax: 1,
   booted: false,
 };
@@ -93,6 +95,7 @@ async function boot() {
     // Task (Soft-MoE-Task des Ducks) + cfg-Rückverweis (Stufen-Glättung)
     S.task = cfg.task(cfg);
     S.task.cfg = cfg;
+    applyFallMode(); // v3.4.0: Sturz-Verhalten (recoverOnFall + Fenster) am Task
     S.task.reset(new RNG(4242), S.sim);
     log('Task bereit: ' + S.task.obsDim + ' Obs × ' + S.task.actDim + ' Aktionen · ' + S.task.expertNames.join(' · '), 'ok');
     // Trainer + Speicherstand
@@ -234,6 +237,9 @@ function liveTick(dt) {
   while (S._liveAcc >= CYC && guard < 15) {
     S._liveAcc -= CYC;
     guard++;
+    // v3.4.0: Blend-Basis VOR JEDEM Zyklus — bei Aufholzyklen (2+ pro Frame)
+    // war die Basis mehrere Zyklen alt → gestreckte Sprünge im Bild (ruckartig).
+    S.sim.snapPrev(); // v3.4.0: Basis = Zustand vor DIESEM Zyklus
     liveCycle();
     if (performance.now() - t0 > 9) break; // Aufholbudget: Render nie würgen
   }
@@ -496,6 +502,7 @@ function sessionBlob() {
     schubser: S.schubser ? S.schubser.toJSON() : null, // v3.2.0: AutoSchubser im Autosave
     ground: S.ground ? S.ground.toJSON() : null,       // v3.2.0: beweglicher Boden
     phone: S.phone ? S.phone.toJSON() : null,          // v3.2.0: Handy-Sensor
+    fall: { mode: S.fallMode || 'reset', winS: S.fallWinS || 6 }, // v3.4.0: Sturz-Verhalten
     cmdFold: S.cmdFold,
     laya: S.laya ? S.laya.toJSON() : null,
     layaActive: S.layaActive,
@@ -553,6 +560,14 @@ function applySession(sess, opts = {}) {
       S.phone.sanitize();
       buildPhoneUI();
     }
+    // v3.4.0: Sturz-Verhalten restaurieren
+    if (sess.fall) {
+      S.fallMode = sess.fall.mode === 'ueben' ? 'ueben' : 'reset';
+      const ws = parseFloat(sess.fall.winS);
+      if (Number.isFinite(ws)) S.fallWinS = Math.max(1, Math.min(30, ws));
+      applyFallMode();
+      buildFallUI();
+    }
     if (!opts.quiet) log('Speicherstand übernommen', 'ok');
     return true;
   } catch (e) {
@@ -593,6 +608,51 @@ function setMode(m) {
   $('btnMode').textContent = m === 'pause' ? '▶ START' : '⏸ PAUSE';
 }
 
+// ── v3.4.0: STURZ-VERHALTEN (Train-Tab) ───────────────────
+// 'reset'  = Sturz beendet die Episode SOFORT — neue Lage, neue Runde
+//            (klassisches Training, schnelle Vielfalt).
+// 'ueben'  = Episode läuft WEITER — nach dem Sturz bekommt die Ente ein
+//            Aufsteh-Fenster (recoverOnFall + recStepsMax), um sich selbst
+//            hochzuziehen. Längeres Anpassen PRO RUNDE + Aufstehen wird
+//            mittrainiert (Belohnung „Aufstehen“). Gilt auch im
+//            POLICY-Betrieb: statt liegen zu bleiben, steht sie auf.
+const FALL_MODES = [
+  { id: 'reset', label: 'NEUSTART' },
+  { id: 'ueben', label: 'WEITERÜBEN' },
+];
+function applyFallMode() {
+  if (!S.task) return;
+  S.task.recoverOnFall = S.fallMode === 'ueben';
+  // Fenster: 50 Regelzyklen/s, 1–30 s hart geklemmt (Slider 2–20 s)
+  S.task.recStepsMax = Math.max(50, Math.min(1500, Math.round((S.fallWinS || 6) * 50)));
+}
+function setFallMode(m) {
+  S.fallMode = m === 'ueben' ? 'ueben' : 'reset';
+  applyFallMode();
+  S.dirty = true;
+  buildFallUI();
+  log('Sturz-Verhalten: ' + (S.fallMode === 'ueben' ? 'WEITERÜBEN (Aufstehen lernen)' : 'NEUSTART (Sturz beendet die Runde)'), 'ok');
+}
+function buildFallUI() {
+  const host = $('fallSeg');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const m of FALL_MODES) {
+    const b = document.createElement('button');
+    b.textContent = m.label;
+    b.dataset.mode = m.id;
+    if ((S.fallMode || 'reset') === m.id) b.classList.add('on');
+    b.addEventListener('click', () => setFallMode(m.id));
+    host.appendChild(b);
+  }
+  const winRow = $('fallWinRow');
+  if (winRow) winRow.classList.toggle('dimrow', S.fallMode !== 'ueben');
+  const win = $('fallWin');
+  if (win) win.value = S.fallWinS || 6;
+  const out = $('fallWinVal');
+  if (out) out.textContent = String(S.fallWinS || 6);
+}
+
 // ── UI: Training (3 Stufen) ────────────────────────────────
 function wireTrainUI() {
   document.querySelectorAll('.stage-btn').forEach((b) => {
@@ -602,6 +662,15 @@ function wireTrainUI() {
   bud.value = S.budget;
   bud.addEventListener('input', () => { S.budget = parseInt(bud.value, 10) || 30; $('budgetVal').textContent = S.budget; });
   $('budgetVal').textContent = S.budget;
+  // v3.4.0: Sturz-Verhalten (NEUSTART / WEITERÜBEN + Fenster)
+  buildFallUI();
+  const fw = $('fallWin');
+  if (fw) fw.addEventListener('input', () => {
+    S.fallWinS = parseFloat(fw.value) || 6;
+    $('fallWinVal').textContent = String(S.fallWinS);
+    applyFallMode();
+    S.dirty = true;
+  });
   // Tricks-Schalter
   const tk = $('tricksOn');
   tk.checked = S.trainer.tricks.on;
@@ -1014,13 +1083,19 @@ function wireModelUI() {
       const norm = $('expNorm').checked
         ? { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) }
         : null;
-      const { bytes, ops, params, outputs } = moeToOnnx(S.trainer.ppo.net, {
+      const { bytes, ops, params } = moeToOnnx(S.trainer.ppo.net, {
         format: fmt, norm, valueHead: $('expValue').checked,
       });
-      store.exportFile({ app: APP_NAME, fmt, ops, params, outputs, onnx: Array.from(bytes) },
-        'feld-policy-' + fmt + '.onnx.json');
-      $('expState').textContent = 'Export OK: ' + ops + ' Knoten, ' + params + ' Parameter (' + fmt + ')';
-      log('ONNX-Export (' + fmt + '): ' + bytes.length + ' Bytes', 'ok');
+      // v3.4.0: ECHTE .onnx-Datei (rohes Protobuf) in den Download-Ordner —
+      // über die Android-Brücke (TrainrobotBridge.saveFile → MediaStore).
+      // Vorher: <a download>-Klick mit JSON-Wrapper (.onnx.json) — lief im
+      // WebView nie und war für echte Roboter unlesbar.
+      const name = 'feld-policy-' + fmt + '.onnx';
+      const how = store.exportBytes(name, bytes, 'application/octet-stream');
+      $('expState').textContent = 'Export OK: ' + name + ' · ' + (bytes.length / 1024).toFixed(0) + ' KB · ' +
+        ops + ' Knoten, ' + params + ' Parameter (' + fmt + ')' +
+        (how === 'download' ? ' → Ordner Download' : ' → Browser-Download');
+      log('ONNX-Export (' + fmt + '): ' + name + ', ' + bytes.length + ' Bytes → ' + (how === 'download' ? 'Download-Ordner' : 'Browser'), 'ok');
     } catch (e) {
       $('expState').textContent = 'Export-Fehler: ' + e.message;
     }
@@ -1040,11 +1115,24 @@ function wireModelUI() {
       $('expState').textContent = 'Erzeuge Session …';
       const norm = { mean: Array.from(S.trainer.ppo.norm.mean), std: Array.from(S.trainer.ppo.norm.stds()) };
       const { bytes } = moeToOnnx(S.trainer.ppo.net, { format: 'fp32', norm, valueHead: false });
-      const { session, ep, ort } = await createSession(bytes, $('epSel').value);
+      // v3.4.0: Latenz-Probe (Warm-up + Median, Budget 8 ms) — trägele
+      // NPU/GPU-Provider werden automatisch übersprungen (ruckartige
+      // Befehle in Schüben), der schnellste Provider gewinnt.
+      const D = S.task.obsDim;
+      const warm = new Float32Array(D);
+      warm[D - 13 + 3] = 1; // skill balance
+      warm[D - 13 + 7] = 1; // style neutral
+      const { session, ep, ort, ms } = await createSession(bytes, $('epSel').value, null, { warmDim: D, budgetMs: 8 });
       S.ortInfer = session;
       S._ortT = ort.Tensor;
-      $('epReal').textContent = 'Aktiv: ' + ep;
-      $('expState').textContent = 'ONNX-Inferenz aktiv (' + ep + ')';
+      // v3.4.0: Startbefehl aus dem Warm-up (keine Null-Phase beim ersten Start)
+      try {
+        const out = await session.run({ obs: new ort.Tensor('float32', warm, [1, D]) });
+        S._ortMu = Float32Array.from(out.mu.data);
+      } catch (e) { /* Null-Start genügt */ }
+      S._liveAcc = 0; // frischer Takt
+      $('epReal').textContent = 'Aktiv: ' + ep + (ms > 0 ? ' · ~' + ms.toFixed(1) + ' ms/Inferenz' : '');
+      $('expState').textContent = 'ONNX-Inferenz aktiv (' + ep + (ms > 0 ? ', ~' + ms.toFixed(1) + ' ms' : '') + ')';
     } catch (e) {
       $('expState').textContent = 'Session-Fehler: ' + e.message;
     }
@@ -1056,8 +1144,9 @@ function wireModelUI() {
   });
   // Speicher
   $('btnExportJson').addEventListener('click', () => {
-    store.exportFile(sessionBlob());
-    $('saveState').textContent = 'Exportiert';
+    // v3.4.0: auch JSON über die Brücke (WebView führt kein <a download> aus)
+    const how = store.exportJSON('feld-sitzung-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json', sessionBlob());
+    $('saveState').textContent = 'Exportiert' + (how === 'download' ? ' → Download-Ordner' : '');
   });
   $('btnImportJson').addEventListener('click', async () => {
     try {

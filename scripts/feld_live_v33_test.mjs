@@ -30,9 +30,9 @@ const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.3.0 / 103');
-ok(vjs.includes("export const VERSION = '3.3.0';"), 'version.js VERSION = 3.3.0');
-ok(vjs.includes('export const VERSION_CODE = 103;'), 'version.js VERSION_CODE = 103');
-ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"'), 'build.gradle 103 / 3.3.0');
+ok(vjs.includes("export const VERSION = '3.3.0';") || vjs.includes("export const VERSION = '3.4.0';"), 'version.js VERSION = 3.3.0/3.4.0');
+ok(vjs.includes('export const VERSION_CODE = 103;') || vjs.includes('export const VERSION_CODE = 104;'), 'version.js VERSION_CODE = 103/104');
+ok(gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"')), 'build.gradle 103 / 3.3.0');
 
 // ════════════════ 2 · ECHTZEIT-LOOP ════════════════
 sec('LIVE-LOOP — wanduhrgetrieben');
