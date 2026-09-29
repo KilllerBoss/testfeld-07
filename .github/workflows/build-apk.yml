@@ -47,7 +47,7 @@ jobs:
           test -f app/src/main/assets/www/js/feld/feld.js
           test -f app/src/main/assets/www/js/feld/moe.js
           test -f app/src/main/assets/www/js/feld/onnxexport.js
-          grep -q "3.0.0" app/src/main/assets/www/js/feld/version.js
+          grep -qE "3\.(0\.0|1\.0)" app/src/main/assets/www/js/feld/version.js  # OR-Kette (v3.0.0/v3.1.0)
           echo "Feld-App OK"
 
       - name: Keystore-Prüfung (stabile Signatur, kein Fallback)
