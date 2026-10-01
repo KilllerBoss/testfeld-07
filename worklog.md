@@ -1389,3 +1389,26 @@ Stage Summary:
 - Signatur verifiziert: 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4
 
 Nachtrag Task 67 (Push-Schutz): GitHub Push Protection blockte den Push (GCP-API-Key in gemini.js + feld_v370_test). Lösung: Schlüssel NIE im Repo — (1) Actions-Repo-Secret GEMINI_API_KEY via REST-API gesetzt (libsodium sealed box, scripts/put_gemini_secret.cjs, HTTP 201), (2) neuer Workflow-Step „KI-Schlüssel einbacken“ schreibt das Secret beim CI-Build in die gitignorierte js/feld/aiconfig.js (export const EMBEDDED_AI_KEY), (3) gemini.js importiert aiconfig.js dynamisch (TLA try/catch) — ohne Datei gilt der in der Karte eingetippte Schlüssel. Lokal: aiconfig.js mit Key erzeugt (untracked), APK neu gebaut (107/3.7.0, Signatur 1c0422b9… EXAKT, Key im APK verifiziert). download/feld.apk sha256 4fb6c420c405f637d80d635cf00ee31124003f2ae1a8720e4c458c5428d643ac. feld_v370 jetzt 83 Checks.
+
+---
+Task ID: 67-Release
+Agent: Super Z (Hauptagent)
+Task: v3.7.0 Release abschließen (Push-Schutz-Umweg, CI, GitHub-Release)
+
+Work Log:
+- Push wurde von GitHub PUSH PROTECTION blockiert (GCP-API-Key in gemini.js/feld_v370_test) → Schlüssel komplett aus dem Git-Pfad entfernt:
+  · Actions-Repo-Secret GEMINI_API_KEY via REST gesetzt (scripts/put_gemini_secret.cjs, libsodium sealed box via tweetnacl-sealedbox-js, HTTP 201)
+  · Workflow-Step „KI-Schlüssel einbacken“ schreibt das Secret beim Build in die gitignorierte js/feld/aiconfig.js (leer erlaubt → App fragt in der Karte)
+  · gemini.js: dynamischer TLA-Import von aiconfig.js (try/catch), KEIN literaler Schlüssel mehr im Repo (rg-Beweis), Tests prüfen die Struktur
+  · Commit neu erstellt (701479b statt fb1f663 — der Key-Commit wurde NIE gepusht), Tag v3.7.0 neu gesetzt
+- Push: main e5f88cc→701479b + Tag v3.7.0 (Token nur inline, nicht persistiert)
+- CI: main-Run 36909384726 + Tag-Run 36909406126 BEIDE GRÜN — inkl. neuem Key-Injektions-Step
+- Release AUTOMATISCH durch den Workflow: Release v3.7.0 (id 401254848), Asset feld.apk 28.211.450 bytes (asset id 603904647, state=uploaded)
+- Integrität: Asset via API (octet-stream) geladen → aapt de.feld.app 107/3.7.0 ✓, apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 EXAKT ✓, aiconfig.js MIT GEMINI-Schlüssel im APK ✓ (Secret-Flow Ende-zu-Ende bewiesen)
+- Anonymer Browser-Download: HTTP 200 ✓
+
+Stage Summary:
+- Release v3.7.0 LIVE: https://github.com/KilllerBoss/testfeld-07/releases/tag/v3.7.0
+- Download (anonym verifiziert): https://github.com/KilllerBoss/testfeld-07/releases/download/v3.7.0/feld.apk
+- Lokales APK: download/feld.apk (107/3.7.0), sha256 4fb6c420c405f637d80d635cf00ee31124003f2ae1a8720e4c458c5428d643ac
+- Gemini-Schlüssel jetzt als Repo-Secret GEMINI_API_KEY — beim nächsten Key-Wechsel nur das Secret tauschen (put_gemini_secret.cjs), kein Code-Commit nötig
