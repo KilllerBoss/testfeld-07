@@ -34,6 +34,29 @@
 <section class="page" id="pgTrain">
   <header class="ph">TRAINING <span class="dim">Soft-MoE · 3 Stufen</span></header>
   <div class="card">
+    <h3>KI-SETUP <span class="dim">Gemini stellt alles ein</span></h3>
+    <div class="rrow"><label>Wunsch</label>
+      <input id="gemWish" class="select" type="text" placeholder="z. B. schneller drehen, stärkere Schubser, nach Sturz weiter üben">
+    </div>
+    <div class="rrow"><label>Modell</label>
+      <select id="gemModel" class="select">
+        <option value="auto">Auto (neuestes Flash)</option>
+        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+        <option value="gemini-3-flash">gemini-3-flash</option>
+        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash (alte Schlüssel)</option>
+      </select>
+    </div>
+    <div class="rrow"><label>Schlüssel</label>
+      <input id="gemKey" class="select" type="password" autocomplete="off" placeholder="Google-AI-Studio-Schlüssel">
+    </div>
+    <div class="row">
+      <button id="btnGemGo" class="primary">ALLES EINSTELLEN</button>
+    </div>
+    <div id="gemState" class="hint"></div>
+    <p class="hint">Wunsch in normalem Deutsch tippen (leer = „stabilem Gehen optimieren“) → Gemini bekommt die komplette Konfiguration + alle erlaubten Regler mit Bereichen und schlägt ein passendes Setup vor. Jede Zahl wird von der App GEKLEMMT (nur sichere Bereiche), Schalter/Auswahlen werden hart validiert — Unsinn wird still übersprungen. Wirkung sofort (Belohnung, Schubser, Boden, Handy, Sturz-Verhalten, Budget, Hyperparameter). Der Gemini-Schlüssel ist im APK eingebaut; wer einen eigenen nutzt, trägt ihn hier ein (wird gespeichert). Die KI braucht einmalig Internet, der Rest der App bleibt offline.</p>
+  </div>
+  <div class="card">
     <div class="stages">
       <button class="stage-btn" data-stage="1"><b>1</b><span>Experten<br>trainieren</span></button>
       <button class="stage-btn" data-stage="2"><b>2</b><span>Router trainieren<br><i>Experten frieren</i></span></button>
@@ -248,6 +271,15 @@
     </div>
     <div id="epReal" class="hint"></div>
     <p class="hint">Samsung S26 Ultra: NPU über WebNN (wenn der WebView es anbietet), GPU über WebGPU, CPU immer. Fallback-Kette automatisch. v3.4.0: Jede Aktivierung MISST die Inferenz-Zeit (Warm-up + Median) — Provider, die für dieses Winz-Netz zu träge sind (NPU/GPU-Dispatch &gt; 8 ms), werden automatisch übersprungen. Die gemessenen ms stehen bei „Aktiv“.</p>
+  </div>
+  <div class="card">
+    <h3>IMPORT <span class="dim">.onnx laden &amp; testen</span></h3>
+    <div class="row">
+      <button id="btnImportOnnx" class="primary">MODELL IMPORTIEREN (.ONNX)</button>
+      <button id="btnTestOnnx" class="ghost">ERNEUT TESTEN</button>
+    </div>
+    <div id="impState" class="hint"></div>
+    <p class="hint">Lädt eine .onnx-Datei direkt in die App — eigene Exports aus dem Download-Ordner wie die Originale von Pollen Robotics. Die App liest Ein-/Ausgang (Name + Dims), führt das Modell ECHT aus (Null-Obs-Probe, gemessene ms) und zeigt das Urteil hier an. Passt das Modell zum Task (obs 1×61 → actions 1×14, wie beim echten Duck), fährt es SOFORT den POLICY-Betrieb — andernfalls gibt es eine klare Begründung (z. B. „Modell will obs 74, die App liefert 61“).</p>
   </div>
   <div class="card">
     <h3>SPEICHER <span class="dim">Autosave · Import · Export</span></h3>

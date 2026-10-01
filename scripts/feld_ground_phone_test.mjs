@@ -38,7 +38,7 @@ const DEG = Math.PI / 180;
 
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
-ok((VERSION === '3.2.0' && VERSION_CODE === 102) || (VERSION === '3.3.0' && VERSION_CODE === 103) || (((VERSION === '3.4.0' && VERSION_CODE === 104) || ((VERSION === '3.5.0' && VERSION_CODE === 105) || (VERSION === '3.6.0' && VERSION_CODE === 106))) || ((VERSION === '3.5.0' && VERSION_CODE === 105) || (VERSION === '3.6.0' && VERSION_CODE === 106))), '3.2.0/102, 3.3.0/103, 3.4.0/104 oder 3.5.0/105 (Schubser + Boden + Handy in EINEM Release)');
+ok((VERSION === '3.2.0' && VERSION_CODE === 102) || (VERSION === '3.3.0' && VERSION_CODE === 103) || (((VERSION === '3.4.0' && VERSION_CODE === 104) || ((VERSION === '3.5.0' && VERSION_CODE === 105) || ((VERSION === '3.6.0' && VERSION_CODE === 106) || (VERSION === '3.7.0' && VERSION_CODE === 107)))) || ((VERSION === '3.5.0' && VERSION_CODE === 105) || ((VERSION === '3.6.0' && VERSION_CODE === 106) || (VERSION === '3.7.0' && VERSION_CODE === 107)))), '3.2.0/102, 3.3.0/103, 3.4.0/104 oder 3.5.0/105 (Schubser + Boden + Handy in EINEM Release)');
 
 // ════════════════ 2 · GROUNDMODEL ════════════════
 sec('GROUNDMODEL — Regler (an/aus · Muster · wie stark · wie schnell)');

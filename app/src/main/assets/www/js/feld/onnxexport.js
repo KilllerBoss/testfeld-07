@@ -644,3 +644,102 @@ export async function selfTest(net, epMode = 'cpu', opts = {}) {
   }
   return { maxDiff: mx, meanDiff: sum / onnxMu.length, n: onnxMu.length };
 }
+
+// ═══════════════════════════════════════════════════════════
+// v3.7.0 ONNX-IMPORT — fremde Modelle laden + testen + fahren
+//
+// Nutzer: „Mache das ich onnx Modelle importieren kann und testen."
+// Die App akzeptiert JEDE .onnx-Datei (eigene Exports wie die Originale
+// von Pollen Robotics). Ablauf:
+//   1) Session über die gewählte EP-Kette bauen (wie createSession)
+//   2) Ein-/Ausgang NAMEN + DIMS aus der Session-Metadaten lesen —
+//     ort-web UND onnxruntime (Node/Tests) liefern inputMetadata:
+//     { dims: [1, D] }. Symbolische Dims ('N', null) werden übersprungen.
+//   3) Inferenz-TEST: Null-Obs in der MODELL-Dimension → Ausgang lesen.
+//      - Kennt die Laufzeit die Dims nicht (alte EXOTEN), wird die Dim
+//        aus der ORT-Fehlermeldung gelernt („Got: 74 Expected: 61“ —
+//        genau die Meldung, die der Nutzer beim Export-Bug sah).
+//   4) VERDICT: obs/act-Dims == Task (61/14) → Live-Betrieb möglich
+//      (fremde Dims → nur Test, klare deutsche Meldung)
+// ═══════════════════════════════════════════════════════════
+
+/** Erste „echte“ Dim aus Tensor-Metadaten (letzte finite Zahl > 1). */
+export function modelDim(meta) {
+  try {
+    const dims = meta && meta.dims;
+    if (!dims || !dims.length) return -1;
+    for (let i = dims.length - 1; i >= 0; i--) {
+      const d = Number(dims[i]);
+      if (Number.isFinite(d) && d > 1) return d | 0;
+    }
+  } catch (e) { /* egal */ }
+  return -1;
+}
+
+/** Erwartete Dim aus einer ORT-Dims-Fehlermeldung lernen (Fallback). */
+export function dimFromError(e) {
+  const m = /Expected:\s*(\d+)/.exec(e && e.message || '');
+  return m ? parseInt(m[1], 10) : -1;
+}
+
+/**
+ * IMPORT-Session: EP-Kette (wie createSession) + Dim-Ermittlung am
+ * FERTIGEN Modell + Null-Obs-Probe. opts.chain überschreibt die Kette
+ * (Tests mit onnxruntime-Node: ['cpu']).
+ * @returns { session, ep, ort, ms, inName, outName, obsDim, actDim, sample, dims }
+ */
+export async function importSession(onnxBytes, epMode = 'auto', ort = null, opts = {}) {
+  ort = ort || (await loadOrt());
+  const chain = opts.chain || EP_MODES[epMode] || EP_MODES.auto;
+  const budgetMs = opts.budgetMs || 8;
+  let lastErr = null, lastOk = null;
+  for (const ep of chain) {
+    try {
+      const session = await ort.InferenceSession.create(new Uint8Array(onnxBytes), { executionProviders: [ep], graphOptimizationLevel: 'all' });
+      const info = await inspectOnnx(session, ort, opts.startDim | 0);
+      const cand = { session, ep: epLabel(ep), ort, ms: info.ms, obsDim: info.obsDim, actDim: info.actDim };
+      if (info.ms < 0 || info.ms <= budgetMs) return Object.assign(cand, info);
+      lastOk = Object.assign(cand, info); // zu träge — weiterprobieren
+    } catch (e) { lastErr = e; }
+  }
+  if (lastOk) return lastOk;
+  throw new Error('Kein Execution-Provider verfügbar: ' + (lastErr ? lastErr.message : ''));
+}
+
+/**
+ * IMPORT-Test: Null-Obs in der MODELL-Dimension durch das Netz —
+ * liefert IO-Namen, Dims, Latenz und den Ausgangs-Vektor.
+ * @param startDim erste Versuchs-Dim, wenn die Metadaten nichts hergeben
+ */
+export async function inspectOnnx(session, ort, startDim = 0) {
+  const inName = session.inputNames && session.inputNames[0];
+  const outName = session.outputNames && session.outputNames[0];
+  if (!inName || !outName) throw new Error('Modell hat keinen Ein-/Ausgang');
+  let obsDim = modelDim(session.inputMetadata && session.inputMetadata[0]);
+  if (obsDim < 0) obsDim = startDim > 1 ? startDim : 61; // Feld-Default
+  const actDim = modelDim(session.outputMetadata && session.outputMetadata[0]);
+  // Probe: bis zu 3 Versuche — lernt die Dim notfalls aus der Fehlermeldung
+  let ms = -1, sample = null, dims = null, tried = obsDim;
+  for (let a = 0; a < 3; a++) {
+    try {
+      const t0 = performance.now();
+      const out = await session.run({ [inName]: new ort.Tensor('float32', new Float32Array(tried), [1, tried]) });
+      ms = performance.now() - t0;
+      const o = out[outName];
+      sample = Float32Array.from(o.data);
+      dims = o.dims ? Array.from(o.dims, Number) : null;
+      obsDim = tried;
+      break;
+    } catch (e) {
+      const d = dimFromError(e);
+      if (d > 1 && d !== tried) { tried = d; continue; }
+      throw new Error('Inferenz-Test fehlgeschlagen: ' + e.message);
+    }
+  }
+  if (!sample) throw new Error('Inferenz-Test fehlgeschlagen: keine Ausgabe');
+  return {
+    inName, outName, obsDim,
+    actDim: actDim > 0 ? actDim : sample.length,
+    ms, sample, dims,
+  };
+}

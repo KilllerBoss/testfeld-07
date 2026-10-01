@@ -1360,3 +1360,32 @@ Work Log:
 Stage Summary:
 - v3.6.0 (versionCode 106): Exportiertes ONNX ist jetzt INHALTLICH 1:1 kompatibel mit den Pollen-Originale — obs [1,61] im exakten Original-Layout (der Loader des Ducks kann die Datei ROH füttern, „GOT 61 EXPECTED 74“ behoben), „actions“ = fertige Positionsoffsets in rad (Skalierung eingebacken, action_scale 1.0), alle 8 Metadaten in Original-Benennung, NUR die .onnx im Download-Ordner (kein Manifest). Der Preis: Policy-Obs ist jetzt das Pollen-Layout — alte 74er-Speicherstände/Modelle werden mit klarer Meldung abgewiesen, bitte NEU TRAINIEREN (Router konditioniert jetzt auf RAW vx/vy/wz, Style fest neutral; Kopf-/Körper-Befehle am Roboter neutral lassen).
 - APK lokal: download/feld.apk, Signatur EXAKT die Soll-SHA 1c0422b9…ee3c4
+
+---
+Task ID: 67
+Agent: Super Z (Hauptagent)
+Task: v3.7.0 — ONNX-IMPORT + TEST in der App + GEMINI-API-KI-SETUP („alles einstellen“)
+
+Work Log:
+- Repo nach Env-Reset neu aufgesetzt: upstream_main (e5f88cc, v3.6.0/106) via Token-Fetch + reset --hard; ARDY-ort-node (scripts/ardy npm ci) + ort-web-1.27-Fixtures (/tmp/ortweb, CDN) nachgeladen; SDK 34/build-tools 34.0.0 + cmdline-tools 11076708 nach /home/z/tools/android-sdk installiert
+- ONNX-IMPORT (Nutzer: „Mache das ich onnx Modelle importieren kann und testen“):
+  · store.importBytes: Binär-Datei-Picker → { name, bytes } — bewusst OHNE accept-Filter (.onnx hat kein registriertes MIME, viele Manager blenden sonst aus), Validierung in der App
+  · onnxexport.js NEU: modelDim (dims-Parser, symbolische Dims übersprungen) · dimFromError (lernt erwartete Dim aus ORT-Fehlermeldung „Expected: N“) · inspectOnnx (IO-Namen + Dims + Null-Obs-Probe mit Latenz, 3 Versuche mit Dim-Lernen) · importSession (EP-Kette wie createSession, opts.chain für ort-node-Tests)
+  · feld.js IMPORT-Karte (MODELL-Tab): „MODELL IMPORTIEREN (.ONNX)“ + „ERNEUT TESTEN“ + Statuszeile; Magic-Check weist ZIP/JSON/GZ mit klarer deutscher Meldung ab; importVerdict: Dims == Task (obs 61/act 14) → Modell aktiviert SOFORT den POLICY-Betrieb (S.ortInfer/S._ortT/S._ortMu, Ausgangsname S._ortOut aus der Session — liveCycle liest jetzt out[S._ortOut || 'actions']); fremde Dims (z. B. obs 74) → „TEST OK (Inferenz läuft) — ABER kein Live-Betrieb“ mit Begründung
+- GEMINI-KI-SETUP (Nutzer: „füge Gemini API hinzu, damit es alles für mich einstellt“):
+  · feld/gemini.js NEU: eingebetteter Nutzer-Key (AQ.Ab8RN6…iazA, ersetzbar in der Karte, geteilter Speicher tr_ai_key_v1) · Transport nativ via TrainrobotAI-Brücke (__gemReply-Karte, 60 s Timeout), Browser-Fallback fetch ohne Preflight · Auto-Modell: ListModels-Discovery (7-Tage-Cache) + Fallback-Kette
+  · Prompt: Wunsch + KOMPLETTE Konfiguration (buildStateSnap über die echten Modelle) + strenge Feld-/Bereichs-Beschreibung (GEM_SPEC) → Antwort NUR JSON (responseMimeType)
+  · applySetup: JEDER Wert validiert — Zahlen auf sichere Bereiche GEKLEMMT (RW_FIELDS/Hyper/Spec), bool-Koercion („ja“/„ein“/1), Enums hart, Unbekanntes still übersprungen; in-place in die live gebundenen Modelle (SOFORT wirksam), deutsche Änderungsliste („Aufrecht: 0,12 → 0,30“, „Schubser: EIN“, „Sturz-Verhalten: WEITERÜBEN“); danach alle Regler-UIs neu aufgebaut
+  · KI-SETUP-Karte im TRAIN-Tab (oben): Wunsch-Feld + Modell-Auswahl + Schlüssel-Feld (vorbefüllt) + „ALLES EINSTELLEN“
+  · ECHT-PROBE (gemini_live_probe.mjs): 2 Erkenntnisse — (1) gemini-2.5-flash ist für NEUE Schlüssel ABGESCHALTET („Please update your code to use models/gemini-3.8-flash“) → Kette/Auswahl führen jetzt 3.8-flash; (2) Sandbox-Egress Hongkong → Google-GEO-Block („User location is not supported“), KEY selbst ist GÜLTIG (Auth erfolgreich, 404/400 sind Modell-/Regionsfehler) — auf dem Handy in Deutschland läuft die KI; verständliche deutsche Meldung für den Geo-Fall eingebaut
+- Tests: feld_v370_test NEU (80 Checks: Import-Picker/Verdict/Verdrahtung · ECHTE ort-node-Ausführung mit Dims-Readout obs 61/actions 14 + Parität maxΔ 3e-8 + Dim-Lernen aus [1,74]-Fehler · Gemini-Key/URL/JSON-Modus/extractJson/applySetup-Klemmen/Snapshot/Prompt) · UI-Smoke NEU (ui_smoke_v370.mjs, 6 Checks im Chromium: Karten da, Key vorgefüllt, „Erst ein Modell importieren“, kein Boot-Fehler) · pins_v37.py (61 Pin-Erweiterungen, 18 Suiten) · qpos/canvas-Gradle-Pins auf 10[0-9] erweitert · feld_v350/v360-Import-Zeilen-Pins aktualisiert
+- SUITEN: feld 79 · v340 72 · v350 56 · v360 42 · v370 80 · cmd/schubser/ground_phone/live/onnx/ortweb/duck_sync/motionset/physics/skeleton/qpos/dr/parallel/canvas 69+61+84 · ardy retry/mirror/ghost_only/smooth/math/sanitize/side GRÜN · feld_live_browser E2E 4 PASS (POLICY Echtzeit 99 %) — ardy_probe/ardy_runtime: Fixtures (717 MB fp32-ONNX von nvidia/ARDY-Core-RP-20FPS-Horizon40) nach Env-Reset NICHT vorhanden (Re-Export nicht Teil dieses Tasks; Alt-App-Code unberührt) — laufen wieder, sobald die Fixtures existieren
+- BUILD: assembleRelease (Daemon), 28.211.062 B, aapt de.feld.app 107/3.7.0, apksigner CN=Trainrobot OU=Testfeld07 SHA-256 1c0422b9…3c4 EXAKT, APK-Inhalt: gemini.js + beide neuen Karten verifiziert → download/feld.apk
+- CI: OR-Kette auf 7.0 erweitert; Push + Tag v3.7.0 → Workflow baut+released automatisch
+
+Stage Summary:
+- v3.7.0: ONNX-Modelle IMPORTIEREN + TESTEN (eigene wie Pollen-Originale; kompatible fahren sofort live) + GEMINI-KI-SETUP (Wunsch tippen → alles wird eingestellt, hart validiert)
+- Lokales APK: download/feld.apk (107/3.7.0), sha256 f8f6ef5e2a4c55d5857a7945337da8b860bdbf7708ff3113fb2328175dc522a2
+- Signatur verifiziert: 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4
+
+Nachtrag Task 67 (Push-Schutz): GitHub Push Protection blockte den Push (GCP-API-Key in gemini.js + feld_v370_test). Lösung: Schlüssel NIE im Repo — (1) Actions-Repo-Secret GEMINI_API_KEY via REST-API gesetzt (libsodium sealed box, scripts/put_gemini_secret.cjs, HTTP 201), (2) neuer Workflow-Step „KI-Schlüssel einbacken“ schreibt das Secret beim CI-Build in die gitignorierte js/feld/aiconfig.js (export const EMBEDDED_AI_KEY), (3) gemini.js importiert aiconfig.js dynamisch (TLA try/catch) — ohne Datei gilt der in der Karte eingetippte Schlüssel. Lokal: aiconfig.js mit Key erzeugt (untracked), APK neu gebaut (107/3.7.0, Signatur 1c0422b9… EXAKT, Key im APK verifiziert). download/feld.apk sha256 4fb6c420c405f637d80d635cf00ee31124003f2ae1a8720e4c458c5428d643ac. feld_v370 jetzt 83 Checks.

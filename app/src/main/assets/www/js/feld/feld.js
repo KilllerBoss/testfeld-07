@@ -22,7 +22,8 @@ import { SchubModel, SCHUB_DIR_LABELS } from './schubser.js'; // v3.2.0: AutoSch
 import { GroundModel, GroundState, GROUND_MODE_LABELS, probeGravity, setGroundTilt, applyGroundImpulse } from './ground.js'; // v3.2.0: beweglicher Boden
 import { PhoneModel, PhoneSensor, phonePush } from './phone.js'; // v3.2.0: Handy-Gyroskop
 import { LayaRouter } from './laya.js';
-import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';
+import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES, importSession, inspectOnnx } from './onnxexport.js';
+import { configure as gemConfigure, getApiKey, setApiKey, DEFAULT_WISH } from './gemini.js'; // v3.7.0: KI-Setup
 import * as store from './store.js';
 
 // ── Zustand ────────────────────────────────────────────────
@@ -38,6 +39,8 @@ const S = {
   dirty: false, lastSave: 0,
   layaActive: false, layaTimer: 0,
   ortInfer: null,           // { session, ep, ort } — Policy über ONNX
+  _ortOut: 'actions',       // v3.7.0: Ausgangsname der AKTIVEN Session (Import kann abweichen)
+  _impSess: null, _impInfo: null, _impName: '', // v3.7.0: importiertes Modell (Import-Karte)
   cmdgen: null,             // v3.1.0: Befehls-Generator (Trainings-Einsatz der Joysticks)
   schubser: null,           // v3.2.0: AutoSchubser (an/aus · wie oft · wie stark)
   ground: null, groundState: null, groundRng: null, // v3.2.0: beweglicher Boden
@@ -123,6 +126,7 @@ async function boot() {
     wireCmdUI();
     wireConsoleFold();
     wireModelUI();
+    wireGemUI(); // v3.7.0: KI-SETUP (Gemini) im TRAIN-Tab
     wireGesture();
     $('bootOverlay').classList.add('hidden');
     S.booted = true;
@@ -262,7 +266,7 @@ function liveCycle() {
       S.ortInfer.run({ obs: new S._ortT('float32', obs, [1, obs.length]) })
         .then((out) => {
           S._ortBusy = false;
-          S._ortMu = Float32Array.from(out.actions.data); // v3.5.0: Pollen-Ausgangsname
+          S._ortMu = Float32Array.from(out[S._ortOut || 'actions'].data); // v3.7.0: Ausgangsname der aktiven Session
         })
         .catch((e) => { S._ortBusy = false; log('ONNX-Lauf: ' + e.message, 'err'); });
     }
@@ -1154,6 +1158,7 @@ function wireModelUI() {
       const { session, ep, ort, ms } = await createSession(bytes, $('epSel').value, null, { warmDim: D, budgetMs: 8 });
       S.ortInfer = session;
       S._ortT = ort.Tensor;
+      S._ortOut = 'actions'; // v3.7.0: eigener Export = Pollen-Ausgangsname
       // v3.4.0: Startbefehl aus dem Warm-up (keine Null-Phase beim ersten Start)
       try {
         const out = await session.run({ obs: new ort.Tensor('float32', warm, [1, D]) });
@@ -1170,6 +1175,48 @@ function wireModelUI() {
     S.ortInfer = null;
     $('epReal').textContent = '';
     $('expState').textContent = 'ONNX-Inferenz aus';
+  });
+  // ── v3.7.0: IMPORT (.onnx) + TEST ─────────────────────────
+  // Fremde ONNX-Modelle (eigene Exports wie die Originale von Pollen
+  // Robotics) laden, ECHT ausführen und — wenn obs/act zum Task passen —
+  // sofort als Live-Policy fahren lassen. "ERNEUT TESTEN" wiederholt die
+  // Probe (Null-Obs in der Modell-Dimension + echte Obs aus dem Task).
+  $('btnImportOnnx').addEventListener('click', async () => {
+    const st = $('impState');
+    try {
+      st.textContent = 'Datei wählen …';
+      const { name, bytes } = await store.importBytes();
+      st.textContent = 'Lade „' + name + '“ (' + (bytes.length / 1024).toFixed(0) + ' KB) …';
+      // Magic-Check: ONNX ist ein Protobuf (field 1 varint = 0x08 …); ZIP
+      // („PK“) oder JSON („{“/„[“) sind klar FALSCH — klare Meldung statt
+      // kryptischem ORT-Fehler.
+      const b0 = bytes[0];
+      if ((b0 === 0x50 && bytes[1] === 0x4b) || b0 === 0x7b || b0 === 0x5b || (b0 === 0x1f && bytes[1] === 0x8b)) {
+        throw new Error('Das ist keine .onnx-Datei (kein ONNX-Protobuf) — bitte die eigentliche Modell-Datei wählen');
+      }
+      const res = await importSession(bytes, $('epSel').value, null, { budgetMs: 8, startDim: S.task.obsDim });
+      S._impSess = res.session; S._impInfo = res; S._impName = name; S._impOrt = res.ort;
+      S._impTest = importVerdict(res);
+      st.textContent = S._impTest;
+      log('ONNX-Import: ' + S._impTest, 'ok');
+    } catch (e) {
+      S._impSess = null; S._impInfo = null;
+      st.textContent = 'Import-Fehler: ' + e.message;
+      log('ONNX-Import: ' + e.message, 'err');
+    }
+  });
+  $('btnTestOnnx').addEventListener('click', async () => {
+    const st = $('impState');
+    if (!S._impSess || !S._impInfo) { st.textContent = 'Erst ein Modell importieren.'; return; }
+    try {
+      const info = await inspectOnnx(S._impSess, S._impOrt || (await loadOrt()), S._impInfo.obsDim);
+      S._impInfo = Object.assign({}, S._impInfo, info);
+      S._impTest = importVerdict(S._impInfo);
+      st.textContent = S._impTest;
+      log('ONNX-Test: obs [1,' + info.obsDim + '] → ' + info.outName + ' [1,' + info.actDim + '] · ' + info.ms.toFixed(1) + ' ms', 'ok');
+    } catch (e) {
+      st.textContent = 'Test-Fehler: ' + e.message;
+    }
   });
   // Speicher
   $('btnExportJson').addEventListener('click', () => {
@@ -1188,6 +1235,74 @@ function wireModelUI() {
   $('btnClearSave').addEventListener('click', () => {
     store.clearSession();
     $('saveState').textContent = 'Autosave gelöscht';
+  });
+}
+
+/**
+ * v3.7.0: Urteil über ein importiertes Modell (deutscher Status-Text).
+ * obs/act-Dims == Task (61/14) → Modell wird SOFORT als Live-Policy
+ * aktiviert (S.ortInfer) — der Nutzer sieht die Ente sofort laufen.
+ * Fremde Dims → ehrlicher Verweis: Test OK, aber kein Live-Betrieb.
+ */
+function importVerdict(res) {
+  const okObs = res.obsDim === S.task.obsDim;
+  const okAct = res.actDim === S.task.actDim;
+  const maxA = res.sample ? Math.max.apply(null, Array.from(res.sample, Math.abs)) : 0;
+  const inf = res.ms >= 0 ? res.ms.toFixed(1) + ' ms' : 'k. A.';
+  const base = res.inName + ' [1,' + res.obsDim + '] → ' + res.outName + ' [1,' + res.actDim + '] · ' + inf +
+    ' · max |a| ' + maxA.toFixed(2) + ' · EP ' + res.ep;
+  if (okObs && okAct) {
+    // Sofort aktivieren: gleicher Pfad wie „POLICY ÜBER ONNX LAUFEN LASSEN“
+    S.ortInfer = res.session;
+    S._ortT = res.ort.Tensor;
+    S._ortOut = res.outName;
+    S._ortMu = Float32Array.from(res.sample);
+    S._liveAcc = 0;
+    $('epReal').textContent = 'Aktiv: ' + res.ep + ' · Import „' + S._impName + '“ · ' + base;
+    return 'TEST OK — Modell fährt jetzt den POLICY-Betrieb: ' + base;
+  }
+  const warum = [];
+  if (!okObs) warum.push('Modell will obs ' + res.obsDim + ', die App liefert ' + S.task.obsDim + ' (Pollen-Layout des echten Ducks)');
+  if (!okAct) warum.push('Ausgang ' + res.actDim + ' ≠ Aktionen ' + S.task.actDim);
+  return 'TEST OK (Inferenz läuft) — ABER kein Live-Betrieb: ' + warum.join(' · ') + '. ' + base;
+}
+
+// ── v3.7.0: KI-SETUP (Gemini) ─────────────────────────────
+// Wunsch-Eingabe → Gemini (Brücke/fetch) → validiertes Setup in-place
+// anwenden → Statuszeile mit allen Änderungen. Schlüssel ist
+// voreingestellt und hier ersetzbar (localStorage).
+function wireGemUI() {
+  const keyEl = $('gemKey'), modelEl = $('gemModel'), wishEl = $('gemWish'), st = $('gemState');
+  if (!keyEl || !st) return;
+  keyEl.value = getApiKey();
+  keyEl.addEventListener('change', () => { setApiKey(keyEl.value.trim()); st.textContent = 'Schlüssel ' + (keyEl.value.trim() ? 'gespeichert.' : 'geleert (Standard aktiv).'); });
+  $('btnGemGo').addEventListener('click', async () => {
+    if (S._gemBusy) return;
+    S._gemBusy = true;
+    const btn = $('btnGemGo');
+    btn.disabled = true;
+    st.textContent = 'Gemini denkt … (Konfiguration + Wunsch werden analysiert)';
+    try {
+      const res = await gemConfigure(wishEl.value.trim() || DEFAULT_WISH, S, { model: modelEl.value });
+      // Regler-UI neu aufbauen (in-place Mutation der Modelle)
+      S.dirty = true;
+      buildRewardUI(); buildSchubUI(); buildGroundUI(); buildPhoneUI(); buildFallUI();
+      applyFallMode();
+      $('budget').value = S.budget; $('budgetVal').textContent = S.budget;
+      markStages();
+      if (res.changes.length) {
+        st.textContent = 'KI hat ' + res.changes.length + ' Ding' + (res.changes.length === 1 ? '' : 'e') + ' eingestellt (' + res.model + '):\n' + res.changes.map((c) => '• ' + c).join('\n');
+        log('KI-Setup (' + res.model + '): ' + res.changes.length + ' Änderungen', 'ok');
+      } else {
+        st.textContent = 'KI hat nichts geändert — die Konfiguration passt zum Wunsch bereits (' + res.model + ').' + (res.skipped.length ? ' Übersprungen: ' + res.skipped.join(', ') : '');
+      }
+    } catch (e) {
+      st.textContent = 'KI-Fehler: ' + e.message;
+      log('KI-Setup: ' + e.message, 'err');
+    } finally {
+      S._gemBusy = false;
+      btn.disabled = false;
+    }
   });
 }
 

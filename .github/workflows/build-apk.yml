@@ -47,13 +47,24 @@ jobs:
           test -f app/src/main/assets/www/js/feld/feld.js
           test -f app/src/main/assets/www/js/feld/moe.js
           test -f app/src/main/assets/www/js/feld/onnxexport.js
-          grep -qE "3\.(0\.0|1\.0|2\.0|3\.0|4\.0|5\.0|6\.0)" app/src/main/assets/www/js/feld/version.js  # OR-Kette (v3.0.0…v3.5.0)
+          grep -qE "3\.(0\.0|1\.0|2\.0|3\.0|4\.0|5\.0|6\.0|7\.0)" app/src/main/assets/www/js/feld/version.js  # OR-Kette (v3.0.0…v3.7.0)
           echo "Feld-App OK"
 
       - name: Keystore-Prüfung (stabile Signatur, kein Fallback)
         run: |
           test -s trainrobot.keystore
           echo "trainrobot.keystore vorhanden (Signatur CN=Trainrobot, OU=Testfeld07)"
+
+      - name: KI-Schlüssel einbacken (GEMINI_API_KEY → aiconfig.js)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # v3.7.0: Der Gemini-Schlüssel liegt NICHT im Git-Repo (GitHub Push
+          # Protection) — er wird aus dem Repo-Secret in die gitignorierte
+          # aiconfig.js geschrieben und landet so im APK. Fehlt das Secret,
+          # wird die Datei leer erzeugt (App fragt dann in der KI-SETUP-Karte).
+          printf "export const EMBEDDED_AI_KEY = '%s';\n" "$GEMINI_API_KEY" > app/src/main/assets/www/js/feld/aiconfig.js
+          echo "aiconfig.js geschrieben (${#GEMINI_API_KEY} Zeichen)"
 
       - name: Build (feld.apk)
         run: |

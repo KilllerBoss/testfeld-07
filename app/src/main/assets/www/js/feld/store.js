@@ -150,3 +150,30 @@ export function importFile() {
     inp.click();
   });
 }
+
+/**
+ * v3.7.0: Binär-Datei-Import (ONNX) — Picker → { name, bytes }.
+ * Bewusst OHNE accept-Filter (leerer String = alle Dateien): .onnx hat
+ * in vielen Android-Dateimanagern kein registriertes MIME und würde sonst
+ * ausgeblendet — die Validierung (Magic-Byte + Inferenz) macht die App.
+ */
+export function importBytes() {
+  return new Promise((resolve, reject) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return reject(new Error('Keine Datei gewählt'));
+      const r = new FileReader();
+      r.onload = () => {
+        const bytes = new Uint8Array(r.result);
+        if (!bytes || !bytes.length) return reject(new Error('Datei ist leer'));
+        resolve({ name: f.name || 'modell.onnx', bytes });
+      };
+      r.onerror = () => reject(new Error('Lesefehler'));
+      r.readAsArrayBuffer(f);
+    };
+    inp.click();
+  });
+}

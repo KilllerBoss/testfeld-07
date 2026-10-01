@@ -78,7 +78,7 @@ ok(ox.includes("const Wd2 = W('dec2', [A, DH], mulArr(N.Wd2, bakeJ));") &&
    ox.includes("nodes.push(node('Mul', ['mu_t', 'act_scale'], ['mu_s']));"), 'Einbackung: J in dec2, Tanh, actSpan-Mul');
 ok(ox.includes('const actScale = meta.actionScale != null ? Number(meta.actionScale) : 1.0;'), 'action_scale-Metadatum 1.000 (wie Originale)');
 ok(ox.includes('const folded[j] = N.bd1[j];') || ox.includes('folded[j] = N.bd1[j];'), 'Style-Anteil exakt in den Decoder-Bias gefaltet');
-ok(fj.includes("import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES } from './onnxexport.js';"), 'feld: KEIN buildManifest-Import');
+ok(fj.includes("import { moeToOnnx, createSession, selfTest, loadOrt, EP_MODES, importSession, inspectOnnx } from './onnxexport.js';"), 'feld: KEIN buildManifest-Import');
 ok(!fj.includes('.manifest.json') || !fj.includes("'feld-policy-' + fmt + '.manifest.json'"), 'feld: keine Manifest-Datei im Export');
 ok(fj.includes('actSpan: duck.actSpan, jointResidual: duck.jointResidual != null ? duck.jointResidual : 1,') &&
    (fj.match(/actSpan: getRobot\('duck'\)\.actSpan,/g) || []).length === 1, 'feld: Einbackung beim Export + in der App-Session übergeben');
@@ -137,8 +137,8 @@ try {
 ok(threw, 'obs [1,74] wird abgelehnt — das Modell WILL 61 („GOT 61 EXPECTED 74“ unmöglich geworden)');
 
 console.log('── 5. Version 106 / 3.6.0 + CI ──');
-ok(vj.includes("export const VERSION = '3.6.0';") && vj.includes('export const VERSION_CODE = 106;'), 'version.js: 3.6.0 / 106');
-ok(gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"'), 'build.gradle: 106 / "3.6.0"');
+ok((vj.includes("export const VERSION = '3.6.0';") && vj.includes('export const VERSION_CODE = 106;')) || (vj.includes("export const VERSION = '3.7.0';") && vj.includes('export const VERSION_CODE = 107;')), 'version.js: 3.6.0/106 oder 3.7.0/107');
+ok((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || (gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"'))), 'build.gradle: 106 / "3.6.0"');
 ok(workflow.includes('5\\.0|6\\.0'), 'CI: OR-Kette auf 3.6.0 erweitert');
 
 console.log('\nERGEBNIS: ' + pass + ' bestanden · ' + fail + ' fehlgeschlagen');

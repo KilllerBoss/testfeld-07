@@ -35,10 +35,10 @@ const WWW = join(ROOT, 'app/src/main/assets/www');
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION 3.2.0');
 ok(APP_NAME === 'Feld', 'App-Name = Feld');
-ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0' || VERSION === '3.5.0' || VERSION === '3.6.0', 'VERSION = 3.2.0/3.3.0/3.4.0/3.5.0');
-ok(VERSION_CODE === 102 || VERSION_CODE === 103 || VERSION_CODE === 104 || VERSION_CODE === 105 || VERSION_CODE === 106, 'VERSION_CODE = 102/103/104/105');
+ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0' || VERSION === '3.5.0' || VERSION === '3.6.0' || VERSION === '3.7.0', 'VERSION = 3.2.0/3.3.0/3.4.0/3.5.0');
+ok(VERSION_CODE === 102 || VERSION_CODE === 103 || VERSION_CODE === 104 || VERSION_CODE === 105 || VERSION_CODE === 106 || VERSION_CODE === 107, 'VERSION_CODE = 102/103/104/105');
 const gradle = readFileSync(join(ROOT, 'app/build.gradle'), 'utf8');
-ok(gradle.includes('versionCode 102') && gradle.includes('versionName "3.2.0"') || (gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"'))))) || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || (gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"'))))))), 'build.gradle 102 / 3.2.0');
+ok(gradle.includes('versionCode 102') && gradle.includes('versionName "3.2.0"') || (gradle.includes('versionCode 103') && gradle.includes('versionName "3.3.0"') || (((gradle.includes('versionCode 104') && gradle.includes('versionName "3.4.0"') || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || (gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"'))))))) || ((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || (gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"'))))))))), 'build.gradle 102 / 3.2.0');
 
 // ════════════════ 2 · MODELL ════════════════
 sec('SCHUBMODEL (Defaults · Sanitize · Roundtrip)');
