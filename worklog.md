@@ -1412,3 +1412,22 @@ Stage Summary:
 - Download (anonym verifiziert): https://github.com/KilllerBoss/testfeld-07/releases/download/v3.7.0/feld.apk
 - Lokales APK: download/feld.apk (107/3.7.0), sha256 4fb6c420c405f637d80d635cf00ee31124003f2ae1a8720e4c458c5428d643ac
 - Gemini-Schlüssel jetzt als Repo-Secret GEMINI_API_KEY — beim nächsten Key-Wechsel nur das Secret tauschen (put_gemini_secret.cjs), kein Code-Commit nötig
+
+---
+Task ID: 68
+Agent: Super Z (Hauptagent)
+Task: v3.8.0 — TELEPORT-BUTTON (Startseite) + MINIMALISTISCHES UI/UX-REDESIGN (Nutzer: „beim ausführen auf Startseite ein kleinen Button … zurück auf seine Stelle teleportieren zurück auf die Beine. Und mache ganze app minimalistischer und redesigne ui/ux") — Finalisierung, Tests, Release
+
+Work Log:
+- Vorbestand gesichert: der lokale Commit 9a07e96 enthielt bereits Teleport + Redesign (Neo-Minimal) + Version 108/3.8.0 + CI-OR-Kette + feld_v380_test (46 Checks) + ui_smoke_v380 — Aufgabe dieser Session: Beweisen, Fertigstellen, Releasen
+- TELEPORT geprüft (feld.js teleportDuck): task.reset(rng, sim) = frischer Episodenstart am Ursprung (sim.resetToKeyframe → STAND-Keyframe, Vel 0), Trainer._epR=0, ONNX-Neutralbefehl (S._ortMu = 0), Live-Takt reset (S._liveAcc=0); Training/Puffer/Policy bleiben unangetastet; verdrahtet an #btnTeleport („↺ AUFSTELLEN" in der Feld-Leiste) + window.__feld.teleport
+- WICHTIGE KORREKTUR an der Test-Erwartung: der Pollen-MicroDuck steht im STAND-Keyframe bei Basis-Höhe 0,12 m (microduck.xml, key STAND, qpos z=0.12) — der Smoke-Check „h > 0,3" war eine G1-falsche Erwartung; korrigiert auf 0,08 < h < 0,2 (liegend wäre ~0,04)
+- Playwright-Brüche aufgelöst (Test-Umgebung, NICHT App): (1) Griff #btnConsoleFold blieb im Actionability-„stable"-Check hängen → Ursache: CDP-Input-Transport (scrollIntoViewIfNeeded) verhungert unter der SwiftShader+MuJoCo-Render-Last (~1,3 s/Frame, ein rAF-Paar 2,7 s) — bewiesen per elementFromPoint (Griff treffbar), JS-click (Verdrahtung + Toggle + 14 Pads) und In-page-Transition-Poll (opacity 0→1, pointer-events auto); ui_smoke nutzt jetzt Hit-Test + DOM-click + rAF-Poll statt CDP-Klicks
+- pins_v38.py NEU (Muster pins_v37.py): Version-Pins aller 19 Suiten auf 108/3.8.0 erweitert — 69 Erweiterungen, inkl. Laufzeit-Snapshot-Check „Feld 3.8.0" (feld_v370) und vj/vjs-Varianten; danach alle Alt-Suiten wieder GRÜN
+- SUITEN: feld 79 · v340 72 · v350 56 · v360 42 · v370 83 · v380 46 · cmd 73 · schubser 50 · ground_phone 60 · live_v33 40 · onnx_ort 12 · ortweb 3 · duck_sync 24 · motionset 49 · physics 42 · skeleton 90 · qpos 52 · dr 41 · parallel 21 · canvas 69+61+84 · pollen_profile_check 27/27 (onnx+onnxruntime für python3.13 nachinstalliert — Env-Reset hatte sie entfernt) · ardy retry 35/mirror 13/ghost/smooth 28/math 17/sanitize 12 · UI-SMOKE v3.8.0 8/0 · E2E feld_live_browser 4/0 (POLICY Echtzeit: Sim 2,98 s / Wand 3,00 s = 99 %)
+- APK: build/outputs 20:44-Uhr-Stand = Build DES EXAKTEN Commit-Stands bewiesen (git status app/ = 0 Änderungen; Inhalt verifiziert: aapt de.feld.app 108/3.8.0, „AUFSTELLEN" im Markup, style.css = Neo-Minimal, feld.js teleportDuck ×3, aiconfig.js MIT Gemini-Key) — apksigner SHA-256 1c0422b9251e47ce99c165a237d4b402667fc98aab40a21fe8f200b53ebee3c4 EXAKT
+- Push: main 0fa2542→feda946 + Tag v3.8.0 (Token nur inline) — CI main 36926380202 + Tag 36926384053 gestartet; Release baut der Workflow automatisch
+
+Stage Summary:
+- v3.8.0 = Teleport-Button („↺ AUFSTELLEN") auf der Startseite + Neo-Minimal-Redesign (schwebende Pill-Tabbar, rahmenlose Karten, echte Toggle-Schalter, ruhige Typo — alles deutsch, nichts funktional verloren)
+- Alle 30+ Suiten grün; APK 108/3.8.0 mit Soll-Signatur; Release via CI-Workflow
