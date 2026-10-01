@@ -109,9 +109,9 @@ for (const j of joints) ok(xml.includes('name="' + j + '"'), 'MJCF-Aktuator: ' +
 
 console.log('── 6. Version 105 / 3.5.0 + CI ──');
 ok((vj.includes("export const VERSION = '3.5.0';") && vj.includes('export const VERSION_CODE = 105;')) ||
-   (vj.includes("export const VERSION = '3.6.0';") && vj.includes('export const VERSION_CODE = 106;')) || (vj.includes("export const VERSION = '3.7.0';") && vj.includes('export const VERSION_CODE = 107;')), 'version.js: 3.6.0/106 oder 3.7.0/107');
-ok(((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || (gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"')))))) ||
-   ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || (gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"')))), 'build.gradle: 105/3.5.0 oder 106/3.6.0');
+   (vj.includes("export const VERSION = '3.6.0';") && vj.includes('export const VERSION_CODE = 106;')) || (vj.includes("export const VERSION = '3.7.0';") || vj.includes("export const VERSION = '3.8.0';") && vj.includes('export const VERSION_CODE = 107;') || vj.includes('export const VERSION_CODE = 108;')), 'version.js: 3.6.0/106 oder 3.7.0/107');
+ok(((gradle.includes('versionCode 105') && gradle.includes('versionName "3.5.0"') || ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || ((gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"') || (gradle.includes('versionCode 108') && gradle.includes('versionName "3.8.0"')))))))) ||
+   ((gradle.includes('versionCode 106') && gradle.includes('versionName "3.6.0"') || ((gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"') || (gradle.includes('versionCode 108') && gradle.includes('versionName "3.8.0"')))))), 'build.gradle: 105/3.5.0 oder 106/3.6.0');
 ok(workflow.includes('5\\.0|6\\.0'), 'CI: OR-Kette auf 3.6.0 erweitert');
 
 console.log('\nERGEBNIS: ' + pass + ' bestanden · ' + fail + ' fehlgeschlagen');

@@ -35,7 +35,7 @@ function sec(s) { console.log('\n── ' + s + ' ──'); }
 // ════════════════ 1 · VERSION ════════════════
 sec('VERSION');
 ok(APP_NAME === 'Feld', 'App-Name = Feld');
-ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0' || VERSION === '3.5.0' || VERSION === '3.6.0' || VERSION === '3.7.0', 'VERSION = 3.2.0/3.3.0/3.4.0/3.5.0');
+ok(VERSION === '3.2.0' || VERSION === '3.3.0' || VERSION === '3.4.0' || VERSION === '3.5.0' || VERSION === '3.6.0' || VERSION === '3.7.0' || VERSION === '3.8.0', 'VERSION = 3.2.0/3.3.0/3.4.0/3.5.0');
 
 // ════════════════ 2 · STUFEN (FeldMoE) ════════════════
 sec('STUFEN — Freeze-Semantik');

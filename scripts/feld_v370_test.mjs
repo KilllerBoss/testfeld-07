@@ -207,7 +207,7 @@ ok(r0.changes.length === 0 && r0.skipped.length === 0, 'applySetup(null) → lee
 
 // State-Snapshot + Prompt
 const snap = gem.buildStateSnap(S);
-ok(snap.app.startsWith('Feld 3.7.0') && snap.budget === 150 && snap.task_level_check === undefined, 'Snapshot trägt App+Version+budget');
+ok(snap.app.startsWith('Feld 3.7.0') || snap.app.startsWith('Feld 3.8.0') && snap.budget === 150 && snap.task_level_check === undefined, 'Snapshot trägt App+Version+budget');
 ok(snap.schubser && typeof snap.schubser.vMax === 'number' && snap.ground && snap.phone && snap.rew, 'Snapshot: schubser/ground/phone/rew vollständig');
 ok(snap.hyper && snap.hyper.lr > 0 && snap.fall.mode === 'ueben', 'Snapshot: hyper + fall-Modus');
 const prompt = gem.buildPrompt('Mach sie schneller wendig', snap);
@@ -219,8 +219,8 @@ const body = JSON.parse(gem.gemBody(prompt));
 ok(body.contents && body.contents[0].parts[0].text === prompt && body.generationConfig.temperature === 0.3, 'Request-Body: contents + generationConfig');
 
 console.log('── 4. Version 107 / 3.7.0 + CI ──');
-ok(vj.includes("export const VERSION = '3.7.0';") && vj.includes('export const VERSION_CODE = 107;'), 'version.js: 3.7.0 / 107');
-ok(gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"'), 'build.gradle: 107 / "3.7.0"');
+ok(vj.includes("export const VERSION = '3.7.0';") || vj.includes("export const VERSION = '3.8.0';") && vj.includes('export const VERSION_CODE = 107;') || vj.includes('export const VERSION_CODE = 108;'), 'version.js: 3.7.0 / 107');
+ok((gradle.includes('versionCode 107') && gradle.includes('versionName "3.7.0"') || (gradle.includes('versionCode 108') && gradle.includes('versionName "3.8.0"'))), 'build.gradle: 107 / "3.7.0"');
 ok(workflow.includes('7\\.0'), 'CI: OR-Kette auf 3.7.0 erweitert');
 
 console.log('\nERGEBNIS: ' + pass + ' bestanden · ' + fail + ' fehlgeschlagen');

@@ -60,7 +60,9 @@ await t('TELEPORT: Klick setzt die Ente aufrecht an den Startpunkt (Vel 0)', asy
       Math.abs(q[3]) + Math.abs(q[4]) + Math.abs(q[5]) < 1e-9;
   }, null, { timeout: 8000 });
   const h = await page.evaluate(() => { const p = new Float64Array(3); window.__feld.sim.basePos(p); return p[2]; });
-  if (!(h > 0.3)) throw new Error('Basishöhe unrealistisch: ' + h);
+  // STAND-Keyframe des Pollen-MicroDuck: Basis-Höhe 0,12 m (microduck.xml, key „STAND",
+  // qpos z = 0.12) — winzige Ente, KEINE G1-Höhe. Liegend wäre sie bei ~0,04.
+  if (!(h > 0.08 && h < 0.2)) throw new Error('Basishöhe außerhalb STAND-Keyframe (0,12): ' + h);
 });
 
 await t('TELEPORT: idempotent (2. Klick bleibt sauber aufrecht)', async () => {
@@ -81,9 +83,39 @@ await t('Alle 5 Tabs schalten fehlerfrei (Redesign bricht nichts)', async () => 
 });
 
 await t('FELD-Overlay (STEUERUNG-Griff) öffnet nach Redesign', async () => {
-  await page.click('#btnConsoleFold');
-  await page.waitForFunction(() => document.getElementById('feldConsole').classList.contains('open'));
-  await page.click('#btnConsoleFold'); // wieder zu
+  // Hit-Test: nichts verdeckt den Griff (Redesign-Risiko Nr. 1)
+  const hit = await page.evaluate(() => {
+    const b = document.getElementById('btnConsoleFold');
+    const r = b.getBoundingClientRect();
+    const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return el === b || b.contains(el);
+  });
+  if (!hit) throw new Error('Griff wird von etwas anderem verdeckt');
+  // Klick per DOM-Event (derselbe 'click', den der addEventListener der App
+  // empfängt). Grund: Playwrights CDP-Input-Transport (scrollIntoViewIfNeeded →
+  // Maus-Events) verhungert unter der Software-Render-Last des Browsers
+  // (SwiftShader + MuJoCo-Loop, ~1,3 s/Frame) — rein Test-Umgebungs-Artefakt,
+  // auf dem Handy mit GPU irrelevant. Treffbarkeit ist durch den Hit-Test
+  // oben bewiesen, Verdrahtung + Toggle + Pads werden unten bewiesen.
+  await page.evaluate(() => document.getElementById('btnConsoleFold').click());
+  await page.waitForFunction(() => document.getElementById('feldConsole').classList.contains('open'), null, { timeout: 8000 });
+  const pads = await page.evaluate(() => document.querySelectorAll('#feldConsoleHost *').length);
+  if (!pads) throw new Error('Konsole leer — Pads fehlen');
+  // Sichtbarkeit/Bedienbarkeit des Panels: EIN in-page-Poll über rAFs (die
+  // Opacity-Transition braucht hier je Frame ~1,3 s — CDP-Polls von außen
+  // verpassen sonst das Fortschreiten). Beweist Transition + pointer-events.
+  const openLook = await page.evaluate(async () => {
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => requestAnimationFrame(r));
+      const cs = getComputedStyle(document.getElementById('feldConsolePanel'));
+      if (parseFloat(cs.opacity) > 0.9 && cs.pointerEvents === 'auto') return { ok: true, op: +cs.opacity, pe: cs.pointerEvents };
+    }
+    const cs = getComputedStyle(document.getElementById('feldConsolePanel'));
+    return { ok: false, op: +cs.opacity, pe: cs.pointerEvents };
+  });
+  if (!openLook.ok) throw new Error('Panel nicht sichtbar/bedienbar: ' + JSON.stringify(openLook));
+  await page.evaluate(() => document.getElementById('btnConsoleFold').click()); // wieder zu
+  await page.waitForFunction(() => !document.getElementById('feldConsole').classList.contains('open'), null, { timeout: 8000 });
 });
 
 await t('Keine Seiten-Fehler beim Boot/Teleport/Tab-Wechsel', async () => {
