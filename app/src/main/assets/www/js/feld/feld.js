@@ -617,6 +617,36 @@ function wireTabs() {
     S.trainer.resetAll();
     log('Episode zurückgesetzt');
   });
+  $('btnTeleport').addEventListener('click', teleportDuck); // v3.8.0: FELD-Button
+}
+
+/**
+ * v3.8.0 — TELEPORT (Startseite/FELD, kleiner Button „↺ AUFSTELLEN“):
+ * Die Ente wird SOFORT zurück auf ihre Stelle und auf die Beine gesetzt —
+ * exakt wie ein Episodenstart (STAND-Keyframe am Ursprung, Geschwindig-
+ * keiten 0, Referenzpose frisch), aber OHNE etwas anderes anzufassen:
+ * Training läuft weiter, PPO-Puffer bleibt, Policy/ONNX bleiben aktiv.
+ * task.reset(...) räumt zusätzlich auf: Sturz-/Aufsteh-Fenster (WEITER-
+ * ÜBEN) geschlossen, Schubser-Timer neu gewürfelt, Routen/Skills neutral,
+ * Gelenk-Zustände genullt — nach dem Klick steht sie einfach nur da.
+ * Im POLICY-Betrieb wird auch der ONNX-Befehl auf 0 gelegt und der
+ * Echtzeit-Takt zurückgesetzt (kein Sprung im Bild — Interpolation wird
+ * durch resetToKeyframe invalidiert).
+ */
+function teleportDuck() {
+  if (!S.sim || !S.task) return;
+  const task = S.task;
+  // Frischer Episodenstart am Ursprung (sim.resetToKeyframe passiert in
+  // task.reset — keepPose=false). Training nutzt den Trainer-RNG (damit
+  // das Training nicht reproduzierbar zweimal dasselbe würfelt), Live
+  // einen Zeit-basierten.
+  const rng = S.trainer ? S.trainer.rng : new RNG((Math.random() * 0x7fffffff) | 0);
+  task.reset(rng, S.sim);
+  if (S.trainer) S.trainer._epR = 0; // Teil-Episode verfällt (wie RESET-Button)
+  if (S.ortInfer) S._ortMu = new Float32Array(task.actDim); // ONNX: neutraler Startbefehl
+  S._liveAcc = 0; // Echtzeit-Takt frisch
+  S.dirty = true;
+  log('Teleport: Ente steht wieder auf den Beinen (STAND, Startpunkt)', 'ok');
 }
 function setMode(m) {
   S.mode = m;
@@ -1341,6 +1371,7 @@ Object.defineProperty(window, '__feld', {
     get mode() { return S.mode; },
     get budget() { return S.budget; },
     get liveAcc() { return S._liveAcc; },
+    teleport: teleportDuck, // v3.8.0: Browser-Tests + schnelle Bedienung
   }),
 });
 
